@@ -18569,12 +18569,355 @@ async function autopilotTick({ dry = false, force = false } = {}) {
       }
       result.campaigns.push(entry);
     }
+
+    // Turn this tick into queue rows. Derived from the SAME state Autopilot
+    // just acted on, so the queue can never tell a CM something different from
+    // what the system believes. A dry run measures without writing rows.
+    if (!dry) {
+      try {
+        const seen = new Set();
+        for (const entry of result.campaigns) {
+          const cfg = cfgs[entry.campaign_id];
+          if (!cfg || !cfg.enabled) continue;
+          const st = _apStateCache.get(entry.campaign_id)?.state;
+          if (st) for (const k of qRowsForCampaign(st, cfg, s)) seen.add(k);
+          for (const k of qRowsForActions(entry, cfg)) seen.add(k);
+        }
+        // Close rows whose condition has cleared since we last looked — an
+        // overnight top-up should tidy up after itself.
+        const openKeys = db.prepare(
+          `SELECT DISTINCT dedupe_key FROM cm_queue WHERE status = 'open'`
+        ).all().map(r => r.dedupe_key);
+        const enrolled = new Set(Object.keys(cfgs));
+        const candidates = openKeys.filter(k => enrolled.has(String(k).split(':')[0]));
+        result.queueClosed = qAutoResolve(candidates, seen);
+        result.queueOpen = seen.size;
+      } catch (e) {
+        result.errors.push(`queue: ${e.message}`);
+      }
+    }
+
     if (!dry) apSaveRunState({ at: result.ran_at, campaigns: result.campaigns.length, errors: result.errors.length });
   } finally {
     _apTickRunning = false;
   }
   return result;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CM QUEUE
+//
+// One ranked list of decisions across a CM's clients. Autopilot already
+// MEASURES everything and already emits structured actions; until now those
+// went to Slack (easy to miss) and a JSON blob (nobody opens). The queue gives
+// them somewhere to land where a person can act on them.
+//
+// Rules of the road, learned from the pages nobody opened:
+//   • A row is a DECISION, never a statistic. If there is nothing to do about
+//     it, it does not belong here — it belongs on a stats page.
+//   • A row carries the work already done. "Reply rate collapsed" is a fact;
+//     "reply rate collapsed, here is the campaign and the numbers" is a row.
+//   • Rows are DERIVED from the same measurements Autopilot acts on, never
+//     invented separately, so the queue and Autopilot can never disagree.
+//   • New signals become new row KINDS here. They never become new pages.
+// ═══════════════════════════════════════════════════════════════════════════
+
+db.exec(`CREATE TABLE IF NOT EXISTS cm_queue (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  dedupe_key    TEXT NOT NULL,
+  kind          TEXT NOT NULL,
+  workspace_id  TEXT,
+  workspace_name TEXT,
+  campaign_id   TEXT,
+  campaign_name TEXT,
+  provider      TEXT,
+  severity      INTEGER NOT NULL DEFAULT 50,
+  headline      TEXT NOT NULL,
+  detail        TEXT,
+  evidence      TEXT,
+  status        TEXT NOT NULL DEFAULT 'open',
+  decided_by    TEXT,
+  decided_at    TEXT,
+  decision_note TEXT,
+  was_edited    INTEGER NOT NULL DEFAULT 0,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
+// One OPEN row per (dedupe_key). A tick that re-observes the same condition
+// refreshes the existing row rather than stacking duplicates — otherwise an
+// hourly tick would produce 24 identical "running dry" rows a day and the
+// queue would train people to ignore it within a week.
+try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_cm_queue_open
+  ON cm_queue(dedupe_key) WHERE status = 'open'`); } catch {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_cm_queue_status ON cm_queue(status, severity DESC)`); } catch {}
+
+// Severity drives ranking. Deliberately coarse — a CM should be able to guess
+// why a row is where it is without reading a manual.
+const QUEUE_SEVERITY = Object.freeze({
+  collapse:   90,  // replies fell off a cliff vs this client's own baseline
+  starved:    80,  // wanted to top up, no contacts available — client will go dry
+  dry:        70,  // a provider is out or nearly out of contacts
+  silence:    60,  // sent a lot, heard nothing back
+  no_filter:  40,  // enrolled but unusable — needs a human to set an audience
+  push_error: 85,  // a top-up actually failed
+});
+
+function qUpsertRow(row) {
+  const existing = db.prepare(
+    `SELECT id FROM cm_queue WHERE dedupe_key = ? AND status = 'open'`
+  ).get(row.dedupe_key);
+  if (existing) {
+    // Refresh the numbers on the row already sitting in someone's queue. The
+    // condition has not gone away; the measurement may have moved.
+    db.prepare(`UPDATE cm_queue
+      SET headline = ?, detail = ?, evidence = ?, severity = ?, updated_at = datetime('now')
+      WHERE id = ?`)
+      .run(row.headline, row.detail || null, JSON.stringify(row.evidence || {}), row.severity, existing.id);
+    return { id: existing.id, created: false };
+  }
+  const r = db.prepare(`INSERT INTO cm_queue
+    (dedupe_key, kind, workspace_id, workspace_name, campaign_id, campaign_name,
+     provider, severity, headline, detail, evidence)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(row.dedupe_key, row.kind, row.workspace_id || null, row.workspace_name || null,
+         row.campaign_id || null, row.campaign_name || null, row.provider || null,
+         row.severity, row.headline, row.detail || null, JSON.stringify(row.evidence || {}));
+  return { id: r.lastInsertRowid, created: true };
+}
+
+// A condition that has resolved itself should not keep sitting in the queue.
+// Autopilot topped the campaign up overnight? The "running dry" row closes on
+// its own and nobody has to tidy up. Self-healing rows are the difference
+// between a queue people trust and a to-do list that only grows.
+function qAutoResolve(dedupeKeys, seenKeys) {
+  if (!dedupeKeys.length) return 0;
+  let closed = 0;
+  const stmt = db.prepare(`UPDATE cm_queue
+    SET status = 'resolved', decided_by = 'system', decided_at = datetime('now'),
+        decision_note = 'condition cleared', updated_at = datetime('now')
+    WHERE dedupe_key = ? AND status = 'open'`);
+  for (const k of dedupeKeys) {
+    if (seenKeys.has(k)) continue;
+    closed += stmt.run(k).changes;
+  }
+  return closed;
+}
+
+// Turn one campaign's measured state into queue rows. Pure-ish: reads state,
+// writes rows, returns the dedupe keys it produced so the caller can close
+// anything that has cleared.
+function qRowsForCampaign(state, cfg, s) {
+  const keys = [];
+  const base = {
+    workspace_id: state.workspace_id || cfg.workspace_id,
+    workspace_name: state.workspace_name || cfg.workspace_name,
+    campaign_id: state.campaign_id,
+    campaign_name: state.campaign_name || cfg.campaign_name,
+  };
+
+  // 1. Reply-health alerts — the same ones that Slack gets.
+  for (const a of (state.alerts || [])) {
+    const kind = a.kind === 'collapse' ? 'collapse' : 'silence';
+    const key = `${base.campaign_id}:${kind}`;
+    keys.push(key);
+    qUpsertRow({
+      ...base, dedupe_key: key, kind,
+      severity: QUEUE_SEVERITY[kind] ?? 60,
+      headline: a.kind === 'collapse'
+        ? `Reply rate collapsed — ${base.campaign_name}`
+        : `No replies — ${base.campaign_name}`,
+      detail: a.message,
+      evidence: { alert: a, runwayDays: state.runwayDays, worstProvider: state.worstProvider },
+    });
+  }
+
+  // 2. Per-provider supply. ESP matching means a campaign can be dry for
+  //    Google senders while looking healthy in total — so this is per provider,
+  //    exactly as Autopilot judges it.
+  for (const b of AP_BUCKETS) {
+    const p = state.providers?.[b];
+    if (!p) continue;
+    const empty = p.remaining === 0 && p.floor > 0;
+    const low = p.runwayDays != null && p.runwayDays < s.topUpBelowDays;
+    if (!empty && !low && !p.belowFloor) continue;
+    const key = `${base.campaign_id}:dry:${b}`;
+    keys.push(key);
+    qUpsertRow({
+      ...base, dedupe_key: key, kind: 'dry', provider: b,
+      severity: empty ? QUEUE_SEVERITY.dry + 10 : QUEUE_SEVERITY.dry,
+      headline: `${AP_BUCKET_LABEL[b] || b} contacts running out — ${base.campaign_name}`,
+      detail: empty
+        ? `No ${AP_BUCKET_LABEL[b] || b} contacts left. Senders for this provider have nothing to send.`
+        : `${p.remaining} left, about ${p.runwayDays == null ? '?' : Number(p.runwayDays).toFixed(1)} days at the current rate.`,
+      evidence: { provider: b, ...p },
+    });
+  }
+
+  // 3. Enrolled but unusable. Autopilot refuses to push without a captured
+  //    audience filter, and silently skipping it is how a client goes quiet
+  //    for a fortnight with nobody noticing.
+  if (!cfg.filter) {
+    const key = `${base.campaign_id}:no_filter`;
+    keys.push(key);
+    qUpsertRow({
+      ...base, dedupe_key: key, kind: 'no_filter',
+      severity: QUEUE_SEVERITY.no_filter,
+      headline: `No audience set — ${base.campaign_name}`,
+      detail: 'Autopilot is switched on for this campaign but has no contact filter, so it will never top it up. Set one on the Autopilot page.',
+      evidence: {},
+    });
+  }
+  return keys;
+}
+
+// Rows that come out of a tick's ACTIONS rather than its state — things that
+// were attempted and did not work. These matter more than the measurements,
+// because they represent work the system tried and failed to do for you.
+function qRowsForActions(entry, cfg) {
+  const keys = [];
+  const base = {
+    workspace_id: cfg.workspace_id,
+    workspace_name: cfg.workspace_name,
+    campaign_id: entry.campaign_id,
+    campaign_name: entry.campaign_name,
+  };
+  for (const a of (entry.actions || [])) {
+    if (a.type === 'starved') {
+      const key = `${base.campaign_id}:starved:${a.provider}`;
+      keys.push(key);
+      qUpsertRow({
+        ...base, dedupe_key: key, kind: 'starved', provider: a.provider,
+        severity: QUEUE_SEVERITY.starved,
+        headline: `Out of ${AP_BUCKET_LABEL[a.provider] || a.provider} contacts to send — ${base.campaign_name}`,
+        detail: 'Autopilot tried to top this campaign up and found nothing matching its filter. The contact pool for this audience is exhausted — it needs new data or a wider filter.',
+        evidence: a,
+      });
+    }
+    if (a.type === 'push' && a.error) {
+      const key = `${base.campaign_id}:push_error:${a.provider}`;
+      keys.push(key);
+      qUpsertRow({
+        ...base, dedupe_key: key, kind: 'push_error', provider: a.provider,
+        severity: QUEUE_SEVERITY.push_error,
+        headline: `Top-up failed — ${base.campaign_name}`,
+        detail: a.error,
+        evidence: a,
+      });
+    }
+  }
+  return keys;
+}
+
+// Which clients does this session see? Admins see everything; a manager sees
+// the clients assigned to them. Scoping matters more than it looks: a queue
+// showing another CM's clients is a queue you learn to skim.
+function qScopeWorkspaces(req) {
+  const s = decodeSession(req);
+  if (!s || s.role === 'admin') return null; // null = no restriction
+  try {
+    const rows = db.prepare(
+      `SELECT client_workspace_id FROM client_managers
+       WHERE manager_name = ? AND (end_date IS NULL OR end_date > date('now'))`
+    ).all(s.name);
+    return rows.map(r => r.client_workspace_id);
+  } catch { return null; }
+}
+
+// ── CM Queue HTTP surface ──────────────────────────────────────────────────
+app.get('/api/queue', requireSession, (req, res) => {
+  try {
+    const status = req.query.status || 'open';
+    const scope = qScopeWorkspaces(req);
+    let sql = `SELECT * FROM cm_queue WHERE status = ?`;
+    const params = [status];
+    if (scope && scope.length) {
+      sql += ` AND workspace_id IN (${scope.map(() => '?').join(',')})`;
+      params.push(...scope);
+    } else if (scope && !scope.length) {
+      return res.json({ rows: [], scoped: true, note: 'No clients assigned to you' });
+    }
+    if (req.query.mine === '0') { /* admin viewing all — no-op, scope already null */ }
+    sql += ` ORDER BY severity DESC, created_at ASC LIMIT 200`;
+    const rows = db.prepare(sql).all(...params).map(r => ({
+      ...r,
+      evidence: (() => { try { return JSON.parse(r.evidence || '{}'); } catch { return {}; } })(),
+      age_hours: Math.round((Date.now() - new Date(r.created_at + 'Z').getTime()) / 36e5),
+    }));
+    res.json({ rows, scoped: !!scope });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Decide a row. The conditional UPDATE on status is the idempotency guard: a
+// double-click, a retried request, or two CMs hitting Approve at once all
+// result in exactly one decision, and the loser is told so rather than
+// silently succeeding.
+app.post('/api/queue/:id/decide', requireSession, (req, res) => {
+  try {
+    const s = decodeSession(req);
+    const id = Number(req.params.id);
+    const decision = String(req.body?.decision || '').toLowerCase();
+    if (!['approved', 'ignored', 'done'].includes(decision)) {
+      return res.status(400).json({ error: 'decision must be approved, ignored or done' });
+    }
+    const note = (req.body?.note || '').toString().trim().slice(0, 500);
+    // An ignore without a reason teaches the system nothing, and "why did you
+    // say no" is the single most valuable thing a CM produces. It is one short
+    // line, asked once, at the moment they already have the answer in mind.
+    if (decision === 'ignored' && !note) {
+      return res.status(400).json({ error: 'Tell us why in a few words — it is how the queue gets better at what to show you.' });
+    }
+    const wasEdited = req.body?.edited === true ? 1 : 0;
+    const r = db.prepare(`UPDATE cm_queue
+      SET status = ?, decided_by = ?, decided_at = datetime('now'),
+          decision_note = ?, was_edited = ?, updated_at = datetime('now')
+      WHERE id = ? AND status = 'open'`)
+      .run(decision, s?.name || 'unknown', note || null, wasEdited, id);
+    if (!r.changes) {
+      const cur = db.prepare('SELECT status, decided_by FROM cm_queue WHERE id = ?').get(id);
+      if (!cur) return res.status(404).json({ error: 'No such row' });
+      return res.status(409).json({ error: `Already ${cur.status}${cur.decided_by ? ` by ${cur.decided_by}` : ''}`, status: cur.status });
+    }
+    res.json({ ok: true, id, decision });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Health of the queue itself. Two numbers matter and both are early warnings:
+//   • approve-without-edit rate — if this approaches 100%, the approval gate
+//     has become decorative and the system is effectively unsupervised.
+//   • rows generated per rule — a rule that stops firing makes the queue
+//     SHORTER, which looks like success. Absence needs an alarm.
+app.get('/api/queue/health', requireSession, (req, res) => {
+  try {
+    const days = Math.min(Number(req.query.days) || 14, 90);
+    const since = `-${days} days`;
+    const byKind = db.prepare(`SELECT kind,
+        COUNT(*) AS total,
+        SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) AS open,
+        SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) AS approved,
+        SUM(CASE WHEN status = 'ignored' THEN 1 ELSE 0 END) AS ignored,
+        SUM(CASE WHEN status = 'resolved' THEN 1 ELSE 0 END) AS self_resolved,
+        MAX(created_at) AS last_seen
+      FROM cm_queue WHERE created_at > datetime('now', ?)
+      GROUP BY kind ORDER BY total DESC`).all(since);
+    const decided = db.prepare(`SELECT COUNT(*) AS n,
+        SUM(CASE WHEN was_edited = 1 THEN 1 ELSE 0 END) AS edited
+      FROM cm_queue
+      WHERE status IN ('approved','done') AND decided_at > datetime('now', ?)`).get(since);
+    const n = decided?.n || 0;
+    const edited = decided?.edited || 0;
+    res.json({
+      days,
+      byKind,
+      decided: n,
+      edited,
+      // The number to watch. High = people are reading. Near zero = rubber stamp.
+      editRatePct: n ? Math.round((edited / n) * 1000) / 10 : null,
+      medianAgeHoursOpen: db.prepare(
+        `SELECT AVG(h) AS a FROM (SELECT (julianday('now') - julianday(created_at)) * 24 AS h
+         FROM cm_queue WHERE status = 'open')`).get()?.a ?? null,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // ── Autopilot HTTP surface ─────────────────────────────────────────────────
 app.get('/api/autopilot/settings', requireSession, (req, res) => {
