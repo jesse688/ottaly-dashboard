@@ -2434,6 +2434,20 @@ class PostgresDatabase {
       }
     });
 
+    // Hard block for clients with require_owns_building set (client_verticals,
+    // "Requires building ownership" toggle) — set by api-contacts.js from the
+    // master-exclusions lookup, not user-togglable from the contacts UI.
+    // Excludes only an EXPLICIT premises_tenure='rented' or no_premises fact;
+    // no fact recorded is not evidence of tenancy and stays sendable — same
+    // "silence isn't a verdict" rule the CCOD unclear/no_postcode case uses.
+    safe('excludeNonOwnerDomain', () => {
+      if (!filters.excludeNonOwnerDomain) return;
+      clauses.push(`NOT EXISTS (SELECT 1 FROM reply_facts rf
+        WHERE rf.company_domain = LOWER(SPLIT_PART(contacts.email,'@',2))
+          AND ((rf.attribute = 'premises_tenure' AND rf.value = 'rented')
+            OR rf.attribute = 'no_premises'))`);
+    });
+
     // hasFact=<attribute>[:<value>][:<vertical>] — the inverse, for reviewing
     // everyone a fact applies to.
     safe('hasFact', () => {

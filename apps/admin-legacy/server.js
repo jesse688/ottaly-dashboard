@@ -16798,11 +16798,43 @@ app.get('/api/solar/cron/requalify', async (req, res) => {
         LIMIT $1`, [limit]);
     const ids = (sel.rows || sel).map(r => r.id);
 
+    // Second, independent source: the lead SAID they don't own the building.
+    // No fact recorded is not evidence of tenancy — only an explicit
+    // premises_tenure='rented' or no_premises counts, same "silence isn't a
+    // verdict" rule as the CCOD unclear/no_postcode case above.
+    // contacts.company_domain carries a scheme ("https://x.co.uk") for 994k
+    // rows and is bare for 65k, so it can't be joined directly. Use the
+    // contact's own email domain instead — same expression the excludeFact/
+    // hasFact reply-facts filters already use (db-postgres.js), proven correct
+    // on prod (measured 755/755 rows matching lowercase email domains).
+    const selReply = await db.query(
+      `SELECT c.id FROM contacts c
+        WHERE c.solar_status = 'qualified'
+          AND c.email IS NOT NULL AND c.email <> ''
+          AND EXISTS (
+            SELECT 1 FROM reply_facts rf
+             WHERE rf.company_domain = LOWER(SPLIT_PART(c.email, '@', 2))
+               AND ((rf.attribute = 'premises_tenure' AND rf.value = 'rented')
+                 OR rf.attribute = 'no_premises')
+          )
+        LIMIT $1`, [limit]);
+    const replyIds = (selReply.rows || selReply).map(r => r.id);
+    const idSet = new Set([...ids, ...replyIds]);
+    const allIds = [...idSet];
+
     if (!dry && ids.length) {
       await db.query(
         `UPDATE contacts
             SET solar_status = 'disqualified', solar_stop_reason = 'tenant'
           WHERE id = ANY($1::uuid[])`, [ids]);
+    }
+    // Separate stop_reason so 'told us themselves' is distinguishable from the
+    // CCOD title check in solar_stop_reason breakdowns and support questions.
+    if (!dry && replyIds.length) {
+      await db.query(
+        `UPDATE contacts
+            SET solar_status = 'disqualified', solar_stop_reason = 'tenant_stated'
+          WHERE id = ANY($1::uuid[])`, [replyIds]);
     }
 
     const after = await db.query(
@@ -16812,7 +16844,8 @@ app.get('/api/solar/cron/requalify', async (req, res) => {
     const a = (after.rows || after)[0] || {};
 
     const result = {
-      ok: true, dry, demoted: ids.length,
+      ok: true, dry, demoted: allIds.length,
+      demoted_ccod: ids.length, demoted_reply_stated: replyIds.length,
       qualified_now: Number(a.qualified || 0),
       qualified_freehold: Number(a.qualified_freehold || 0),
       ran_at: new Date().toISOString(),
@@ -16839,16 +16872,43 @@ async function requalifySolarFreehold() {
       `SELECT id FROM contacts
         WHERE solar_status = 'qualified' AND ccod_owns_building = 'no' LIMIT 100000`);
     const ids = (sel.rows || sel).map(r => r.id);
-    if (!ids.length) return;
-    await db.query(
-      `UPDATE contacts SET solar_status = 'disqualified', solar_stop_reason = 'tenant'
-        WHERE id = ANY($1::uuid[])`, [ids]);
-    console.log(`[solar-requalify] demoted ${ids.length} leaseholder(s) from qualified`);
+    if (ids.length) {
+      await db.query(
+        `UPDATE contacts SET solar_status = 'disqualified', solar_stop_reason = 'tenant'
+          WHERE id = ANY($1::uuid[])`, [ids]);
+      console.log(`[solar-requalify] demoted ${ids.length} leaseholder(s) from qualified (CCOD)`);
+    }
+
+    // A lead saying "we don't own the building" is a hard block, not a
+    // filter option — it must take effect before the next push, not the
+    // next 24h daily sweep. reply_facts is refreshed hourly, so this job
+    // runs hourly too (see interval below) to close that gap.
+    const selReply = await db.query(
+      `SELECT c.id FROM contacts c
+        WHERE c.solar_status = 'qualified'
+          AND c.email IS NOT NULL AND c.email <> ''
+          AND EXISTS (
+            SELECT 1 FROM reply_facts rf
+             WHERE rf.company_domain = LOWER(SPLIT_PART(c.email, '@', 2))
+               AND ((rf.attribute = 'premises_tenure' AND rf.value = 'rented')
+                 OR rf.attribute = 'no_premises')
+          )
+        LIMIT 100000`);
+    const replyIds = (selReply.rows || selReply).map(r => r.id);
+    if (replyIds.length) {
+      await db.query(
+        `UPDATE contacts SET solar_status = 'disqualified', solar_stop_reason = 'tenant_stated'
+          WHERE id = ANY($1::uuid[])`, [replyIds]);
+      console.log(`[solar-requalify] demoted ${replyIds.length} contact(s) who told us they don't own the building`);
+    }
   } catch (e) { console.error('[solar-requalify]', e.message); }
 }
-// Once at startup (after 3 min, so the DB and CCOD index are up) then daily.
+// Once at startup (after 3 min, so the DB and CCOD index are up), then hourly —
+// tightened from daily so a reply-stated "we don't own it" (extracted hourly
+// into reply_facts) becomes a hard block before the next push, not up to 24h
+// later. Still free: both checks are offline lookups against already-fetched data.
 setTimeout(() => { requalifySolarFreehold().catch(() => {}); }, 3 * 60 * 1000);
-setInterval(() => { requalifySolarFreehold().catch(() => {}); }, 24 * 60 * 60 * 1000);
+setInterval(() => { requalifySolarFreehold().catch(() => {}); }, 60 * 60 * 1000);
 
 // DB-wide (or per-workspace) OWNERSHIP sweep. Runs the offline CCOD + optional
 // Companies House ownership check across contacts and writes ccod_* columns.

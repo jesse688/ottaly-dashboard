@@ -655,7 +655,8 @@ module.exports = (db) => {
           if (sq) {
             const row = sq.prepare(`
               SELECT excluded_industries, excluded_company_sizes, excluded_keywords,
-                     excluded_counties, excluded_cities, excluded_job_titles
+                     excluded_counties, excluded_cities, excluded_job_titles,
+                     require_owns_building
                 FROM client_verticals WHERE workspace_id = ?
             `).get(rest.cooldownWorkspace);
             if (row) {
@@ -670,6 +671,11 @@ module.exports = (db) => {
               filters.cityExclude      = merge(rest.cityExclude,         row.excluded_cities);
               filters.stateExclude     = merge(rest.stateExclude,        row.excluded_counties);
               filters.numEmployeesExcludeRanges = merge(rest.numEmployeesExcludeRanges, row.excluded_company_sizes);
+              // Hard block, not a togglable filter: a lead who told us they
+              // don't own the building is never shown/pushed for a client
+              // that requires ownership. Silence (no reply_facts row) is NOT
+              // evidence of tenancy and stays sendable — see excludeNonOwnerDomain.
+              if (row.require_owns_building) filters.excludeNonOwnerDomain = true;
             }
           }
         } catch (e) {
