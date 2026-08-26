@@ -18492,6 +18492,15 @@ async function autopilotTick({ dry = false, force = false } = {}) {
           const text = `⚠️ Autopilot — *${state.campaign_name}* (${state.workspace_name}): ${a.message}`;
           if (!dry) postBounceAlertToSlack(text).catch(() => {});
           entry.actions.push({ type: 'alert', kind: a.kind, message: a.message });
+
+          // Copy has stopped working — hand the CM a replacement, not just the
+          // bad news. Collapse only: it is measured against the client's own
+          // baseline, so it means "this used to work and has stopped", which
+          // is precisely when new copy is the answer.
+          if (a.kind === 'collapse' && !dry) {
+            const r = await maybeAutodraft(state, a);
+            entry.actions.push({ type: 'autodraft', ...r });
+          }
           if (a.kind === 'collapse' && s.autoPause && !dry) {
             try {
               const p = await apPauseCampaign(state);
@@ -18720,14 +18729,25 @@ function qRowsForCampaign(state, cfg, s) {
     const kind = a.kind === 'collapse' ? 'collapse' : 'silence';
     const key = `${base.campaign_id}:${kind}`;
     keys.push(key);
+    // If a replacement sequence is already written and waiting, say so on the
+    // row. A row that carries the finished work is the whole point; a row that
+    // only reports a problem is the kind of thing people stop opening.
+    let draft = null;
+    try {
+      draft = db.prepare(
+        `SELECT id FROM copy_drafts WHERE campaign_id = ? AND status = 'draft'
+         ORDER BY created_at DESC LIMIT 1`
+      ).get(base.campaign_id) || null;
+    } catch { /* the queue must render even if this lookup fails */ }
     qUpsertRow({
       ...base, dedupe_key: key, kind,
       severity: QUEUE_SEVERITY[kind] ?? 60,
       headline: a.kind === 'collapse'
         ? `Reply rate collapsed — ${base.campaign_name}`
         : `No replies — ${base.campaign_name}`,
-      detail: a.message,
-      evidence: { alert: a, runwayDays: state.runwayDays, worstProvider: state.worstProvider },
+      detail: a.message + (draft ? ' — new copy is written and waiting for you to read it.' : ''),
+      evidence: { alert: a, runwayDays: state.runwayDays, worstProvider: state.worstProvider,
+                  draft_id: draft?.id || null },
     });
   }
 
@@ -18888,6 +18908,62 @@ db.exec(`CREATE TABLE IF NOT EXISTS copy_drafts (
 )`);
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_drafts_status ON copy_drafts(status, created_at DESC)`); } catch {}
 
+// ── Auto-drafting ──────────────────────────────────────────────────────────
+// When copy stops working, the queue should hand over a replacement rather
+// than a diagnosis. This is the only place the system spends money on its own,
+// so it is fenced in:
+//
+//   • Only on a COLLAPSE (measured against the client's own baseline), never
+//     on silence — silence at low volume is noise, and a campaign that has
+//     never worked needs a human, not another draft.
+//   • One auto-draft per campaign per cooldown window. Without this an hourly
+//     tick would bill for a fresh sequence every hour of a bad week.
+//   • Never when a draft for that campaign is already waiting to be read.
+//     Two unread drafts is worse than one.
+//   • Never without a usable brief. It would produce generic copy and teach
+//     the CM to distrust the whole thing.
+//   • Failures are swallowed. A model outage must not break the tick that
+//     keeps campaigns stocked.
+const AUTODRAFT_COOLDOWN_HOURS = 72;
+
+function autodraftAllowed(workspaceId, campaignId) {
+  const waiting = db.prepare(
+    `SELECT 1 FROM copy_drafts WHERE campaign_id = ? AND status IN ('draft','applying') LIMIT 1`
+  ).get(campaignId);
+  if (waiting) return { ok: false, why: 'a draft for this campaign is already waiting' };
+  const recent = db.prepare(
+    `SELECT created_at FROM copy_drafts
+     WHERE campaign_id = ? AND created_at > datetime('now', ?)
+     ORDER BY created_at DESC LIMIT 1`
+  ).get(campaignId, `-${AUTODRAFT_COOLDOWN_HOURS} hours`);
+  if (recent) return { ok: false, why: `already drafted for this campaign in the last ${AUTODRAFT_COOLDOWN_HOURS}h` };
+  const m = memoryFor(workspaceId);
+  const done = memoryCompleteness(m);
+  if (!done.ready) return { ok: false, why: `brief is only ${done.pct}% complete` };
+  return { ok: true };
+}
+
+async function maybeAutodraft(state, alert) {
+  const gate = autodraftAllowed(state.workspace_id, state.campaign_id);
+  if (!gate.ok) return { skipped: gate.why };
+  try {
+    const out = await generateCopyDraft({
+      workspaceId: state.workspace_id,
+      workspaceName: state.workspace_name,
+      campaignId: state.campaign_id,
+      campaignName: state.campaign_name,
+      reason: alert.message,
+      steps: 2, variations: 2,
+    });
+    return { drafted: out.id, cost: out.cost };
+  } catch (e) {
+    // Best effort by design — the tick's real job is keeping campaigns
+    // stocked, and that must survive a model outage.
+    console.warn(`[autodraft] ${state.campaign_id}: ${e.message}`);
+    return { error: e.message };
+  }
+}
+
 function memoryFor(workspaceId) {
   const m = db.prepare('SELECT * FROM client_memory WHERE workspace_id = ?').get(workspaceId) || { workspace_id: workspaceId };
   const lessons = db.prepare(
@@ -18953,10 +19029,12 @@ function buildCopyUserPrompt(m, opts) {
   return L.join('\n');
 }
 
-// Sonnet, not Haiku. This is the copy that decides whether a client's month
-// works — the price difference is noise against one bad sequence.
-const COPY_MODEL = process.env.COPY_MODEL || 'claude-sonnet-5';
-const SONNET_PRICE = { input: 3.00, output: 15.00, cache_write: 3.75, cache_read: 0.30 };
+// The best model available, not the cheapest. A sequence costs ~5p to draft on
+// Opus versus ~2p on Sonnet; at 50 clients redrafting weekly that is £11/month
+// against £4. Set against one sequence that lands better for one client, the
+// difference is not worth thinking about — so it is not optimised for.
+const COPY_MODEL = process.env.COPY_MODEL || 'claude-opus-5';
+const OPUS_PRICE = { input: 5.00, output: 25.00, cache_write: 6.25, cache_read: 0.50 };
 
 async function generateCopyDraft({ workspaceId, workspaceName, campaignId, campaignName, reason, steps, variations }) {
   const key = process.env.ANTHROPIC_API_KEY;
@@ -18979,6 +19057,9 @@ async function generateCopyDraft({ workspaceId, workspaceName, campaignId, campa
   const userPrompt = buildCopyUserPrompt({ ...m, workspace_name: workspaceName },
     { workspace_name: workspaceName, reason, steps, variations, avoid });
 
+  // The system prompt is stable and the brief is not, so the prompt goes in
+  // that order and the cache breakpoint sits on the system block — every draft
+  // for every client reuses it.
   const req = () => fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -18986,7 +19067,12 @@ async function generateCopyDraft({ workspaceId, workspaceName, campaignId, campa
       'anthropic-version': '2023-06-01', 'anthropic-beta': 'prompt-caching-2024-07-31',
     },
     body: JSON.stringify({
-      model: COPY_MODEL, max_tokens: 3000,
+      model: COPY_MODEL,
+      max_tokens: 8000,
+      // Writing copy that has to beat spam filters and sound like a specific
+      // person is exactly the kind of task thinking helps with.
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'high' },
       system: [{ type: 'text', text: COPY_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
       messages: [{ role: 'user', content: userPrompt }],
     }),
@@ -18998,11 +19084,19 @@ async function generateCopyDraft({ workspaceId, workspaceName, campaignId, campa
   }
   if (!r.ok) throw new Error(`Claude ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const j = await r.json();
+  // A safety refusal returns HTTP 200 with stop_reason 'refusal', so it has to
+  // be checked explicitly or it looks like an empty draft.
+  if (j?.stop_reason === 'refusal') {
+    throw new Error('The model declined to write this one. Check the brief for anything that reads as misleading.');
+  }
   const u = j?.usage || {};
-  const cost = ((u.input_tokens || 0) * SONNET_PRICE.input + (u.output_tokens || 0) * SONNET_PRICE.output +
-    (u.cache_creation_input_tokens || 0) * SONNET_PRICE.cache_write +
-    (u.cache_read_input_tokens || 0) * SONNET_PRICE.cache_read) / 1_000_000;
-  const text = (j?.content?.[0]?.text || '').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  const cost = ((u.input_tokens || 0) * OPUS_PRICE.input + (u.output_tokens || 0) * OPUS_PRICE.output +
+    (u.cache_creation_input_tokens || 0) * OPUS_PRICE.cache_write +
+    (u.cache_read_input_tokens || 0) * OPUS_PRICE.cache_read) / 1_000_000;
+  // With thinking on, the response carries thinking blocks before the text —
+  // taking content[0] blindly would hand JSON.parse a reasoning summary.
+  const text = ((j?.content || []).filter(b => b.type === 'text').map(b => b.text).join('') || '')
+    .replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
   let parsed;
   try { parsed = JSON.parse(text); } catch { throw new Error('The model did not return usable JSON. Try again.'); }
   const bad = validateSequence(parsed);
