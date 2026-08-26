@@ -2,7 +2,14 @@ import { type NextRequest, NextResponse } from 'next/server'
 import * as Sentry from '@sentry/nextjs'
 import pool from '@/lib/db'
 import { getActiveWorkspaceIds } from '@/lib/active-clients'
-import { fetchPvRanges, type PvDay } from '@/lib/pv-range'
+import {
+  fetchPvRange,
+  readRangeCache,
+  writeRangeCache,
+  refreshRangeInBackground,
+  type PvDay,
+  type PvRange,
+} from '@/lib/pv-range'
 
 interface DayData {
   date: string
@@ -90,21 +97,72 @@ export async function GET(req: NextRequest) {
 
     const dates = enumerateDates(start, end, 400)
 
-    // ── THE SOURCE OF TRUTH ──────────────────────────────────────────────────
-    // One PV call per workspace for the WHOLE range. Sent, replies, OOO,
-    // bounces and contacted all come from the SAME response, so the numerator
-    // and the denominator are always measured over the same days.
+    // ── THE SOURCE OF TRUTH, SERVED FROM CACHE ───────────────────────────────
+    // Every number still comes from ONE PV response per workspace, so the
+    // numerator and denominator can never be measured over different windows —
+    // that is the accuracy property this page was fixed for.
     //
-    // The previous implementation read `sent` from perf_cache_daily and replies
-    // from our unibox. When the cache was missing days — which it was, six of
-    // them for ButterflyEco in August alone — the denominator shrank while the
-    // numerator did not, and every rate on the page came out roughly double.
-    // No cache-warming tweak can fix that; only sharing one source can.
-    const { byWs, failed } = await fetchPvRanges(
-      workspaceList.map(w => w.workspace_id),
-      start,
-      end,
-    )
+    // But the page must NEVER wait on PlusVibe. pvFetch shares one process-wide
+    // gate (PV_CONCURRENCY=1, 400ms floor) with the background cache warmer,
+    // which fires up to 40 calls every 2 minutes. Calling PV inline queued the
+    // request behind that backlog and a single workspace timed out at 100s.
+    //
+    // So: read the range cache, serve whatever is there, and refresh stale or
+    // missing rows in the BACKGROUND. A cold range blocks only for a small,
+    // strictly time-boxed number of workspaces so the first ever view is not
+    // empty; everything else fills in and appears on the next load.
+    const wsIds = workspaceList.map(w => w.workspace_id)
+    const cached = await readRangeCache(wsIds, start, end)
+
+    const byWs = new Map<string, PvRange>()
+    const missing: string[] = []
+    let servedStale = 0
+    let oldestSavedAt = 0
+
+    for (const id of wsIds) {
+      const hit = cached.get(id)
+      if (!hit) { missing.push(id); continue }
+      byWs.set(id, hit.range)
+      if (hit.stale) {
+        servedStale++
+        refreshRangeInBackground(id, start, end) // returns immediately
+      }
+      if (hit.savedAt && (oldestSavedAt === 0 || hit.savedAt < oldestSavedAt)) {
+        oldestSavedAt = hit.savedAt
+      }
+    }
+
+    // COLD START: fetch a few missing workspaces inline, under a hard wall, so
+    // a never-before-viewed range shows something rather than an empty page.
+    // The rest are refreshed in the background and land on a later load.
+    const failed: string[] = []
+    if (missing.length) {
+      const MAX_INLINE = Number(process.env.STATS_COLD_INLINE ?? 4)
+      const BUDGET_MS = Number(process.env.STATS_COLD_BUDGET_MS ?? 8000)
+      const inline = missing.slice(0, MAX_INLINE)
+
+      const work = (async () => {
+        for (const id of inline) {
+          const range = await fetchPvRange(id, start, end)
+          if (range) {
+            byWs.set(id, range)
+            void writeRangeCache(id, start, end, range)
+          }
+        }
+      })()
+      // Race the whole pass against one wall clock. pvFetch can sit in backoff
+      // for minutes, so a per-item check would never fire — that is exactly how
+      // the page hung before.
+      await Promise.race([work.catch(() => {}), new Promise(r => setTimeout(r, BUDGET_MS))])
+
+      // Anything still absent is UNKNOWN, not zero, and is queued for later.
+      for (const id of missing) {
+        if (!byWs.has(id)) {
+          failed.push(id)
+          refreshRangeInBackground(id, start, end)
+        }
+      }
+    }
 
     // Leads are counted from esp_leads (label='INTERESTED') — the table the
     // Unibox writes to when a reply is marked as a lead. PlusVibe does NOT
@@ -215,6 +273,11 @@ export async function GET(req: NextRequest) {
       failedCount: failed.length,
       failedNames,
       source: 'plusvibe',
+      // How many rows were served from a cache older than its TTL, and the age
+      // of the oldest one, so the page can say how fresh the numbers are
+      // instead of implying they are live to the second.
+      stale: servedStale,
+      dataAsOf: oldestSavedAt ? new Date(oldestSavedAt).toISOString() : null,
       updatedAt: new Date().toISOString(),
     })
   } catch (err) {
