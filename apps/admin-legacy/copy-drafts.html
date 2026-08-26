@@ -71,6 +71,7 @@
     <div class="h-card"><div class="h-val" id="hApplied">—</div><div class="h-label">Sent live (30d)</div></div>
     <div class="h-card"><div class="h-val" id="hEdit">—</div><div class="h-label">You changed something</div></div>
     <div class="h-card"><div class="h-val" id="hLessons">—</div><div class="h-label">Lessons taught</div></div>
+    <div class="h-card"><div class="h-val" id="hCost">—</div><div class="h-label">Cost (30d)</div></div>
   </div>
 
   <div id="msg"></div>
@@ -232,6 +233,10 @@ async function loadHealth(){
     el.textContent = er == null ? '—' : er + '%';
     el.style.color = er != null && (j.applied || 0) >= 10 && er < 10 ? 'var(--amber)' : '';
     document.getElementById('hLessons').textContent = j.lessons ?? 0;
+    // Drafting shares the Anthropic key with contact enrichment, so the bill
+    // alone cannot say what copy cost. This counts only copy.
+    const usd = Number(j.cost || 0);
+    document.getElementById('hCost').textContent = usd > 0 ? '£' + (usd * 0.79).toFixed(2) : '£0';
   } catch {}
 }
 
