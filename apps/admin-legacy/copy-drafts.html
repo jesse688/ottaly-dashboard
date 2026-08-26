@@ -55,6 +55,7 @@
 </head>
 <body>
 <script src="/nav.js" defer></script>
+<script src="/next-step.js" defer></script>
 
 <div class="page">
   <div class="top-bar">
@@ -311,6 +312,7 @@ async function load(){
     DRAFTS = j.rows || [];
     TOUCHED.clear();
     render();
+    if (window.NextStep && DRAFTS.length) NextStep.show(DRAFTS[0].workspace_id);
     document.getElementById('status').textContent =
       DRAFTS.length ? DRAFTS.length + ' waiting' : '';
   } catch (e) {

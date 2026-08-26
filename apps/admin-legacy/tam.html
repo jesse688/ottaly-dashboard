@@ -52,6 +52,7 @@
 </head>
 <body>
 <script src="/nav.js" defer></script>
+<script src="/next-step.js" defer></script>
 
 <div class="page">
   <div class="top-bar">
@@ -182,6 +183,7 @@ async function load(){
   btn.disabled = true;
   try {
     const ws = document.getElementById('ws').value;
+    if (window.NextStep) NextStep.show(ws);
     const res = await fetch('/api/tam' + (ws ? '?workspace_id=' + encodeURIComponent(ws) : ''));
     const j = await res.json();
     if (!res.ok) throw new Error(j.error || 'Failed to load');

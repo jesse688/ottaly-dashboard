@@ -52,6 +52,7 @@
 </head>
 <body>
 <script src="/nav.js" defer></script>
+<script src="/next-step.js" defer></script>
 
 <div class="page">
   <div class="top-bar">
@@ -253,6 +254,8 @@ async function load(){
     PROPS = j.rows || [];
     DIRTY.clear();
     render();
+    // No client selector here, so follow whatever is on screen.
+    if (window.NextStep && PROPS.length) NextStep.show(PROPS[0].workspace_id);
     document.getElementById('status').textContent = PROPS.length ? PROPS.length + ' waiting' : '';
   } catch (e) {
     document.getElementById('out').className = 'empty';

@@ -18918,6 +18918,10 @@ db.exec(`CREATE TABLE IF NOT EXISTS copy_drafts (
   created_at     TEXT NOT NULL DEFAULT (datetime('now'))
 )`);
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_drafts_status ON copy_drafts(status, created_at DESC)`); } catch {}
+// Which plan step this copy belongs to. The step already records its draft;
+// this is the way back, so sending copy live can mark the step done and the
+// plan shows real progress instead of sitting on "in review" forever.
+try { db.exec(`ALTER TABLE copy_drafts ADD COLUMN plan_step_id INTEGER`); } catch {}
 
 // ── Auto-drafting ──────────────────────────────────────────────────────────
 // When copy stops working, the queue should hand over a replacement rather
@@ -19606,6 +19610,93 @@ function savePlan({ workspaceId, workspaceName, parsed, cost = 0, author = 'ai' 
   return { plan_id: planId, steps: parsed.steps.length, cost };
 }
 
+// What is the next thing to do for this client?
+//
+// Four pages with no stated order is a tool people stop opening — the same way
+// the last two internal tools died. Nobody should have to know that Market
+// comes before Plan, or that an audience is optional. This answers it in one
+// sentence with one button, and every page asks it rather than deciding for
+// itself.
+function nextActionFor(workspaceId, workspaceName) {
+  const N = (step, what, why, href, cta) => ({ step, what, why, href, cta });
+
+  const m = memoryFor(workspaceId);
+  const done = memoryCompleteness(m);
+  if (!done.ready) {
+    return N(1, 'Write the brief',
+      `The brief is ${done.pct}% done — still needs ${done.missing.join(', ')}. Nothing can be written for this client until it is.`,
+      '/client-brief.html', 'Open the brief');
+  }
+
+  const tam = db.prepare(`SELECT * FROM tam_snapshot WHERE scope='all' AND dimension IS NULL`).get();
+  if (!tam) {
+    return N(2, 'Count the market',
+      'Nobody has counted what is out there yet, so a plan would be guesswork.',
+      '/tam.html', 'Open Market');
+  }
+
+  const draft = db.prepare(
+    `SELECT id, campaign_name FROM copy_drafts WHERE workspace_id=? AND status='draft'
+     ORDER BY created_at DESC LIMIT 1`).get(workspaceId);
+  if (draft) {
+    return N(5, 'Read the copy',
+      `Copy for ${draft.campaign_name || 'a campaign'} is written and waiting on you.`,
+      '/copy-drafts.html', 'Read it');
+  }
+
+  const aud = db.prepare(
+    `SELECT id FROM audience_proposals WHERE workspace_id=? AND status='draft' LIMIT 1`).get(workspaceId);
+  if (aud) {
+    return N(4, 'Check the audience',
+      'An audience is worked out and waiting for you to approve it.',
+      '/audience.html', 'Check it');
+  }
+
+  const plan = db.prepare(
+    `SELECT id FROM campaign_plans WHERE workspace_id=? AND status!='archived'
+     ORDER BY created_at DESC LIMIT 1`).get(workspaceId);
+  if (!plan) {
+    return N(3, 'Plan the campaigns',
+      'There is a brief and a market, so the next thing is deciding which campaigns to run and in what order.',
+      '/plan.html', 'Plan it');
+  }
+
+  const next = db.prepare(
+    `SELECT id, position, name, sendable FROM campaign_plan_steps
+     WHERE plan_id=? AND status='planned' ORDER BY position LIMIT 1`).get(plan.id);
+  if (next) {
+    return next.sendable == null
+      ? N(4, `Count campaign ${next.position}`,
+          `"${next.name}" is next in the plan but nobody has counted how many people it reaches.`,
+          '/plan.html', 'Open the plan')
+      : N(5, `Write campaign ${next.position}`,
+          `"${next.name}" is next, with ${Number(next.sendable).toLocaleString()} people to send to.`,
+          '/plan.html', 'Write the copy');
+  }
+
+  const live = db.prepare(
+    `SELECT COUNT(*) n FROM campaign_plan_steps WHERE plan_id=? AND status='live'`).get(plan.id)?.n || 0;
+  return N(6, 'Nothing right now',
+    live ? `All ${live} planned campaigns are live. The queue will tell you when one needs attention.`
+         : 'Everything in the plan has been dealt with.',
+    '/queue.html', 'Open the queue');
+}
+
+app.get('/api/next-action', requireSession, (req, res) => {
+  try {
+    const ws = req.query.workspace_id;
+    if (ws) return res.json(nextActionFor(ws));
+    // No client named: rank everyone, most urgent first, so a CM opening this
+    // cold still knows where to start.
+    const scope = qScopeWorkspaces(req);
+    let clients = db.prepare(`SELECT workspace_id, workspace_name FROM clients ORDER BY workspace_name`).all();
+    if (scope) clients = clients.filter(c => scope.includes(c.workspace_id));
+    const rows = clients.map(c => ({ ...c, ...nextActionFor(c.workspace_id, c.workspace_name) }))
+      .sort((a, b) => a.step - b.step);
+    res.json({ clients: rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Campaign plan HTTP surface ─────────────────────────────────────────────
 app.post('/api/plan/generate', requireSession, async (req, res) => {
   try {
@@ -19671,6 +19762,25 @@ app.post('/api/plan/step/:id/count', requireSession, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Rework a step's audience. The planner sketches filters while thinking about
+// five campaigns at once; this reconsiders one of them properly and sends the
+// result to Audience for approval. Approving it writes back to this step, so
+// there is still only one answer to "who does this campaign go to".
+app.post('/api/plan/step/:id/rework-audience', requireSession, async (req, res) => {
+  try {
+    const st = db.prepare(`SELECT s.*, p.workspace_id, p.workspace_name FROM campaign_plan_steps s
+      JOIN campaign_plans p ON p.id = s.plan_id WHERE s.id = ?`).get(Number(req.params.id));
+    if (!st) return res.status(404).json({ error: 'No such step' });
+    const out = await generateAudienceProposal({
+      workspaceId: st.workspace_id,
+      workspaceName: st.workspace_name,
+      reason: `Campaign "${st.name}". Angle: ${st.angle || 'n/a'}. Reason for this slice: ${st.rationale || 'n/a'}`,
+    });
+    db.prepare(`UPDATE audience_proposals SET plan_step_id=? WHERE id=?`).run(st.id, out.id);
+    res.json({ ...out, plan_step_id: st.id });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 // Start a step: write its copy. The audience is already decided by the plan,
 // so this is the only thing left before a CM has something to review.
 app.post('/api/plan/step/:id/start', requireSession, async (req, res) => {
@@ -19693,6 +19803,7 @@ app.post('/api/plan/step/:id/start', requireSession, async (req, res) => {
       db.prepare(`UPDATE campaign_plan_steps SET status='in_review', draft_id=?, campaign_id=?,
         decided_by=?, decided_at=datetime('now') WHERE id=?`)
         .run(out.id, req.body?.campaign_id || null, s?.name || 'unknown', st.id);
+      db.prepare(`UPDATE copy_drafts SET plan_step_id=? WHERE id=?`).run(st.id, out.id);
       res.json({ ok: true, draft_id: out.id, cost: out.cost });
     } catch (e) {
       db.prepare(`UPDATE campaign_plan_steps SET status='planned' WHERE id=?`).run(st.id);
@@ -19748,6 +19859,12 @@ db.exec(`CREATE TABLE IF NOT EXISTS audience_proposals (
   cost_usd       REAL DEFAULT 0,
   created_at     TEXT NOT NULL DEFAULT (datetime('now'))
 )`);
+// An approved audience used to be written and never read again — a dead end.
+// It now attaches to the plan step it belongs to, so the plan is the single
+// spine: step -> audience -> copy -> live campaign. Without this, Plan and
+// Audience each invented their own filters for the same client and there were
+// two answers to one question.
+try { db.exec(`ALTER TABLE audience_proposals ADD COLUMN plan_step_id INTEGER`); } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_aud_status ON audience_proposals(status, created_at DESC)`); } catch {}
 
 // Only the filter keys a proposal may set. An allow-list rather than passing
@@ -19949,12 +20066,19 @@ app.post('/api/audience/:id/decide', requireSession, (req, res) => {
       .run(decision, s?.name || 'unknown', note || null, edited,
            req.body?.matched ?? null, req.body?.sendable ?? null, Number(req.params.id));
     if (!r.changes) return res.status(409).json({ error: 'That proposal has already been decided' });
-    const row = db.prepare('SELECT workspace_id FROM audience_proposals WHERE id = ?').get(Number(req.params.id));
+    const row = db.prepare('SELECT workspace_id, plan_step_id, filters, matched, sendable FROM audience_proposals WHERE id = ?').get(Number(req.params.id));
     if (row && note) {
       db.prepare(`INSERT INTO client_memory_lessons (workspace_id, lesson, source, author)
         VALUES (?, ?, ?, ?)`).run(row.workspace_id, note, `audience-${decision}`, s?.name || 'unknown');
     }
-    res.json({ ok: true });
+    // Approving an audience updates the plan step it belongs to, so the step a
+    // CM later writes copy for uses the audience they actually approved —
+    // rather than the one the planner guessed at weeks earlier.
+    if (row?.plan_step_id && decision === 'approved') {
+      db.prepare(`UPDATE campaign_plan_steps SET filters=?, est_pool=?, sendable=? WHERE id=?`)
+        .run(row.filters, row.matched, row.sendable, row.plan_step_id);
+    }
+    res.json({ ok: true, plan_step_id: row?.plan_step_id || null });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -20095,6 +20219,12 @@ app.post('/api/copy/draft/:id/approve', requireSession, async (req, res) => {
       });
       db.prepare(`UPDATE copy_drafts SET status = 'applied', pv_response = ? WHERE id = ?`)
         .run(JSON.stringify(pvRes || {}).slice(0, 4000), id);
+      // Sending copy live completes the plan step, so the plan shows real
+      // progress and the next campaign becomes the obvious thing to do.
+      if (row.plan_step_id) {
+        db.prepare(`UPDATE campaign_plan_steps SET status='live' WHERE id=? AND status='in_review'`)
+          .run(row.plan_step_id);
+      }
 
       // The lesson reaching here has always been seen by a human — either they
       // typed it, or the model proposed it from their edits and they let it

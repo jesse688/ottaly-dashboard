@@ -60,6 +60,7 @@
 </head>
 <body>
 <script src="/nav.js" defer></script>
+<script src="/next-step.js" defer></script>
 
 <div class="page">
   <div class="top-bar">
@@ -136,6 +137,8 @@ function stepHtml(s){
       (done ? '' :
         '<div class="s-actions">' +
           '<button class="btn btn-sm ghost" onclick="countStep(' + s.id + ')" id="c-' + s.id + '">Count it</button>' +
+          '<button class="btn btn-sm ghost" onclick="reworkAudience(' + s.id + ')" id="ra-' + s.id + '" ' +
+            'title="Reconsider who this campaign goes to, properly">Rework audience</button>' +
           '<button class="btn btn-sm btn-ok" onclick="startStep(' + s.id + ')" id="go-' + s.id + '">Write the copy</button>' +
           '<button class="btn btn-sm btn-no" onclick="skipStep(' + s.id + ')">Skip</button>' +
           '<input id="sk-' + s.id + '" placeholder="Skipping? Why, in a line.">' +
@@ -160,6 +163,23 @@ async function countStep(id){
     await load();
   } catch (e) { msg(e.message, false); }
   finally { b.disabled = false; b.textContent = 'Count it'; }
+}
+
+// The planner sketches filters while thinking about five campaigns at once.
+// This reconsiders one properly and sends it to Audience; approving it there
+// writes back to this step, so there is still one answer to "who is this for".
+async function reworkAudience(id){
+  const b = document.getElementById('ra-' + id);
+  b.disabled = true; b.textContent = 'Working…';
+  try {
+    const res = await fetch('/api/plan/step/' + id + '/rework-audience', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}'
+    });
+    const j = await res.json();
+    if (!res.ok) { msg(j.error || 'Could not rework it', false); return; }
+    msg('Worked out a new audience — approve it in Audience and it comes back to this step.', true);
+  } catch (e) { msg(e.message, false); }
+  finally { b.disabled = false; b.textContent = 'Rework audience'; }
 }
 
 async function startStep(id){
@@ -224,6 +244,7 @@ async function load(){
   btn.disabled = true;
   try {
     const ws = document.getElementById('ws').value;
+    if (window.NextStep) NextStep.show(ws);
     const res = await fetch('/api/plans' + (ws ? '?workspace_id=' + encodeURIComponent(ws) : ''));
     const j = await res.json();
     if (!res.ok) throw new Error(j.error || 'Failed to load');

@@ -49,6 +49,7 @@
 </head>
 <body>
 <script src="/nav.js" defer></script>
+<script src="/next-step.js" defer></script>
 
 <div class="page">
   <div class="top-bar">
@@ -178,6 +179,7 @@ async function pick(){
     FIELDS.forEach(f => { document.getElementById(f).value = LOADED[f] || ''; });
     paintMeter(j.completeness);
     paintLessons(LOADED.lessons || []);
+    if (window.NextStep) NextStep.show(WS);
   } catch (e) { msg('Could not load that brief: ' + e.message, false); }
 }
 
