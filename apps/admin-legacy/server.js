@@ -19378,9 +19378,21 @@ const AUDIENCE_FILTER_KEYS = new Set([
   'country', 'state', 'city', 'personRegion', 'personCounty', 'personTown',
   'countryExclude', 'stateExclude', 'cityExclude',
   'personRegionExclude', 'personCountyExclude', 'personTownExclude',
-  'ownsBuilding', 'ccodOwnsBuilding', 'solarMinKwp', 'solarStatus', 'solarStatusExclude',
   'hasName', 'hasCompany', 'worksRemote', 'excludeRemote',
 ]);
+
+// DELIBERATELY NOT AVAILABLE to the AI: ownsBuilding, ccodOwnsBuilding,
+// solarMinKwp, solarStatus. Each looks like a precise qualifier and silently
+// returns nothing. Measured 2026-08-27:
+//   solar_max_kwp   — set on 9,406 rows of 1,462,400, and the values are not
+//                     trusted yet.
+//   owns_building   — 'unknown' on 1,461,116 of 1,462,400. Effectively empty.
+//   ccod_owns_building — holds no/yes/unclear/no_postcode. There is NO
+//                     'freehold' value, so the obvious filter matched zero and
+//                     produced an audience of 0 that read as merely narrow.
+// A CM can still set these by hand in Contacts; they must not reach a plan
+// that a person is asked to trust. Restore them only with fresh coverage
+// numbers to justify it.
 
 // Guards no proposal may weaken. These are the difference between a filter and
 // a liability, and a model asked to "widen the audience" would drop them.
@@ -19445,7 +19457,9 @@ Ordering rules — this is the important part:
 - Do not plan two consecutive campaigns at the same people with a different subject line. Each step must be a genuinely different audience or a genuinely different reason to care.
 - If the brief only really supports one or two audiences, plan two or three. Do not pad.
 
-Filters use these keys: jobTitle, jobTitleExclude, seniority, department, industry, industryExclude, keywords, keywordsExclude, sicCodes, numEmployeesRanges, companyCountry, companyRegion, companyCounty, companyTown, ownsBuilding, ccodOwnsBuilding, solarMinKwp, hasName, hasCompany. Comma-separated strings.
+Filters use these keys: jobTitle, jobTitleExclude, seniority, department, industry, industryExclude, keywords, keywordsExclude, sicCodes, numEmployeesRanges, companyCountry, companyRegion, companyCounty, companyTown, hasName, hasCompany. Comma-separated strings.
+
+There is NO filter for building ownership, freehold, or roof/solar capacity — that data is too sparse to filter on and any such key returns an empty audience. Where a client needs freeholders or a minimum roof size, the COPY must say so plainly and let the wrong people opt themselves out. Put that in the campaign's angle, not in its filters.
 
 FILTERS MULTIPLY. This is the most common way these plans fail, so treat it as a hard constraint, not advice. Each filter you add cuts the pool again, and four reasonable-looking filters routinely leave under 300 people out of 20,000. Measured on this database: food & beverages alone is 24,299; adding seniority takes it to 16,411; adding company size and country takes it to 3,609; adding three keywords takes it to 260. That last campaign is dead on arrival.
 
@@ -19710,11 +19724,10 @@ Available filter keys (omit any you do not need — every key you set NARROWS th
 - sicCodes — comma-separated UK SIC codes
 - numEmployeesRanges — comma-separated bands. Valid: 1-10, 11-20, 21-50, 51-100, 101-200, 201-500, 501-1000, 1001-2000, 2001-5000, 5001-10000, 10001+
 - companyCountry, companyRegion, companyCounty, companyTown, companyCity — and matching *Exclude keys
-- ownsBuilding — set to "true" only if the client needs the prospect to own their premises
-- ccodOwnsBuilding — set to "freehold" when freehold ownership specifically is required
-- solarMinKwp — minimum viable solar capacity in kWp, a number, only for solar clients
-- hasName — "first_only" requires a first name; omit if nameless company inboxes are acceptable
+- hasName — "first_only" requires a first name
 - hasCompany — "yes" requires a company name
+
+There is NO filter for building ownership, freehold, or roof/solar capacity. That data is too sparse to filter on and any such key would return an empty audience. If the client only wants freeholders or sites above a certain roof size, that is a job for the COPY — say it plainly in the email so the wrong people opt themselves out — never for the filter.
 
 Rules — filters MULTIPLY, and that is how these go wrong:
 - Use THREE filters, four at the very most. Measured on this database: food & beverages alone is 24,299 people; add seniority and it is 16,411; add company size and country and it is 3,609; add three keywords and it is 260. Four reasonable choices left a dead campaign.
@@ -19800,6 +19813,13 @@ async function generateAudienceProposal({ workspaceId, workspaceName, reason }) 
       countError = `count failed (HTTP ${cr.status})`;
     }
   } catch (e) { countError = e.message; }
+
+  // An audience of zero is a broken proposal, not a narrow one. Saying so here
+  // is the difference between a CM losing five minutes and losing trust in the
+  // whole tool.
+  if (sendable === 0) {
+    countError = 'That combination matches nobody. Usually one filter is doing it — try removing the narrowest and counting again.';
+  }
 
   const ins = db.prepare(`INSERT INTO audience_proposals
     (workspace_id, workspace_name, reason, rationale, filters, matched, sendable, cost_usd)

@@ -102,7 +102,7 @@ function render(){
   el.innerHTML = PROPS.map(p => {
     const keys = Object.keys(p.filters || {}).filter(k => !LOCKED.includes(k));
     const locked = Object.keys(p.filters || {}).filter(k => LOCKED.includes(k));
-    const send = p.sendable, thin = send != null && send < 500;
+    const send = p.sendable, thin = send != null && send > 0 && send < 2000, dead = send === 0;
     return '<div class="prop" id="p-' + p.id + '">' +
       '<div class="p-head">' +
         '<span class="p-client">' + esc(p.workspace_name || p.workspace_id) + '</span>' +
@@ -110,9 +110,10 @@ function render(){
       '</div>' +
       '<div class="counts">' +
         '<div class="c-item"><span class="c-val">' + (p.matched == null ? '—' : Number(p.matched).toLocaleString()) + '</span><span class="c-lab">Match the filters</span></div>' +
-        '<div class="c-item"><span class="c-val ' + (thin ? 'c-warn' : '') + '" id="s-' + p.id + '">' +
+        '<div class="c-item"><span class="c-val ' + (dead ? 'c-bad' : thin ? 'c-warn' : '') + '" id="s-' + p.id + '">' +
           (send == null ? '—' : Number(send).toLocaleString()) + '</span><span class="c-lab">Can actually be sent to</span></div>' +
-        (thin ? '<div class="c-item"><span class="c-lab c-warn" style="max-width:20rem;text-transform:none;letter-spacing:0;font-size:11.5px;line-height:1.45">That is a thin pool — this campaign would run dry quickly. Loosen a filter.</span></div>' : '') +
+        (dead ? '<div class="c-item"><span class="c-lab c-bad" style="max-width:22rem;text-transform:none;letter-spacing:0;font-size:11.5px;line-height:1.45">This matches nobody. One filter is doing it — take out the narrowest one and re-count.</span></div>'
+          : thin ? '<div class="c-item"><span class="c-lab c-warn" style="max-width:20rem;text-transform:none;letter-spacing:0;font-size:11.5px;line-height:1.45">That is a thin pool — this campaign would run dry quickly. Loosen a filter.</span></div>' : '') +
       '</div>' +
       '<div class="filters">' +
         keys.map(k => '<span class="f"><b>' + esc(label(k)) + '</b>' +
@@ -182,6 +183,10 @@ async function decide(id, decision){
     return;
   }
   const p = PROPS.find(x => x.id === id);
+  if (decision === 'approved' && p.sendable === 0) {
+    msg('This audience matches nobody — approving it would save a filter that can never send. Loosen one and re-count.', false);
+    return;
+  }
   const card = document.getElementById('p-' + id);
   card.style.opacity = '.5';
   try {
