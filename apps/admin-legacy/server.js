@@ -19372,7 +19372,11 @@ const AUDIENCE_FILTER_KEYS = new Set([
   'industry', 'industryExclude', 'keywords', 'keywordsExclude',
   'sicCodes', 'technologies', 'technologiesExclude',
   'numEmployeesRanges', 'numEmployeesExcludeRanges', 'companyAgeBand',
-  'companyCountry', 'companyRegion', 'companyCounty', 'companyTown', 'companyCity', 'companyState',
+  // companyCountry deliberately absent: 610,341 contacts (42%) have no country
+  // recorded, so any country filter silently discards them — and they are
+  // overwhelmingly UK. It halved a real audience while buying nothing. Region
+  // and county stay, for genuinely local campaigns.
+  'companyRegion', 'companyCounty', 'companyTown', 'companyCity', 'companyState',
   'companyCountryExclude', 'companyRegionExclude', 'companyCountyExclude',
   'companyTownExclude', 'companyCityExclude', 'companyStateExclude',
   'country', 'state', 'city', 'personRegion', 'personCounty', 'personTown',
@@ -19457,7 +19461,9 @@ Ordering rules — this is the important part:
 - Do not plan two consecutive campaigns at the same people with a different subject line. Each step must be a genuinely different audience or a genuinely different reason to care.
 - If the brief only really supports one or two audiences, plan two or three. Do not pad.
 
-Filters use these keys: jobTitle, jobTitleExclude, seniority, department, industry, industryExclude, keywords, keywordsExclude, sicCodes, numEmployeesRanges, companyCountry, companyRegion, companyCounty, companyTown, hasName, hasCompany. Comma-separated strings.
+Filters use these keys: jobTitle, jobTitleExclude, seniority, department, industry, industryExclude, keywords, keywordsExclude, sicCodes, numEmployeesRanges, companyRegion, companyCounty, companyTown, hasName, hasCompany. Comma-separated strings.
+
+**Do not set companyCountry.** 610,341 contacts — 42% of the database — have no country recorded, and any country filter discards every one of them. They are overwhelmingly UK, and the database is UK-focused already. Measured on a real audience: it halved the pool from 1,944 to 959 while buying nothing.
 
 There is NO filter for building ownership, freehold, or roof/solar capacity — that data is too sparse to filter on and any such key returns an empty audience. Where a client needs freeholders or a minimum roof size, the COPY must say so plainly and let the wrong people opt themselves out. Put that in the campaign's angle, not in its filters.
 
@@ -19466,7 +19472,7 @@ FILTERS MULTIPLY. This is the most common way these plans fail, so treat it as a
 So:
 - Use THREE filters per campaign, four at the very most. Industry plus seniority plus country is usually the whole thing.
 - NEVER set both jobTitle and seniority. They cover the same ground and stack brutally. **Prefer jobTitle** — it is set on 1,012,647 contacts against seniority's 915,778, and 96,869 people have a title but no seniority, so filtering on seniority silently throws them away.
-- **Use ROOT WORDS in jobTitle, not full titles.** Matching is loose, so "director" catches Director, Managing Director, Operations Director, Director of Operations and Finance Director in one word. Listing exact titles like "Managing Director,CEO,Chief Executive,Owner,Finance Director" misses most of the real decision-makers, because job titles are written a hundred different ways. Measured on care homes: the exact-title list returned 1,944 people; `director,owner,manager,head,chief,founder,partner` returned 9,692 from the same industry — five times more, and no less senior. Prefer a handful of root words.
+- **Use ROOT WORDS in jobTitle, not full titles.** Matching is loose, so "director" catches Director, Managing Director, Operations Director, Director of Operations and Finance Director in one word. Listing exact titles like "Managing Director,CEO,Chief Executive,Owner,Finance Director" misses most of the real decision-makers, because job titles are written a hundred different ways. Measured on care homes: the exact-title list returned 1,944 people; "director,owner,manager,head,chief,founder,partner" returned 9,692 from the same industry — five times more, and no less senior. Prefer a handful of root words.
 - keywords is the most destructive filter there is — it matches only contacts whose company description happens to contain that word, and most rows have no description at all. Do not use it to describe an industry you have already selected. Use it only when it is the ONLY way to express the audience, and never more than one word.
 - Prefer a wider slice with a sharper angle over a narrow slice with a generic one. The copy does the qualifying; the filter only has to get you into the right room.
 
@@ -19741,7 +19747,7 @@ Industry is also blank on 102,232 contacts, so an industry filter loses those to
 Rules — filters MULTIPLY, and that is how these go wrong:
 - Use THREE filters, four at the very most. Measured on this database: food & beverages alone is 24,299 people; add seniority and it is 16,411; add company size and country and it is 3,609; add three keywords and it is 260. Four reasonable choices left a dead campaign.
 - NEVER set both jobTitle and seniority. They cover the same ground and stack brutally. **Prefer jobTitle** — it is set on 1,012,647 contacts against seniority's 915,778, and 96,869 people have a title but no seniority, so seniority silently throws them away.
-- **Use ROOT WORDS in jobTitle, not full titles.** Matching is loose, so "director" catches Director, Managing Director, Operations Director and Finance Director at once. Measured on care homes: an exact-title list returned 1,944 people; `director,owner,manager,head,chief,founder,partner` returned 9,692 from the same industry.
+- **Use ROOT WORDS in jobTitle, not full titles.** Matching is loose, so "director" catches Director, Managing Director, Operations Director and Finance Director at once. Measured on care homes: an exact-title list returned 1,944 people; "director,owner,manager,head,chief,founder,partner" returned 9,692 from the same industry.
 - **Do not set companyCountry.** 610,341 contacts (42% of the database) have no country recorded and would be thrown away; the database is UK-focused already. Measured: it halved a real audience from 1,944 to 959.
 - keywords is the most destructive filter available — it matches only contacts whose company description contains that word, and most rows have no description. Never use it to restate an industry you have already selected. One word, only if nothing else expresses the audience.
 - Never set both a key and its Exclude counterpart to the same value.
