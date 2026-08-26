@@ -148,19 +148,23 @@ export async function GET(req: NextRequest) {
     // The rest are refreshed in the background and land on a later load.
     const failed: string[] = []
     if (missing.length) {
-      const MAX_INLINE = Number(process.env.STATS_COLD_INLINE ?? 4)
-      const BUDGET_MS = Number(process.env.STATS_COLD_BUDGET_MS ?? 8000)
+      const MAX_INLINE = Number(process.env.STATS_COLD_INLINE ?? 25)
+      const BUDGET_MS = Number(process.env.STATS_COLD_BUDGET_MS ?? 25000)
       const inline = missing.slice(0, MAX_INLINE)
 
-      const work = (async () => {
-        for (const id of inline) {
-          const range = await fetchPvRange(id, start, end)
+      // Issue all of them at once. pvGate still serialises the wire and holds
+      // the 400ms floor, so PV sees the same rate — but the calls are queued as
+      // PRIORITY, so they drain ahead of the warmers instead of one-at-a-time
+      // behind them. ~25 workspaces x ~0.5s is comfortably inside the budget.
+      const work = Promise.all(
+        inline.map(async id => {
+          const range = await fetchPvRange(id, start, end, true) // human waiting
           if (range) {
             byWs.set(id, range)
             void writeRangeCache(id, start, end, range)
           }
-        }
-      })()
+        }),
+      ).then(() => undefined)
       // Race the whole pass against one wall clock. pvFetch can sit in backoff
       // for minutes, so a per-item check would never fire — that is exactly how
       // the page hung before.

@@ -56,12 +56,20 @@ export async function fetchPvRange(
   wsId: string,
   start: string,
   end: string,
+  /**
+   * True when a human is waiting on this call. It then jumps the shared PV
+   * queue ahead of the background warmers, which enqueue up to 40 calls every
+   * 2 minutes at concurrency 1 — that backlog, not PlusVibe, is what made the
+   * page time out (PV itself answers in <1s).
+   */
+  priority = false,
 ): Promise<PvRange | null> {
   let raw: unknown
   try {
     raw = await pvFetch(
       `/account/email-stats?workspace_id=${encodeURIComponent(wsId)}` +
         `&start_date=${start}&end_date=${end}`,
+      priority,
     )
   } catch {
     return null
@@ -263,7 +271,7 @@ export function refreshRangeInBackground(wsId: string, start: string, end: strin
   inflight.add(key)
   void (async () => {
     try {
-      const range = await fetchPvRange(wsId, start, end)
+      const range = await fetchPvRange(wsId, start, end, true)
       if (range) await writeRangeCache(wsId, start, end, range)
     } catch {
       /* a failed refresh just leaves the previous row in place */
