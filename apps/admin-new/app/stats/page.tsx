@@ -26,7 +26,6 @@ interface WsTotals {
   oooReplies: number
   bounces: number
   contacted: number
-  uniqueContacted: number
   leads: number
   replyRate: number
   allReplyRate: number
@@ -47,6 +46,7 @@ interface SummaryResponse {
   partial?: boolean
   failedCount?: number
   failedNames?: string[]
+  spansBison?: boolean
   updatedAt: string | null
   error?: string
 }
@@ -137,7 +137,7 @@ const brTone = (br: number): 'ok' | 'warn' | 'error' => (br >= 0.05 ? 'error' : 
 // Build the synthetic "All Workspaces" aggregate row (legacy buildAllWorkspaces).
 function buildAllWorkspaces(list: Workspace[]): Workspace | null {
   if (!list.length) return null
-  const t = { sent: 0, replies: 0, posReplies: 0, oooReplies: 0, bounces: 0, contacted: 0, uniqueContacted: 0, leads: 0 }
+  const t = { sent: 0, replies: 0, posReplies: 0, oooReplies: 0, bounces: 0, contacted: 0, leads: 0 }
   const byDate: Record<string, DayData> = {}
   let nDays = 0
   for (const w of list) {
@@ -146,11 +146,10 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
     t.posReplies += w.totals.posReplies
     t.oooReplies += w.totals.oooReplies
     t.bounces += w.totals.bounces
+    // Reply-rate denominator, summed across workspaces. A workspace owns its
+    // own leads, so these do not overlap and summing keeps the agency headline
+    // on the same basis as each row.
     t.contacted += w.totals.contacted
-    // Reply-rate denominator, summed across workspaces. Distinct people are
-    // distinct per workspace (a workspace owns its own leads), so adding these
-    // is sound and keeps the agency headline on the same basis as each row.
-    t.uniqueContacted += w.totals.uniqueContacted
     t.leads += w.totals.leads
     nDays = Math.max(nDays, w.series.length)
     for (const d of w.series) {
@@ -182,12 +181,12 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
     name: `All Workspaces (${list.length})`,
     totals: {
       ...t,
-      // replies = human (OOO separate). Rates divide by unique-contacted, which
-      // is what PlusVibe itself divides by — see the note in the summary route.
+      // replies = human (OOO separate). Rates divide by contacted, which is what
+      // PlusVibe's public API divides by — see the note in lib/pv-range.ts.
       // Bounce is the exception and divides by sent.
-      replyRate: t.uniqueContacted > 0 ? t.replies / t.uniqueContacted : 0,
+      replyRate: t.contacted > 0 ? t.replies / t.contacted : 0,
       allReplyRate:
-        t.uniqueContacted > 0 ? (t.replies + t.oooReplies) / t.uniqueContacted : 0,
+        t.contacted > 0 ? (t.replies + t.oooReplies) / t.contacted : 0,
       bounceRate: t.sent > 0 ? t.bounces / t.sent : 0,
       // RTL = Replies-To-Lead: replies needed per lead (replies ÷ leads).
       // RTL = human replies per lead; replies is already human.
@@ -412,6 +411,8 @@ export default function StatsPage() {
   // agency-wide denominator is short, so no rate on this page is trustworthy
   // and every one of them is blanked rather than printed.
   const [failedNames, setFailedNames] = useState<string[]>([])
+  // True when the selected window predates the PlusVibe cutover (All Time).
+  const [spansBison, setSpansBison] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const reqId = useRef(0)
 
@@ -430,6 +431,7 @@ export default function StatsPage() {
       if (data.error) throw new Error(data.error)
       setUpdatedAt(data.updatedAt)
       setFailedNames(data.partial ? (data.failedNames ?? []) : [])
+      setSpansBison(Boolean(data.spansBison))
 
       if (provRes.ok) {
         const pj: ProvidersResponse = await provRes.json()
@@ -536,6 +538,14 @@ export default function StatsPage() {
         </div>
       }
     >
+      {spansBison && (
+        <div className="mb-4 rounded-lg border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+          <span className="font-medium text-foreground">Includes pre-PlusVibe sending.</span>{' '}
+          This range starts before the Bison&rarr;PlusVibe move (Jun 2026), so it
+          covers both platforms. Every other range counts PlusVibe only.
+        </div>
+      )}
+
       {incomplete && (
         <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
           <div className="font-semibold text-amber-700 dark:text-amber-400">
