@@ -1,5 +1,61 @@
 import pool from './db'
-import { pvFetch } from './cache-warming'
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INTERACTIVE PV CLIENT — deliberately NOT the warmers' pvFetch.
+//
+// pvFetch shares a process-wide gate AND a process-wide backoff: any 429 from
+// the background warmers sets `pausedUntil` for EVERYONE, and each further 429
+// extends it. A page request would acquire its slot (priority ordering worked)
+// and then sit in that cooldown until its budget expired — measured on live at
+// 25.689s / 25.694s / 25.692s, three for three, pinned to the budget, while
+// PlusVibe served the very same call directly in 0.67s.
+//
+// Priority ordering cannot beat a global pause, so the page needs its own
+// client. This one is bounded and polite in its own right: at most
+// PV_UI_CONCURRENCY in flight, a short timeout, one quick retry, and NO global
+// pause — a warmer 429 can no longer freeze a human's page load.
+//
+// It is a small, fixed amount of extra traffic (one call per workspace per
+// range, then cached), which is what makes it safe to keep separate.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PV_BASE = 'https://api.plusvibe.ai/api/v1'
+const PV_KEY = process.env.PLUSVIBE_KEY ?? ''
+const PV_UI_CONCURRENCY = Number(process.env.STATS_UI_CONCURRENCY ?? 6)
+const PV_UI_TIMEOUT_MS = Number(process.env.STATS_UI_TIMEOUT_MS ?? 12000)
+
+interface UiGate { active: number; queue: Array<() => void> }
+const uiGate: UiGate = ((globalThis as Record<string, unknown>).__ottalyPvUiGate ??= {
+  active: 0,
+  queue: [],
+}) as UiGate
+
+async function uiFetch(path: string): Promise<unknown> {
+  if (uiGate.active >= PV_UI_CONCURRENCY) {
+    await new Promise<void>(r => uiGate.queue.push(r))
+  }
+  uiGate.active++
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const res = await fetch(`${PV_BASE}${path}`, {
+        headers: { 'x-api-key': PV_KEY },
+        signal: AbortSignal.timeout(PV_UI_TIMEOUT_MS),
+      })
+      if (res.ok) return await res.json()
+      // One short retry for a transient limit, then give up and let the caller
+      // report the workspace as unknown. Never a process-wide pause.
+      if ((res.status === 429 || res.status >= 500) && attempt === 0) {
+        await new Promise(r => setTimeout(r, 600))
+        continue
+      }
+      throw new Error(`PlusVibe ${res.status}`)
+    }
+    throw new Error('PlusVibe retry exhausted')
+  } finally {
+    uiGate.active--
+    uiGate.queue.shift()?.()
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PlusVibe range stats — THE source of truth for the Stats page.
@@ -56,20 +112,12 @@ export async function fetchPvRange(
   wsId: string,
   start: string,
   end: string,
-  /**
-   * True when a human is waiting on this call. It then jumps the shared PV
-   * queue ahead of the background warmers, which enqueue up to 40 calls every
-   * 2 minutes at concurrency 1 — that backlog, not PlusVibe, is what made the
-   * page time out (PV itself answers in <1s).
-   */
-  priority = false,
 ): Promise<PvRange | null> {
   let raw: unknown
   try {
-    raw = await pvFetch(
+    raw = await uiFetch(
       `/account/email-stats?workspace_id=${encodeURIComponent(wsId)}` +
         `&start_date=${start}&end_date=${end}`,
-      priority,
     )
   } catch {
     return null
@@ -128,9 +176,8 @@ export async function fetchPvRange(
 /**
  * Fetch many workspaces' ranges concurrently.
  *
- * `pvFetch` serialises on a process-wide gate and backs off on 429, so the
- * concurrency here only controls how many calls are queued, not the rate PV
- * actually sees. Failures are reported by workspace id rather than swallowed —
+ * `uiFetch` bounds its own concurrency, so this only controls how many are
+ * queued. Failures are reported by workspace id rather than swallowed —
  * the route needs to know precisely which rows are untrustworthy so it can
  * refuse to print a rate for them.
  */
@@ -271,7 +318,7 @@ export function refreshRangeInBackground(wsId: string, start: string, end: strin
   inflight.add(key)
   void (async () => {
     try {
-      const range = await fetchPvRange(wsId, start, end, true)
+      const range = await fetchPvRange(wsId, start, end)
       if (range) await writeRangeCache(wsId, start, end, range)
     } catch {
       /* a failed refresh just leaves the previous row in place */

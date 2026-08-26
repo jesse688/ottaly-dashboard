@@ -158,7 +158,7 @@ export async function GET(req: NextRequest) {
       // behind them. ~25 workspaces x ~0.5s is comfortably inside the budget.
       const work = Promise.all(
         inline.map(async id => {
-          const range = await fetchPvRange(id, start, end, true) // human waiting
+          const range = await fetchPvRange(id, start, end)
           if (range) {
             byWs.set(id, range)
             void writeRangeCache(id, start, end, range)
