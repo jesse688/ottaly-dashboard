@@ -19220,12 +19220,19 @@ async function computeTamSnapshot(pg) {
   const rows = [];
   const q = async (sql, params = []) => (await pg.pool.query(sql, params)).rows;
 
-  // 1. The whole world, once.
+  // EVERY count below is of USABLE contacts only, so the three numbers always
+  // reconcile: usable = emailed + untouched.
+  //
+  // The first version counted `emailed` over ALL contacts while counting
+  // `usable` over complete ones, which compares two different populations. On
+  // engine data — 6,690 rows, only 567 complete, but 3,600 already emailed —
+  // that produced "635% used". Nonsense on its face, and it would have made
+  // every plan built on these numbers wrong.
   const [overall] = await q(
     `SELECT COUNT(*)::int total,
             COUNT(*) FILTER (WHERE ${TAM_USABLE_SQL})::int usable,
-            COUNT(*) FILTER (WHERE NOT (${TAM_UNTOUCHED_SQL}))::int emailed,
-            COUNT(*) FILTER (WHERE ${TAM_UNTOUCHED_SQL} AND ${TAM_USABLE_SQL})::int untouched
+            COUNT(*) FILTER (WHERE ${TAM_USABLE_SQL} AND NOT (${TAM_UNTOUCHED_SQL}))::int emailed,
+            COUNT(*) FILTER (WHERE ${TAM_USABLE_SQL} AND ${TAM_UNTOUCHED_SQL})::int untouched
      FROM contacts`);
   rows.push({ scope: 'all', dimension: null, value: null, ...overall });
 
@@ -19235,23 +19242,30 @@ async function computeTamSnapshot(pg) {
       `SELECT COALESCE(NULLIF(${col},''),'(not set)') AS value,
               COUNT(*)::int total,
               COUNT(*) FILTER (WHERE ${TAM_USABLE_SQL})::int usable,
-              COUNT(*) FILTER (WHERE NOT (${TAM_UNTOUCHED_SQL}))::int emailed,
-              COUNT(*) FILTER (WHERE ${TAM_UNTOUCHED_SQL} AND ${TAM_USABLE_SQL})::int untouched
-       FROM contacts GROUP BY 1 ORDER BY total DESC LIMIT 40`);
+              COUNT(*) FILTER (WHERE ${TAM_USABLE_SQL} AND NOT (${TAM_UNTOUCHED_SQL}))::int emailed,
+              COUNT(*) FILTER (WHERE ${TAM_USABLE_SQL} AND ${TAM_UNTOUCHED_SQL})::int untouched
+       FROM contacts GROUP BY 1 ORDER BY usable DESC LIMIT 40`);
     for (const x of r) rows.push({ scope: 'all', dimension: dim, ...x });
   }
 
-  // 3. Per client: how much of the world has THIS client already had?
-  //    Their burn is what caps them, not the agency total.
+  // 3. Per client. DISTINCT c.id matters: pushed_campaigns holds one entry per
+  //    campaign, so a contact used in three of a client's campaigns would be
+  //    counted three times without it — and their burn would read far worse
+  //    than it is.
+  //
+  //    "Untouched" here is what is left FOR THIS CLIENT, not what nobody has
+  //    ever emailed. A contact another client has used is still available to
+  //    this one (subject to the cross-client spacing guards), so subtracting
+  //    the global burn would understate every client's runway.
   const per = await q(
     `SELECT pc->>'workspace_id' AS ws, COUNT(DISTINCT c.id)::int emailed
      FROM contacts c, jsonb_array_elements(COALESCE(c.pushed_campaigns,'[]'::jsonb)) pc
-     WHERE pc->>'workspace_id' IS NOT NULL
+     WHERE pc->>'workspace_id' IS NOT NULL AND (${TAM_USABLE_SQL})
      GROUP BY 1`);
   for (const x of per) {
     rows.push({ scope: 'client', workspace_id: x.ws, dimension: null, value: null,
                 total: overall.total, usable: overall.usable,
-                emailed: x.emailed, untouched: overall.usable - x.emailed });
+                emailed: x.emailed, untouched: Math.max(0, overall.usable - x.emailed) });
   }
 
   const wipe = db.prepare(`DELETE FROM tam_snapshot`);

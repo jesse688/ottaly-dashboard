@@ -110,8 +110,15 @@ function render(){
         '<div class="big-note">Of ' + n(o.total) + ' rows. The rest have no name or no company.</div></div>' +
       '<div class="big warn"><div class="big-val">' + n(used) + '</div><div class="big-lab">' + (c ? 'Emailed by them' : 'Emailed by anyone') + '</div>' +
         '<div class="big-note">' + pct + '% used</div></div>' +
-      '<div class="big good"><div class="big-val">' + n(left) + '</div><div class="big-lab">Never touched</div>' +
-        '<div class="big-note">Available right now</div></div>' +
+      '<div class="big good"><div class="big-val">' + n(left) + '</div><div class="big-lab">' + (c ? 'Left for them' : 'Never touched') + '</div>' +
+        '<div class="big-note">' + (c ? 'Others may have emailed some of these' : 'Nobody has emailed these') + '</div></div>' +
+    '</div>' +
+    // Show the sum so the numbers can be checked rather than trusted. An
+    // engine row once read "635% used" because two different populations were
+    // being compared; this makes that visible instead of plausible.
+    '<div class="sub" style="margin:-.5rem 0 1rem;padding-left:.2rem">' +
+      n(used) + ' + ' + n(left) + ' = ' + n(used + left) +
+      (used + left === usable ? ' ✓ matches' : ' — does not match ' + n(usable) + ', something is off') +
     '</div>' +
     '<div class="verdict">' + verdict + '</div>' +
     dimTable('Where they are', 'industry') +
@@ -128,7 +135,11 @@ function dimTable(title, dim){
     '<table><thead><tr><th>' + esc(dim === 'source' ? 'Source' : dim === 'industry' ? 'Industry' : 'Seniority') + '</th>' +
     '<th>Can be emailed</th><th>Emailed</th><th>Never touched</th><th>Used</th></tr></thead><tbody>' +
     rows.slice().sort((a,b) => (b.untouched||0)-(a.untouched||0)).slice(0, 18).map(r => {
-      const p = r.usable ? Math.round((r.emailed / r.usable) * 100) : 0;
+      // Capped at 100 and flagged if the arithmetic ever disagrees again.
+      // A percentage over 100 means two different populations are being
+      // compared, and it should be visible rather than quietly rounded away.
+      const raw = r.usable ? (r.emailed / r.usable) * 100 : 0;
+      const p = raw > 100 ? '!' : Math.round(raw);
       return '<tr><td>' + esc(r.value || '—') + '</td>' +
         '<td>' + n(r.usable) + '</td>' +
         '<td class="dim">' + n(r.emailed) + '</td>' +
