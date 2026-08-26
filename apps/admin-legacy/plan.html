@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Campaign Plan — Ottaly</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+  :root{--navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--green:#16a34a;--red:#dc2626;--amber:#d97706;--border:#E5E7EB;--card:#fff;--bg:#F8F9FC;--muted:#6B7280}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--navy-dark);min-height:100vh}
+  .page{max-width:1000px;margin:0 auto;padding:1.25rem 1rem 4rem}
+  .top-bar{display:flex;align-items:center;gap:1rem;margin-bottom:.9rem;flex-wrap:wrap}
+  .page-title{font-family:'Genos',sans-serif;font-size:1.25rem;font-weight:800}
+  .sub{font-size:11px;color:var(--muted)}
+  .btn{padding:8px 14px;border:1.5px solid var(--navy);background:var(--navy);color:#fff;border-radius:8px;font:600 13px Inter,sans-serif;cursor:pointer}
+  .btn.ghost{background:#fff;color:var(--navy)}
+  .btn:disabled{opacity:.5;cursor:default}
+  .btn-sm{padding:5px 11px;font-size:12px;border-radius:6px}
+  .btn-ok{border-color:var(--green);background:var(--green)}
+  .btn-no{border-color:var(--border);background:#fff;color:var(--muted)}
+  select,input{padding:7px 10px;border:1px solid var(--border);border-radius:7px;font:500 12.5px Inter,sans-serif}
+
+  .plan{background:var(--card);border:1px solid var(--border);border-radius:8px;margin-bottom:1rem;overflow:hidden}
+  .plan-head{padding:.8rem .9rem;border-bottom:1px solid var(--border)}
+  .plan-client{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--teal);margin-bottom:.25rem}
+  .plan-sum{font-size:13px;line-height:1.6}
+  .plan-meta{font-size:10.5px;color:var(--muted);margin-top:.4rem}
+
+  .step{display:grid;grid-template-columns:2.2rem 1fr;gap:0 .8rem;padding:.85rem .9rem;border-bottom:1px solid #F3F4F6}
+  .step:last-child{border-bottom:none}
+  .step.done{opacity:.55}
+  .pos{font-family:'Genos',sans-serif;font-size:1.4rem;font-weight:800;color:var(--navy);line-height:1.1}
+  .step.done .pos{color:var(--muted)}
+  .s-name{font-size:14px;font-weight:700;margin-bottom:.15rem}
+  .s-angle{font-size:12.5px;color:var(--navy);background:#EFF6FF;border-radius:5px;padding:.3rem .5rem;margin:.3rem 0;line-height:1.5}
+  .s-why{font-size:12px;color:#374151;line-height:1.55}
+  .s-nums{display:flex;gap:1.2rem;margin:.45rem 0;flex-wrap:wrap;align-items:baseline}
+  .s-num{font-size:11.5px;color:var(--muted)}
+  .s-num b{font-family:'Genos',sans-serif;font-size:1.15rem;color:var(--navy-dark);font-variant-numeric:tabular-nums;margin-right:.2rem}
+  .s-num.thin b{color:var(--amber)}
+  .s-filters{display:flex;flex-wrap:wrap;gap:.3rem;margin:.4rem 0}
+  .f{background:#F3F4F6;border-radius:4px;padding:.18rem .45rem;font-size:10.5px}
+  .f b{color:var(--muted);font-weight:600}
+  .s-actions{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;margin-top:.5rem}
+  .s-actions input{flex:1;min-width:11rem}
+  .pill{display:inline-block;padding:1px 7px;border-radius:20px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.3px}
+  .p-planned{background:#F3F4F6;color:var(--muted)}
+  .p-review{background:#DBEAFE;color:#1E40AF}
+  .p-skipped{background:#FEE2E2;color:#991B1B}
+  .empty{text-align:center;padding:3rem 1rem;color:var(--muted)}
+  .empty .big{font-family:'Genos',sans-serif;font-size:1.5rem;font-weight:800;color:var(--navy);margin-bottom:.3rem}
+  .err{background:#FEE2E2;border:1px solid #FECACA;color:#991B1B;padding:.5rem .7rem;border-radius:6px;font-size:12px;margin-bottom:.6rem}
+  .ok{background:#DCFCE7;border:1px solid #BBF7D0;color:#166534;padding:.5rem .7rem;border-radius:6px;font-size:12px;margin-bottom:.6rem}
+  .note{font-size:11.5px;color:var(--muted);padding:.75rem .9rem;background:#fff;border:1px solid var(--border);border-radius:8px;line-height:1.55;margin-top:1rem}
+</style>
+</head>
+<body>
+<script src="/nav.js" defer></script>
+
+<div class="page">
+  <div class="top-bar">
+    <div>
+      <div class="page-title">Campaign Plan</div>
+      <div class="sub">Which campaigns to run for a client, in order, and why that order.</div>
+    </div>
+    <select id="ws" onchange="load()"><option value="">All clients</option></select>
+    <button class="btn ghost" onclick="load()" id="refreshBtn">↻ Refresh</button>
+    <button class="btn" onclick="makePlan()" id="planBtn">Plan a client</button>
+    <span id="status" class="sub"></span>
+  </div>
+
+  <div id="msg"></div>
+  <div id="out" class="empty">Loading…</div>
+
+  <div class="note">
+    A plan is a list of intentions — nothing is built or sent until you start a step. Starting one
+    writes its copy and puts it in Copy Drafts for you to read. Work down the list: when one campaign
+    is spent, the next is already decided.
+  </div>
+</div>
+
+<script>
+let PLANS = [];
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function n(v){ return v == null ? '—' : Number(v).toLocaleString(); }
+function label(k){ return k.replace(/([A-Z])/g,' $1').replace(/^./,c=>c.toUpperCase()).trim(); }
+
+function render(){
+  const el = document.getElementById('out');
+  if (!PLANS.length) {
+    el.className = 'empty';
+    el.innerHTML = '<div class="big">No plans yet</div><div class="sub">Plan a client to lay out which campaigns to run and in what order.</div>';
+    return;
+  }
+  el.className = '';
+  el.innerHTML = PLANS.map(p =>
+    '<div class="plan">' +
+      '<div class="plan-head">' +
+        '<div class="plan-client">' + esc(p.workspace_name || p.workspace_id) + '</div>' +
+        '<div class="plan-sum">' + esc(p.summary || '') + '</div>' +
+        '<div class="plan-meta">' + p.steps.length + ' campaigns planned · written by ' + esc(p.author || '—') +
+          ' · ' + esc(String(p.created_at || '').slice(0, 16)) + '</div>' +
+      '</div>' +
+      p.steps.map(s => stepHtml(s)).join('') +
+    '</div>').join('');
+}
+
+function stepHtml(s){
+  const done = s.status !== 'planned';
+  const thin = s.sendable != null && s.sendable < 2000;
+  const keys = Object.keys(s.filters || {}).filter(k => k !== 'excludeDNC' && k !== 'gatewayExclude');
+  return '<div class="step ' + (done ? 'done' : '') + '" id="s-' + s.id + '">' +
+    '<div class="pos">' + s.position + '</div>' +
+    '<div>' +
+      '<div class="s-name">' + esc(s.name) +
+        (s.status === 'in_review' ? ' <span class="pill p-review">in review</span>' : '') +
+        (s.status === 'skipped' ? ' <span class="pill p-skipped">skipped</span>' : '') +
+        (s.status === 'planned' ? ' <span class="pill p-planned">planned</span>' : '') +
+      '</div>' +
+      (s.angle ? '<div class="s-angle">' + esc(s.angle) + '</div>' : '') +
+      (s.rationale ? '<div class="s-why">' + esc(s.rationale) + '</div>' : '') +
+      '<div class="s-nums">' +
+        '<span class="s-num"><b>' + n(s.est_pool) + '</b>match</span>' +
+        '<span class="s-num ' + (thin ? 'thin' : '') + '"><b>' + n(s.sendable) + '</b>can be emailed</span>' +
+        (thin ? '<span class="s-num" style="color:var(--amber)">Thin — this will run dry fast</span>' : '') +
+        (s.sendable == null ? '<span class="s-num" style="color:var(--muted)">not counted yet</span>' : '') +
+      '</div>' +
+      (keys.length ? '<div class="s-filters">' + keys.map(k =>
+        '<span class="f"><b>' + esc(label(k)) + '</b> ' + esc(String(s.filters[k]).slice(0,50)) + '</span>').join('') + '</div>' : '') +
+      (s.note ? '<div class="s-why" style="color:var(--muted)"><b>Skipped:</b> ' + esc(s.note) + '</div>' : '') +
+      (done ? '' :
+        '<div class="s-actions">' +
+          '<button class="btn btn-sm ghost" onclick="countStep(' + s.id + ')" id="c-' + s.id + '">Count it</button>' +
+          '<button class="btn btn-sm btn-ok" onclick="startStep(' + s.id + ')" id="go-' + s.id + '">Write the copy</button>' +
+          '<button class="btn btn-sm btn-no" onclick="skipStep(' + s.id + ')">Skip</button>' +
+          '<input id="sk-' + s.id + '" placeholder="Skipping? Why, in a line.">' +
+        '</div>') +
+      (s.draft_id ? '<div class="s-why" style="margin-top:.4rem"><a href="/copy-drafts.html" style="color:var(--navy);font-weight:600">Copy is written — read it →</a></div>' : '') +
+    '</div>' +
+  '</div>';
+}
+
+function msg(t, ok){
+  document.getElementById('msg').innerHTML = '<div class="' + (ok?'ok':'err') + '">' + esc(t) + '</div>';
+  if (ok) setTimeout(() => { document.getElementById('msg').innerHTML = ''; }, 6000);
+}
+
+async function countStep(id){
+  const b = document.getElementById('c-' + id);
+  b.disabled = true; b.textContent = 'Counting…';
+  try {
+    const res = await fetch('/api/plan/step/' + id + '/count', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
+    const j = await res.json();
+    if (!res.ok) { msg(j.error || 'Could not count it', false); return; }
+    await load();
+  } catch (e) { msg(e.message, false); }
+  finally { b.disabled = false; b.textContent = 'Count it'; }
+}
+
+async function startStep(id){
+  const b = document.getElementById('go-' + id);
+  b.disabled = true; b.textContent = 'Writing…';
+  try {
+    const res = await fetch('/api/plan/step/' + id + '/start', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
+    const j = await res.json();
+    if (!res.ok) { msg(j.error || 'Could not write it', false); return; }
+    await load();
+    msg('Copy written — it is waiting in Copy Drafts.', true);
+  } catch (e) { msg(e.message, false); }
+  finally { b.disabled = false; b.textContent = 'Write the copy'; }
+}
+
+async function skipStep(id){
+  const note = document.getElementById('sk-' + id).value.trim();
+  if (!note) { document.getElementById('sk-' + id).focus(); msg('Say why — it is what makes the next plan better.', false); return; }
+  try {
+    const res = await fetch('/api/plan/step/' + id + '/skip', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ note })
+    });
+    const j = await res.json();
+    if (!res.ok) { msg(j.error || 'Could not skip it', false); return; }
+    await load();
+  } catch (e) { msg(e.message, false); }
+}
+
+async function makePlan(){
+  const sel = document.getElementById('ws');
+  if (!sel.value) { msg('Choose a client first, then press Plan a client.', false); return; }
+  const b = document.getElementById('planBtn');
+  b.disabled = true; b.textContent = 'Planning…';
+  try {
+    const res = await fetch('/api/plan/generate', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ workspace_id: sel.value, workspace_name: sel.selectedOptions[0].textContent })
+    });
+    const j = await res.json();
+    if (!res.ok) { msg(j.error || 'Could not plan', false); return; }
+    await load();
+    msg('Planned ' + j.steps + ' campaigns.', true);
+  } catch (e) { msg(e.message, false); }
+  finally { b.disabled = false; b.textContent = 'Plan a client'; }
+}
+
+async function loadClients(){
+  try {
+    const res = await fetch('/api/brief/clients');
+    const j = await res.json();
+    const sel = document.getElementById('ws');
+    (j.clients || []).forEach(c => {
+      const o = document.createElement('option');
+      o.value = c.workspace_id; o.textContent = c.workspace_name || c.workspace_id;
+      sel.appendChild(o);
+    });
+  } catch {}
+}
+
+async function load(){
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true;
+  try {
+    const ws = document.getElementById('ws').value;
+    const res = await fetch('/api/plans' + (ws ? '?workspace_id=' + encodeURIComponent(ws) : ''));
+    const j = await res.json();
+    if (!res.ok) throw new Error(j.error || 'Failed to load');
+    PLANS = j.plans || [];
+    render();
+    document.getElementById('status').textContent = PLANS.length ? PLANS.length + ' plan' + (PLANS.length===1?'':'s') : '';
+  } catch (e) {
+    document.getElementById('out').className = 'empty';
+    document.getElementById('out').textContent = 'Could not load: ' + e.message;
+  } finally { btn.disabled = false; }
+}
+
+loadClients().then(load);
+</script>
+</body>
+</html>

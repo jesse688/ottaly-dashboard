@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Market — Ottaly</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+  :root{--navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--green:#16a34a;--red:#dc2626;--amber:#d97706;--border:#E5E7EB;--card:#fff;--bg:#F8F9FC;--muted:#6B7280}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--navy-dark);min-height:100vh}
+  .page{max-width:1200px;margin:0 auto;padding:1.25rem 1rem 4rem}
+  .top-bar{display:flex;align-items:center;gap:1rem;margin-bottom:.9rem;flex-wrap:wrap}
+  .page-title{font-family:'Genos',sans-serif;font-size:1.25rem;font-weight:800}
+  .sub{font-size:11px;color:var(--muted)}
+  .btn{padding:8px 14px;border:1.5px solid var(--navy);background:var(--navy);color:#fff;border-radius:8px;font:600 13px Inter,sans-serif;cursor:pointer}
+  .btn.ghost{background:#fff;color:var(--navy)}
+  .btn:disabled{opacity:.5;cursor:default}
+  select{padding:7px 10px;border:1px solid var(--border);border-radius:7px;font:600 13px Inter,sans-serif;background:#fff;min-width:15rem}
+
+  .big-row{display:flex;gap:.6rem;margin-bottom:1rem;flex-wrap:wrap}
+  .big{background:var(--card);border:1px solid var(--border);border-top:3px solid var(--navy);border-radius:8px;padding:.9rem 1.1rem;flex:1;min-width:11rem}
+  .big-val{font-family:'Genos',sans-serif;font-size:2.1rem;font-weight:800;line-height:1;font-variant-numeric:tabular-nums}
+  .big-lab{font-size:10.5px;font-weight:500;color:var(--muted);margin-top:3px;text-transform:uppercase;letter-spacing:.3px}
+  .big-note{font-size:11px;color:var(--muted);margin-top:.35rem;line-height:1.4}
+  .big.good{border-top-color:var(--green)} .big.good .big-val{color:var(--green)}
+  .big.warn{border-top-color:var(--amber)} .big.warn .big-val{color:var(--amber)}
+
+  .verdict{background:#EFF6FF;border:1px solid #BFDBFE;color:#1E3A8A;padding:.75rem .9rem;border-radius:8px;font-size:12.5px;line-height:1.55;margin-bottom:1rem}
+  .verdict b{font-weight:700}
+
+  .section{background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:1rem}
+  .sec-head{padding:.6rem .9rem;border-bottom:1px solid var(--border);display:flex;align-items:baseline;gap:.6rem}
+  .sec-title{font-family:'Genos',sans-serif;font-size:1rem;font-weight:800}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.25px;color:var(--muted);padding:.4rem .5rem;text-align:right;background:#FAFAFA;border-bottom:1px solid var(--border);white-space:nowrap}
+  th:first-child{text-align:left}
+  td{padding:.35rem .5rem;border-bottom:1px solid #F3F4F6;text-align:right;font-weight:600;font-variant-numeric:tabular-nums}
+  td:first-child{text-align:left;font-weight:500}
+  tr:hover td{background:#FAFBFC}
+  .bar{display:inline-block;width:52px;height:5px;background:#F3F4F6;border-radius:3px;overflow:hidden;vertical-align:middle;margin-right:.4rem}
+  .bar span{display:block;height:100%;background:var(--navy);border-radius:3px}
+  .dim{color:var(--muted);font-weight:500}
+  .empty{text-align:center;padding:3rem 1rem;color:var(--muted)}
+  .empty .big2{font-family:'Genos',sans-serif;font-size:1.4rem;font-weight:800;color:var(--navy);margin-bottom:.3rem}
+  .err{background:#FEE2E2;border:1px solid #FECACA;color:#991B1B;padding:.5rem .7rem;border-radius:6px;font-size:12px;margin-bottom:.6rem}
+  .note{font-size:11.5px;color:var(--muted);padding:.75rem .9rem;background:#fff;border:1px solid var(--border);border-radius:8px;line-height:1.55;margin-top:1rem}
+</style>
+</head>
+<body>
+<script src="/nav.js" defer></script>
+
+<div class="page">
+  <div class="top-bar">
+    <div>
+      <div class="page-title">Market</div>
+      <div class="sub">How many people we could email, how many we have, and what is left.</div>
+    </div>
+    <select id="ws" onchange="load()"><option value="">Everyone</option></select>
+    <button class="btn ghost" onclick="load()" id="refreshBtn">↻ Refresh</button>
+    <button class="btn ghost" onclick="recompute()" id="recomputeBtn">Recount</button>
+    <span id="status" class="sub"></span>
+  </div>
+
+  <div id="msg"></div>
+  <div id="out" class="empty">Loading…</div>
+
+  <div class="note">
+    Counts are of contacts we can actually send to — one with no name or no company cannot be
+    emailed, so it is not counted. Recounting reads the whole contacts database and takes about a
+    minute, so these numbers are worked out on a schedule rather than every time you open the page.
+  </div>
+</div>
+
+<script>
+let DATA = null;
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function n(v){ return v == null ? '—' : Number(v).toLocaleString(); }
+
+function render(){
+  const el = document.getElementById('out');
+  if (!DATA || !DATA.overall) {
+    el.className = 'empty';
+    el.innerHTML = '<div class="big2">Not counted yet</div><div class="sub">Press Recount to work out the market for the first time. It takes about a minute.</div>';
+    return;
+  }
+  const o = DATA.overall, c = DATA.client;
+  const usable = o.usable || 0;
+  const left = c ? Math.max(0, (c.untouched || 0)) : (o.untouched || 0);
+  const used = c ? (c.emailed || 0) : (o.emailed || 0);
+  const pct = usable ? Math.round((used / usable) * 100) : 0;
+  const who = c ? (document.getElementById('ws').selectedOptions[0]?.textContent || 'this client') : 'everyone';
+
+  // The point of the page in one sentence: is running dry a supply problem or
+  // a filter problem? Almost always the latter, and this says so plainly.
+  const verdict = pct < 40
+    ? `<b>There are plenty of people left.</b> ${who === 'everyone' ? 'We have' : who + ' has'} emailed ${n(used)} of ${n(usable)} — ${pct}%. When a campaign here runs dry it is the filter that is too narrow, not the market. Widen it or cut a different slice before buying more data.`
+    : pct < 70
+      ? `<b>Well used, but not finished.</b> ${n(left)} still untouched (${100-pct}%). Worth planning the next slices deliberately rather than improvising.`
+      : `<b>Running low.</b> Only ${n(left)} untouched (${100-pct}%). This one genuinely needs a new vertical, a new region, or fresh data.`;
+
+  el.className = '';
+  el.innerHTML =
+    '<div class="big-row">' +
+      '<div class="big"><div class="big-val">' + n(usable) + '</div><div class="big-lab">Can be emailed</div>' +
+        '<div class="big-note">Of ' + n(o.total) + ' rows. The rest have no name or no company.</div></div>' +
+      '<div class="big warn"><div class="big-val">' + n(used) + '</div><div class="big-lab">' + (c ? 'Emailed by them' : 'Emailed by anyone') + '</div>' +
+        '<div class="big-note">' + pct + '% used</div></div>' +
+      '<div class="big good"><div class="big-val">' + n(left) + '</div><div class="big-lab">Never touched</div>' +
+        '<div class="big-note">Available right now</div></div>' +
+    '</div>' +
+    '<div class="verdict">' + verdict + '</div>' +
+    dimTable('Where they are', 'industry') +
+    dimTable('Who they are', 'seniority') +
+    dimTable('Where the data came from', 'source');
+}
+
+function dimTable(title, dim){
+  const rows = (DATA.byDimension || {})[dim] || [];
+  if (!rows.length) return '';
+  const max = Math.max(...rows.map(r => r.untouched || 0), 1);
+  return '<div class="section"><div class="sec-head"><span class="sec-title">' + esc(title) + '</span>' +
+    '<span class="sub">ranked by how many are left</span></div>' +
+    '<table><thead><tr><th>' + esc(dim === 'source' ? 'Source' : dim === 'industry' ? 'Industry' : 'Seniority') + '</th>' +
+    '<th>Can be emailed</th><th>Emailed</th><th>Never touched</th><th>Used</th></tr></thead><tbody>' +
+    rows.slice().sort((a,b) => (b.untouched||0)-(a.untouched||0)).slice(0, 18).map(r => {
+      const p = r.usable ? Math.round((r.emailed / r.usable) * 100) : 0;
+      return '<tr><td>' + esc(r.value || '—') + '</td>' +
+        '<td>' + n(r.usable) + '</td>' +
+        '<td class="dim">' + n(r.emailed) + '</td>' +
+        '<td><span class="bar"><span style="width:' + Math.round((r.untouched/max)*100) + '%"></span></span>' + n(r.untouched) + '</td>' +
+        '<td class="dim">' + p + '%</td></tr>';
+    }).join('') + '</tbody></table></div>';
+}
+
+async function recompute(){
+  const btn = document.getElementById('recomputeBtn');
+  btn.disabled = true; btn.textContent = 'Counting… (about a minute)';
+  document.getElementById('msg').innerHTML = '';
+  try {
+    const res = await fetch('/api/cron/tam');
+    const j = await res.json();
+    if (!res.ok) throw new Error(j.error || 'Recount failed');
+    await load();
+  } catch (e) {
+    document.getElementById('msg').innerHTML = '<div class="err">' + esc(e.message) + '</div>';
+  } finally { btn.disabled = false; btn.textContent = 'Recount'; }
+}
+
+async function loadClients(){
+  try {
+    const res = await fetch('/api/brief/clients');
+    const j = await res.json();
+    const sel = document.getElementById('ws');
+    (j.clients || []).forEach(c => {
+      const o = document.createElement('option');
+      o.value = c.workspace_id; o.textContent = c.workspace_name || c.workspace_id;
+      sel.appendChild(o);
+    });
+  } catch {}
+}
+
+async function load(){
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true;
+  try {
+    const ws = document.getElementById('ws').value;
+    const res = await fetch('/api/tam' + (ws ? '?workspace_id=' + encodeURIComponent(ws) : ''));
+    const j = await res.json();
+    if (!res.ok) throw new Error(j.error || 'Failed to load');
+    DATA = j;
+    render();
+    document.getElementById('status').textContent = j.overall?.computed_at
+      ? 'counted ' + String(j.overall.computed_at).slice(0, 16) : '';
+  } catch (e) {
+    document.getElementById('out').className = 'empty';
+    document.getElementById('out').textContent = 'Could not load: ' + e.message;
+  } finally { btn.disabled = false; }
+}
+
+loadClients().then(load);
+</script>
+</body>
+</html>

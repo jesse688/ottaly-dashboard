@@ -19178,6 +19178,427 @@ app.get('/api/brief/clients', requireSession, (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// TAM — how big is this client's world, and how much of it have we used?
+//
+// The question a CM cannot answer today. When a campaign runs dry they cannot
+// tell "this vertical is exhausted, we need a new angle" from "our filter is
+// too narrow and there are 40,000 people we have never touched" — and those
+// need opposite responses. Measured 2026-08-27: only 15% of the database has
+// ever been emailed, so it is nearly always the second.
+//
+// PRECOMPUTED, never live. Measured against production: GROUP BY industry over
+// the 1.46M-row table takes 16s, the pushed/untouched split 9.5s, per-client
+// burn 28s. Any of those on a page load would stall the contacts page, which
+// has happened before.
+//
+// Counts are of USABLE contacts — a name and a company — because that is what
+// can actually be sent. Raw totals flatter the number badly: commoncrawl is
+// 445k rows but only 61% complete, and engine data is 8.5%.
+// ═══════════════════════════════════════════════════════════════════════════
+
+db.exec(`CREATE TABLE IF NOT EXISTS tam_snapshot (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  workspace_id   TEXT,
+  scope          TEXT NOT NULL,
+  dimension      TEXT,
+  value          TEXT,
+  total          INTEGER NOT NULL DEFAULT 0,
+  usable         INTEGER NOT NULL DEFAULT 0,
+  emailed        INTEGER NOT NULL DEFAULT 0,
+  untouched      INTEGER NOT NULL DEFAULT 0,
+  computed_at    TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_tam_lookup ON tam_snapshot(scope, workspace_id, dimension)`); } catch {}
+
+// A contact is only real if it can be sent to. Kept as one SQL fragment so
+// every TAM number in the system means the same thing.
+const TAM_USABLE_SQL = `first_name IS NOT NULL AND first_name <> '' AND company_name IS NOT NULL AND company_name <> ''`;
+const TAM_UNTOUCHED_SQL = `jsonb_array_length(COALESCE(pushed_campaigns,'[]'::jsonb)) = 0`;
+
+async function computeTamSnapshot(pg) {
+  if (!pg || !pg.pool) throw new Error('Contacts DB not available');
+  const rows = [];
+  const q = async (sql, params = []) => (await pg.pool.query(sql, params)).rows;
+
+  // 1. The whole world, once.
+  const [overall] = await q(
+    `SELECT COUNT(*)::int total,
+            COUNT(*) FILTER (WHERE ${TAM_USABLE_SQL})::int usable,
+            COUNT(*) FILTER (WHERE NOT (${TAM_UNTOUCHED_SQL}))::int emailed,
+            COUNT(*) FILTER (WHERE ${TAM_UNTOUCHED_SQL} AND ${TAM_USABLE_SQL})::int untouched
+     FROM contacts`);
+  rows.push({ scope: 'all', dimension: null, value: null, ...overall });
+
+  // 2. By the dimensions a CM actually cuts an audience on.
+  for (const [dim, col] of [['industry', 'industry'], ['seniority', 'seniority'], ['source', 'source']]) {
+    const r = await q(
+      `SELECT COALESCE(NULLIF(${col},''),'(not set)') AS value,
+              COUNT(*)::int total,
+              COUNT(*) FILTER (WHERE ${TAM_USABLE_SQL})::int usable,
+              COUNT(*) FILTER (WHERE NOT (${TAM_UNTOUCHED_SQL}))::int emailed,
+              COUNT(*) FILTER (WHERE ${TAM_UNTOUCHED_SQL} AND ${TAM_USABLE_SQL})::int untouched
+       FROM contacts GROUP BY 1 ORDER BY total DESC LIMIT 40`);
+    for (const x of r) rows.push({ scope: 'all', dimension: dim, ...x });
+  }
+
+  // 3. Per client: how much of the world has THIS client already had?
+  //    Their burn is what caps them, not the agency total.
+  const per = await q(
+    `SELECT pc->>'workspace_id' AS ws, COUNT(DISTINCT c.id)::int emailed
+     FROM contacts c, jsonb_array_elements(COALESCE(c.pushed_campaigns,'[]'::jsonb)) pc
+     WHERE pc->>'workspace_id' IS NOT NULL
+     GROUP BY 1`);
+  for (const x of per) {
+    rows.push({ scope: 'client', workspace_id: x.ws, dimension: null, value: null,
+                total: overall.total, usable: overall.usable,
+                emailed: x.emailed, untouched: overall.usable - x.emailed });
+  }
+
+  const wipe = db.prepare(`DELETE FROM tam_snapshot`);
+  const ins = db.prepare(`INSERT INTO tam_snapshot
+    (workspace_id, scope, dimension, value, total, usable, emailed, untouched)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+  db.transaction(() => {
+    wipe.run();
+    for (const r of rows) ins.run(r.workspace_id || null, r.scope, r.dimension || null,
+      r.value || null, r.total || 0, r.usable || 0, r.emailed || 0, Math.max(0, r.untouched || 0));
+  })();
+  return { rows: rows.length, computed_at: new Date().toISOString() };
+}
+
+app.get('/api/cron/tam', async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  const s = decodeSession(req);
+  const okSession = s?.role === 'admin' || s?.role === 'manager' || req.headers['x-admin-key'] === ADMIN_KEY;
+  if (!(secret && req.query.secret === secret) && !okSession) {
+    return res.status(403).json({ error: 'forbidden (CRON_SECRET or sign in)' });
+  }
+  try { res.json(await computeTamSnapshot(req.app.locals.pgDb)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/tam', requireSession, (req, res) => {
+  try {
+    const ws = req.query.workspace_id;
+    const overall = db.prepare(`SELECT * FROM tam_snapshot WHERE scope='all' AND dimension IS NULL`).get() || null;
+    const byDim = {};
+    for (const d of ['industry', 'seniority', 'source']) {
+      byDim[d] = db.prepare(
+        `SELECT value, total, usable, emailed, untouched FROM tam_snapshot
+         WHERE scope='all' AND dimension=? ORDER BY total DESC`).all(d);
+    }
+    const client = ws
+      ? db.prepare(`SELECT * FROM tam_snapshot WHERE scope='client' AND workspace_id=?`).get(ws) || null
+      : null;
+    res.json({ overall, byDimension: byDim, client, stale: !overall });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CAMPAIGN PLANS
+//
+// A client's campaigns should be a planned sequence, not a series of guesses
+// made each time the last one runs dry. The plan looks at what is left in the
+// market for this client and lays out which slices to work, in order, with a
+// reason for the ordering.
+//
+// The CM then works down it: each step becomes an audience and a sequence to
+// review. When one is exhausted the next is already decided, so nobody has to
+// improvise under pressure — which is precisely the "hunting for decisions"
+// the whole system exists to remove.
+//
+// A plan is a set of INTENTIONS. Nothing in it sends, or even builds, until a
+// CM approves that step.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Filter vocabulary — declared here because BOTH the planner and the audience
+// tool depend on it, and a `const` does not hoist. Only these keys may reach
+// the query builder: an unknown key would be silently ignored, so a CM would
+// approve a filter narrower than it reads.
+const AUDIENCE_FILTER_KEYS = new Set([
+  'jobTitle', 'jobTitleExclude', 'seniority', 'department', 'subDepartments',
+  'industry', 'industryExclude', 'keywords', 'keywordsExclude',
+  'sicCodes', 'technologies', 'technologiesExclude',
+  'numEmployeesRanges', 'numEmployeesExcludeRanges', 'companyAgeBand',
+  'companyCountry', 'companyRegion', 'companyCounty', 'companyTown', 'companyCity', 'companyState',
+  'companyCountryExclude', 'companyRegionExclude', 'companyCountyExclude',
+  'companyTownExclude', 'companyCityExclude', 'companyStateExclude',
+  'country', 'state', 'city', 'personRegion', 'personCounty', 'personTown',
+  'countryExclude', 'stateExclude', 'cityExclude',
+  'personRegionExclude', 'personCountyExclude', 'personTownExclude',
+  'ownsBuilding', 'ccodOwnsBuilding', 'solarMinKwp', 'solarStatus', 'solarStatusExclude',
+  'hasName', 'hasCompany', 'worksRemote', 'excludeRemote',
+]);
+
+// Guards no proposal may weaken. These are the difference between a filter and
+// a liability, and a model asked to "widen the audience" would drop them.
+const AUDIENCE_FORCED = Object.freeze({
+  excludeDNC: 'true',
+  gatewayExclude: 'Mimecast,Barracuda,Proofpoint,Cisco Ironport,Sophos',
+});
+
+function sanitiseAudienceFilters(raw) {
+  const out = {};
+  for (const [k, v] of Object.entries(raw || {})) {
+    if (!AUDIENCE_FILTER_KEYS.has(k)) continue;
+    if (v == null || v === '' || (Array.isArray(v) && !v.length)) continue;
+    out[k] = Array.isArray(v) ? v.join(',') : String(v);
+  }
+  return { ...out, ...AUDIENCE_FORCED };
+}
+
+db.exec(`CREATE TABLE IF NOT EXISTS campaign_plans (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  workspace_id   TEXT NOT NULL,
+  workspace_name TEXT,
+  summary        TEXT,
+  status         TEXT NOT NULL DEFAULT 'draft',
+  author         TEXT,
+  cost_usd       REAL DEFAULT 0,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
+
+db.exec(`CREATE TABLE IF NOT EXISTS campaign_plan_steps (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  plan_id        INTEGER NOT NULL,
+  position       INTEGER NOT NULL,
+  name           TEXT NOT NULL,
+  rationale      TEXT,
+  angle          TEXT,
+  filters        TEXT,
+  est_pool       INTEGER,
+  sendable       INTEGER,
+  status         TEXT NOT NULL DEFAULT 'planned',
+  campaign_id    TEXT,
+  draft_id       INTEGER,
+  decided_by     TEXT,
+  decided_at     TEXT,
+  note           TEXT
+)`);
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_plan_steps ON campaign_plan_steps(plan_id, position)`); } catch {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_plans_ws ON campaign_plans(workspace_id, status)`); } catch {}
+
+const PLAN_SYSTEM_PROMPT = `You plan a sequence of cold email campaigns for one client of a UK B2B lead generation agency.
+
+You are given the client's brief and a breakdown of the contact database: how many people exist in each industry and seniority, how many have already been emailed, and how many are untouched.
+
+Plan 3 to 6 campaigns, in the order they should be run. Each is one slice of the market with one angle.
+
+Return ONLY valid JSON, no prose, no code fence:
+{"summary":"two or three sentences on the overall approach and why this order","steps":[{"name":"short name","rationale":"why this slice, why now, why this position in the order","angle":"the one idea the emails should lead with","filters":{...}}]}
+
+Ordering rules — this is the important part:
+- Start with the slice most likely to reply, not the biggest. A strong first campaign earns the client's patience.
+- Put slices with the largest untouched pools before nearly-exhausted ones; a campaign that runs dry in a fortnight is a waste of setup.
+- Do not plan two consecutive campaigns at the same people with a different subject line. Each step must be a genuinely different audience or a genuinely different reason to care.
+- If the brief only really supports one or two audiences, plan two or three. Do not pad.
+
+Filters use these keys (same as the audience tool): jobTitle, jobTitleExclude, seniority, department, industry, industryExclude, keywords, keywordsExclude, sicCodes, numEmployeesRanges, companyCountry, companyRegion, companyCounty, companyTown, ownsBuilding, ccodOwnsBuilding, solarMinKwp, hasName, hasCompany. Comma-separated strings. Omit what you do not need — every filter narrows the pool.
+
+Judge pool sizes against the numbers you are given. A slice under about 2,000 sendable will run dry quickly; say so in its rationale if you plan it anyway.`;
+
+function tamContextForPrompt() {
+  const o = db.prepare(`SELECT * FROM tam_snapshot WHERE scope='all' AND dimension IS NULL`).get();
+  if (!o) return null;
+  const L = [`Contact database: ${o.usable.toLocaleString()} people can be emailed (of ${o.total.toLocaleString()} rows; the rest lack a name or company). ${o.emailed.toLocaleString()} have been emailed by someone. ${o.untouched.toLocaleString()} untouched.`];
+  for (const [dim, title] of [['industry', 'By industry'], ['seniority', 'By seniority']]) {
+    const rows = db.prepare(
+      `SELECT value, usable, emailed, untouched FROM tam_snapshot
+       WHERE scope='all' AND dimension=? ORDER BY untouched DESC LIMIT 20`).all(dim);
+    if (!rows.length) continue;
+    L.push(`\n${title} (sendable / already emailed / untouched):`);
+    for (const r of rows) L.push(`- ${r.value}: ${r.usable.toLocaleString()} / ${r.emailed.toLocaleString()} / ${r.untouched.toLocaleString()}`);
+  }
+  return L.join('\n');
+}
+
+async function generateCampaignPlan({ workspaceId, workspaceName, reason }) {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) throw new Error('ANTHROPIC_API_KEY is not set — cannot plan');
+  if (copySpendThisMonth() >= COPY_BUDGET_USD) {
+    throw new Error(`AI drafting has used its $${COPY_BUDGET_USD} budget for this month.`);
+  }
+  const tam = tamContextForPrompt();
+  if (!tam) throw new Error('The market has not been counted yet. Open Market and press Recount first — a plan without it would be guesswork.');
+  const m = memoryFor(workspaceId);
+  if (!(m.icp || '').trim()) throw new Error('This client\'s brief does not say who they want to reach. Fill that in first.');
+
+  const L = [`Client: ${workspaceName || workspaceId}`];
+  if (m.offer) L.push(`\nWhat they sell:\n${m.offer}`);
+  L.push(`\nWho they want to reach:\n${m.icp}`);
+  if (m.proof) L.push(`\nProof available:\n${m.proof}`);
+  if (m.objections) L.push(`\nObjections:\n${m.objections}`);
+  if (m.disqualifiers) L.push(`\nNot a fit:\n${m.disqualifiers}`);
+  if (m.lessons?.length) {
+    L.push(`\nLessons from their campaign manager:`);
+    for (const l of m.lessons) L.push(`- ${l.lesson}`);
+  }
+  const clientRow = db.prepare(`SELECT emailed FROM tam_snapshot WHERE scope='client' AND workspace_id=?`).get(workspaceId);
+  if (clientRow) L.push(`\nThis client has already emailed ${Number(clientRow.emailed).toLocaleString()} people.`);
+  L.push(`\n${tam}`);
+  if (reason) L.push(`\nContext: ${reason}`);
+
+  const req = () => fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json', 'x-api-key': key,
+      'anthropic-version': '2023-06-01', 'anthropic-beta': 'prompt-caching-2024-07-31',
+    },
+    body: JSON.stringify({
+      model: COPY_MODEL, max_tokens: 8000,
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'high' },
+      system: [{ type: 'text', text: PLAN_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
+      messages: [{ role: 'user', content: L.join('\n') }],
+    }),
+  });
+  let r = await req();
+  if (!r.ok && (r.status === 429 || r.status >= 500)) { await new Promise(x => setTimeout(x, 2500)); r = await req(); }
+  if (!r.ok) throw new Error(`Claude ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const j = await r.json();
+  if (j?.stop_reason === 'refusal') throw new Error('The model declined to plan for this brief.');
+  const u = j?.usage || {};
+  const cost = ((u.input_tokens || 0) * OPUS_PRICE.input + (u.output_tokens || 0) * OPUS_PRICE.output +
+    (u.cache_creation_input_tokens || 0) * OPUS_PRICE.cache_write +
+    (u.cache_read_input_tokens || 0) * OPUS_PRICE.cache_read) / 1_000_000;
+  const text = ((j?.content || []).filter(b => b.type === 'text').map(b => b.text).join('') || '')
+    .replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  let parsed;
+  try { parsed = JSON.parse(text); } catch { throw new Error('The model did not return usable JSON. Try again.'); }
+  if (!Array.isArray(parsed.steps) || !parsed.steps.length) throw new Error('The plan came back with no campaigns in it.');
+  return savePlan({ workspaceId, workspaceName, parsed, cost, author: 'ai' });
+}
+
+// Shared by the AI path and by a plan written by hand (or by Claude Code on a
+// subscription) — so a plan is the same object however it was produced.
+function savePlan({ workspaceId, workspaceName, parsed, cost = 0, author = 'ai' }) {
+  const ins = db.prepare(`INSERT INTO campaign_plans (workspace_id, workspace_name, summary, author, cost_usd)
+    VALUES (?, ?, ?, ?, ?)`)
+    .run(workspaceId, workspaceName || null, String(parsed.summary || '').slice(0, 2000), author, cost);
+  const planId = ins.lastInsertRowid;
+  const step = db.prepare(`INSERT INTO campaign_plan_steps
+    (plan_id, position, name, rationale, angle, filters, est_pool)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`);
+  parsed.steps.forEach((s, i) => {
+    step.run(planId, i + 1, String(s.name || `Campaign ${i + 1}`).slice(0, 200),
+      String(s.rationale || '').slice(0, 1000), String(s.angle || '').slice(0, 500),
+      JSON.stringify(sanitiseAudienceFilters(s.filters)), s.est_pool ?? null);
+  });
+  return { plan_id: planId, steps: parsed.steps.length, cost };
+}
+
+// ── Campaign plan HTTP surface ─────────────────────────────────────────────
+app.post('/api/plan/generate', requireSession, async (req, res) => {
+  try {
+    res.json(await generateCampaignPlan({
+      workspaceId: req.body?.workspace_id,
+      workspaceName: req.body?.workspace_name,
+      reason: req.body?.reason,
+    }));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Accepts a plan written elsewhere — by hand, or by Claude Code on a personal
+// subscription. Planning is a rare, considered decision; it does not have to
+// cost API money to be worth having in the system.
+app.post('/api/plan/import', requireSession, (req, res) => {
+  try {
+    const s = decodeSession(req);
+    const p = req.body?.plan;
+    if (!p || !Array.isArray(p.steps) || !p.steps.length) {
+      return res.status(400).json({ error: 'Send {plan:{summary, steps:[{name, rationale, angle, filters}]}}' });
+    }
+    res.json(savePlan({
+      workspaceId: req.body?.workspace_id, workspaceName: req.body?.workspace_name,
+      parsed: p, cost: 0, author: s?.name || 'manual',
+    }));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.get('/api/plans', requireSession, (req, res) => {
+  try {
+    const ws = req.query.workspace_id;
+    const plans = ws
+      ? db.prepare(`SELECT * FROM campaign_plans WHERE workspace_id=? AND status!='archived' ORDER BY created_at DESC`).all(ws)
+      : db.prepare(`SELECT * FROM campaign_plans WHERE status!='archived' ORDER BY created_at DESC LIMIT 30`).all();
+    const stepStmt = db.prepare(`SELECT * FROM campaign_plan_steps WHERE plan_id=? ORDER BY position`);
+    res.json({ plans: plans.map(p => ({
+      ...p,
+      steps: stepStmt.all(p.id).map(s => ({
+        ...s, filters: (() => { try { return JSON.parse(s.filters || '{}'); } catch { return {}; } })(),
+      })),
+    })) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Count a step's pool on demand. A plan whose numbers were guessed by a model
+// is a plan you cannot act on — this replaces the guess with the real figure.
+app.post('/api/plan/step/:id/count', requireSession, async (req, res) => {
+  try {
+    const st = db.prepare(`SELECT s.*, p.workspace_id, p.workspace_name FROM campaign_plan_steps s
+      JOIN campaign_plans p ON p.id = s.plan_id WHERE s.id = ?`).get(Number(req.params.id));
+    if (!st) return res.status(404).json({ error: 'No such step' });
+    const filters = sanitiseAudienceFilters(req.body?.filters || JSON.parse(st.filters || '{}'));
+    const cr = await fetch(`http://127.0.0.1:${PORT}/api/contacts/sendability`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-admin-key': ADMIN_KEY },
+      body: JSON.stringify({ workspace_id: st.workspace_id, workspace_name: st.workspace_name, filters, loose: true }),
+    });
+    if (!cr.ok) return res.status(502).json({ error: `Could not count that (HTTP ${cr.status})` });
+    const cj = await cr.json();
+    const sendable = cj.sendable ?? cj.pushable ?? null;
+    db.prepare(`UPDATE campaign_plan_steps SET filters=?, est_pool=?, sendable=? WHERE id=?`)
+      .run(JSON.stringify(filters), cj.total ?? cj.matched ?? null, sendable, st.id);
+    res.json({ matched: cj.total ?? cj.matched ?? null, sendable, filters });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Start a step: write its copy. The audience is already decided by the plan,
+// so this is the only thing left before a CM has something to review.
+app.post('/api/plan/step/:id/start', requireSession, async (req, res) => {
+  try {
+    const s = decodeSession(req);
+    const st = db.prepare(`SELECT s.*, p.workspace_id, p.workspace_name FROM campaign_plan_steps s
+      JOIN campaign_plans p ON p.id = s.plan_id WHERE s.id = ?`).get(Number(req.params.id));
+    if (!st) return res.status(404).json({ error: 'No such step' });
+    if (st.status !== 'planned') return res.status(409).json({ error: `That step is already ${st.status}` });
+    const claim = db.prepare(`UPDATE campaign_plan_steps SET status='starting' WHERE id=? AND status='planned'`).run(st.id);
+    if (!claim.changes) return res.status(409).json({ error: 'Someone just started this step' });
+    try {
+      const out = await generateCopyDraft({
+        workspaceId: st.workspace_id, workspaceName: st.workspace_name,
+        campaignId: req.body?.campaign_id || null,
+        campaignName: st.name,
+        reason: `${st.name} — ${st.angle || ''}`.trim(),
+        steps: 2, variations: 2,
+      });
+      db.prepare(`UPDATE campaign_plan_steps SET status='in_review', draft_id=?, campaign_id=?,
+        decided_by=?, decided_at=datetime('now') WHERE id=?`)
+        .run(out.id, req.body?.campaign_id || null, s?.name || 'unknown', st.id);
+      res.json({ ok: true, draft_id: out.id, cost: out.cost });
+    } catch (e) {
+      db.prepare(`UPDATE campaign_plan_steps SET status='planned' WHERE id=?`).run(st.id);
+      res.status(400).json({ error: e.message });
+    }
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/plan/step/:id/skip', requireSession, (req, res) => {
+  try {
+    const s = decodeSession(req);
+    const note = (req.body?.note || '').toString().trim().slice(0, 500);
+    if (!note) return res.status(400).json({ error: 'Say why you are skipping it — it is what improves the next plan.' });
+    const r = db.prepare(`UPDATE campaign_plan_steps SET status='skipped', note=?, decided_by=?,
+      decided_at=datetime('now') WHERE id=? AND status IN ('planned','in_review')`)
+      .run(note, s?.name || 'unknown', Number(req.params.id));
+    if (!r.changes) return res.status(409).json({ error: 'That step cannot be skipped now' });
+    const st = db.prepare(`SELECT p.workspace_id FROM campaign_plan_steps s JOIN campaign_plans p ON p.id=s.plan_id WHERE s.id=?`).get(Number(req.params.id));
+    if (st) db.prepare(`INSERT INTO client_memory_lessons (workspace_id, lesson, source, author) VALUES (?,?,?,?)`)
+      .run(st.workspace_id, note, 'plan-skip', s?.name || 'unknown');
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // AUDIENCE PROPOSALS
 //
 // The other half of setup. Copy without an audience is half a campaign, and
@@ -19213,39 +19634,6 @@ try { db.exec(`CREATE INDEX IF NOT EXISTS idx_aud_status ON audience_proposals(s
 // Only the filter keys a proposal may set. An allow-list rather than passing
 // the model's JSON through: an unknown key would be silently ignored by the
 // query builder, so the CM would approve a filter narrower than it appears.
-const AUDIENCE_FILTER_KEYS = new Set([
-  'jobTitle', 'jobTitleExclude', 'seniority', 'department', 'subDepartments',
-  'industry', 'industryExclude', 'keywords', 'keywordsExclude',
-  'sicCodes', 'technologies', 'technologiesExclude',
-  'numEmployeesRanges', 'numEmployeesExcludeRanges', 'companyAgeBand',
-  'companyCountry', 'companyRegion', 'companyCounty', 'companyTown', 'companyCity', 'companyState',
-  'companyCountryExclude', 'companyRegionExclude', 'companyCountyExclude',
-  'companyTownExclude', 'companyCityExclude', 'companyStateExclude',
-  'country', 'state', 'city', 'personRegion', 'personCounty', 'personTown',
-  'countryExclude', 'stateExclude', 'cityExclude',
-  'personRegionExclude', 'personCountyExclude', 'personTownExclude',
-  'ownsBuilding', 'ccodOwnsBuilding', 'solarMinKwp', 'solarStatus', 'solarStatusExclude',
-  'hasName', 'hasCompany', 'worksRemote', 'excludeRemote',
-]);
-
-// Guards a proposal must never weaken. These are the difference between a
-// filter and a liability, and a model asked to "widen the audience" would
-// happily drop them.
-const AUDIENCE_FORCED = Object.freeze({
-  excludeDNC: 'true',
-  gatewayExclude: 'Mimecast,Barracuda,Proofpoint,Cisco Ironport,Sophos',
-});
-
-function sanitiseAudienceFilters(raw) {
-  const out = {};
-  for (const [k, v] of Object.entries(raw || {})) {
-    if (!AUDIENCE_FILTER_KEYS.has(k)) continue;
-    if (v == null || v === '' || (Array.isArray(v) && !v.length)) continue;
-    out[k] = Array.isArray(v) ? v.join(',') : String(v);
-  }
-  return { ...out, ...AUDIENCE_FORCED };
-}
-
 const AUDIENCE_SYSTEM_PROMPT = `You choose the audience for a UK B2B cold email campaign by picking database filter values.
 
 You are given a client brief. Translate who they want to reach into filters over a contacts database.

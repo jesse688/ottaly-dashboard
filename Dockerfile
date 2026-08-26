@@ -23,7 +23,7 @@ RUN npx playwright install --with-deps chromium
 #
 # THIS is the Dockerfile EasyPanel builds. apps/admin-legacy/Dockerfile is an
 # unused copy that drifted stale; edit this one.
-ARG CACHEBUST=2026-08-27-audience-01
+ARG CACHEBUST=2026-08-27-plan-01
 
 # copy all admin-legacy files (server.js, email-finder-local/, public/, etc.)
 COPY apps/admin-legacy/ ./
