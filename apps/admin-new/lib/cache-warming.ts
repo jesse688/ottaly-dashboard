@@ -46,6 +46,8 @@ interface PvGateState {
   lastStart: number
   pausedUntil: number
   queue: Array<() => void>
+  /** Interactive waiters. Always drained before `queue`. */
+  priorityQueue?: Array<() => void>
 }
 const pvState: PvGateState = ((globalThis as Record<string, unknown>).__ottalyPvGate ??= {
   active: 0,
@@ -58,9 +60,23 @@ export function pvBackoffSignal(ms: number): void {
   pvState.pausedUntil = Math.max(pvState.pausedUntil, Date.now() + ms)
 }
 
-async function pvGate<T>(fn: () => Promise<T>): Promise<T> {
+/**
+ * Serialise a PlusVibe call.
+ *
+ * `priority` is for requests a HUMAN is waiting on. The queue is otherwise
+ * FIFO, and the background warmers enqueue up to 40 calls every 2 minutes at
+ * PV_CONCURRENCY=1 — so a page request landed behind minutes of warm work and
+ * blew its budget every time, even though PlusVibe itself answers in under a
+ * second. Priority waiters are drained first; the rate limit and cooldown that
+ * protect PV still apply to everyone.
+ */
+async function pvGate<T>(fn: () => Promise<T>, priority = false): Promise<T> {
+  pvState.priorityQueue ??= []
   if (pvState.active >= PV_CONCURRENCY) {
-    await new Promise<void>((resolve) => pvState.queue.push(resolve))
+    await new Promise<void>((resolve) => {
+      if (priority) pvState.priorityQueue!.push(resolve)
+      else pvState.queue.push(resolve)
+    })
   }
   pvState.active++
   try {
@@ -76,7 +92,9 @@ async function pvGate<T>(fn: () => Promise<T>): Promise<T> {
     return await fn()
   } finally {
     pvState.active--
-    pvState.queue.shift()?.()
+    // Interactive waiters first, then background work.
+    const next = pvState.priorityQueue?.shift() ?? pvState.queue.shift()
+    next?.()
   }
 }
 
@@ -118,7 +136,7 @@ function lastNDates(n: number): string[] {
   return dates
 }
 
-export async function pvFetch(path: string): Promise<any> {
+export async function pvFetch(path: string, priority = false): Promise<any> {
   return pvGate(async () => {
     const url = `${PV_BASE}${path}`
     // Retry 429/5xx with backoff. Previously a 429 threw straight out, the
@@ -156,7 +174,7 @@ export async function pvFetch(path: string): Promise<any> {
       console.warn(`[cache-warming] PlusVibe ${res.status}, retry ${attempt + 1}/${PV_MAX_RETRIES} in ${Math.round(wait)}ms`)
       await sleep(wait)
     }
-  })
+  }, priority)
 }
 
 function aggregatePvEmailStats(raw: any): Record<string, number> {
