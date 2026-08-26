@@ -19465,11 +19465,14 @@ FILTERS MULTIPLY. This is the most common way these plans fail, so treat it as a
 
 So:
 - Use THREE filters per campaign, four at the very most. Industry plus seniority plus country is usually the whole thing.
-- NEVER set both jobTitle and seniority. They cover the same ground and stack brutally. **Prefer jobTitle** — it is set on 1,012,647 contacts against seniority's 915,778, and 96,869 people have a title but no seniority, so filtering on seniority silently throws them away. It also targets the actual decision-maker rather than a band.
+- NEVER set both jobTitle and seniority. They cover the same ground and stack brutally. **Prefer jobTitle** — it is set on 1,012,647 contacts against seniority's 915,778, and 96,869 people have a title but no seniority, so filtering on seniority silently throws them away.
+- **Use ROOT WORDS in jobTitle, not full titles.** Matching is loose, so "director" catches Director, Managing Director, Operations Director, Director of Operations and Finance Director in one word. Listing exact titles like "Managing Director,CEO,Chief Executive,Owner,Finance Director" misses most of the real decision-makers, because job titles are written a hundred different ways. Measured on care homes: the exact-title list returned 1,944 people; `director,owner,manager,head,chief,founder,partner` returned 9,692 from the same industry — five times more, and no less senior. Prefer a handful of root words.
 - keywords is the most destructive filter there is — it matches only contacts whose company description happens to contain that word, and most rows have no description at all. Do not use it to describe an industry you have already selected. Use it only when it is the ONLY way to express the audience, and never more than one word.
 - Prefer a wider slice with a sharper angle over a narrow slice with a generic one. The copy does the qualifying; the filter only has to get you into the right room.
 
-Judge pool sizes against the numbers you are given. Aim for at least 5,000 sendable per campaign. Under 2,000 will run dry within weeks — do not plan it unless the brief leaves no alternative, and say so plainly in the rationale if you do.`;
+The numbers you are given are for a WHOLE industry with no other filter applied. Your campaign will always land far below them, because job titles cut it again — typically to under a tenth. So do NOT quote the industry total in your rationale as if it were the campaign's pool; it reads as a promise and the real count then makes the plan look wrong. Say which industries you are drawing from and roughly what you expect after titles, or say nothing about size at all.
+
+Aim for at least 3,000 sendable after every filter. If an industry only has 14,000 sendable in total, expect roughly 1,000-2,000 once titles are applied — so choose broad industries and few filters.`;
 
 function tamContextForPrompt() {
   const o = db.prepare(`SELECT * FROM tam_snapshot WHERE scope='all' AND dimension IS NULL`).get();
@@ -19729,9 +19732,17 @@ Available filter keys (omit any you do not need — every key you set NARROWS th
 
 There is NO filter for building ownership, freehold, or roof/solar capacity. That data is too sparse to filter on and any such key would return an empty audience. If the client only wants freeholders or sites above a certain roof size, that is a job for the COPY — say it plainly in the email so the wrong people opt themselves out — never for the filter.
 
+MISSING DATA IS EXCLUDED, so a filter costs you everyone whose value is blank as well as everyone who does not match. Two keys are far more expensive than they look:
+- companyCountry — 610,341 contacts (42% of the database) have NO country recorded. Setting it to "United Kingdom" throws all of them away, and they are overwhelmingly UK. Measured on a real audience: titles + industry gave 6,456 people; adding companyCountry cut it to 2,955. **Do not set companyCountry.** The database is UK-focused already.
+- numEmployeesRanges — 89,004 have no employee count. Only use it when company size genuinely changes whether someone can buy, and expect to lose roughly a third of the pool.
+
+Industry is also blank on 102,232 contacts, so an industry filter loses those too — acceptable when the industry genuinely defines the audience, but do not stack it with other blank-prone keys.
+
 Rules — filters MULTIPLY, and that is how these go wrong:
 - Use THREE filters, four at the very most. Measured on this database: food & beverages alone is 24,299 people; add seniority and it is 16,411; add company size and country and it is 3,609; add three keywords and it is 260. Four reasonable choices left a dead campaign.
 - NEVER set both jobTitle and seniority. They cover the same ground and stack brutally. **Prefer jobTitle** — it is set on 1,012,647 contacts against seniority's 915,778, and 96,869 people have a title but no seniority, so seniority silently throws them away.
+- **Use ROOT WORDS in jobTitle, not full titles.** Matching is loose, so "director" catches Director, Managing Director, Operations Director and Finance Director at once. Measured on care homes: an exact-title list returned 1,944 people; `director,owner,manager,head,chief,founder,partner` returned 9,692 from the same industry.
+- **Do not set companyCountry.** 610,341 contacts (42% of the database) have no country recorded and would be thrown away; the database is UK-focused already. Measured: it halved a real audience from 1,944 to 959.
 - keywords is the most destructive filter available — it matches only contacts whose company description contains that word, and most rows have no description. Never use it to restate an industry you have already selected. One word, only if nothing else expresses the audience.
 - Never set both a key and its Exclude counterpart to the same value.
 - Only set ownsBuilding, ccodOwnsBuilding or solarMinKwp when the brief genuinely requires them — each one roughly halves the pool.
