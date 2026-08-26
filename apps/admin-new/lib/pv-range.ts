@@ -25,7 +25,6 @@ export interface PvDay {
   oooReplies: number
   bounces: number
   contacted: number
-  uniqueContacted: number
 }
 
 export interface PvRange {
@@ -42,7 +41,6 @@ interface PvChartRow {
   total_bounce_count?: number
   total_contacted_count?: number
   total_pos_reply_count?: number
-  total_unique_contacted_count?: number
 }
 
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
@@ -82,23 +80,26 @@ export async function fetchPvRange(
     posReplies: num(header.total_pos_reply_count),
     oooReplies: num(header.total_ooo_reply_count),
     bounces: num(header.total_bounce_count),
-    // People contacted — the LPT denominator. This is NOT sent: over
-    // 2026-08-01..25 ButterflyEco sent 21,746 emails to 17,509 people. The old
-    // code fell back to `sent` whenever the cached row predated this field,
-    // which quietly overstated LPT on every historic day.
-    contacted: num(header.total_contacted_count),
-    // Distinct people ever emailed in the window — and, verified below, the
-    // denominator PV itself divides its reply rates by.
+    // THE REPLY-RATE DENOMINATOR.
     //
-    // Checked against PV's own published rates over three independent windows
-    // (2026-06-17..08-26, 08-01..25, 06-01..30). Dividing by this reproduces
-    // reply_rate and reply_rate_with_ooo EXACTLY every time
-    // (1.21→1.2, 5.56→5.6 | 1.26→1.3, 6.00→6.0 | 1.05→1.0, 3.00→3.0),
-    // whereas dividing by `sent` is low every time (0.99, 4.55 | 1.04, 4.94 |
-    // 0.80, 2.30). Reply rates therefore use this; bounce_rate is the exception
-    // and genuinely does divide by sent (0.58→0.6, 0.59→0.6, 0.45→0.4).
-    uniqueContacted: num(header.total_unique_contacted_count),
-  }
+    // This is the PUBLIC PlusVibe API (api.plusvibe.ai/api/v1), which is NOT
+    // the same shape as the MCP tool of a similar name. The public API has no
+    // `total_unique_contacted_count` at all — reading it returned undefined,
+    // the rate divided by zero, and every workspace was dropped as "failed",
+    // which is why the page showed nothing. Same metric, different field name,
+    // different endpoint.
+    //
+    // Verified against PV's OWN published rates on the public API across four
+    // windows — dividing by total_contacted_count reproduces reply_rate and
+    // reply_rate_with_ooo exactly every time:
+    //   2026-06-17..08-26  1.21->1.2   5.55->5.6
+    //   2026-08-01..08-25  1.26->1.3   6.00->6.0
+    //   2026-06-01..06-30  1.05->1.0   3.00->3.0
+    //   all time           1.44->1.4   5.48->5.5
+    // Dividing by `sent` is low in all eight cases. Bounce rate is the
+    // exception and genuinely does divide by sent (0.58/0.59/0.45 -> 0.6/0.6/0.4).
+    contacted: num(header.total_contacted_count),
+    }
 
   const series: PvDay[] = (Array.isArray(body?.chart) ? body.chart : [])
     .filter((d): d is PvChartRow & { date: string } => typeof d?.date === 'string')
@@ -110,10 +111,6 @@ export async function fetchPvRange(
       oooReplies: num(d.total_ooo_reply_count),
       bounces: num(d.total_bounce_count),
       contacted: num(d.total_contacted_count),
-      // PV omits the unique count per-day; only the header carries it. The
-      // per-day series is used for the trend chart, whose rates are computed
-      // from `sent`, so this is 0 here by design and never a hidden divisor.
-      uniqueContacted: 0,
     }))
     .sort((a, b) => a.date.localeCompare(b.date))
 

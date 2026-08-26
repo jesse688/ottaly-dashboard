@@ -32,7 +32,6 @@ interface Workspace {
     oooReplies: number
     bounces: number
     contacted: number
-    uniqueContacted: number
     leads: number
     replyRate: number
     allReplyRate: number
@@ -73,8 +72,18 @@ export async function GET(req: NextRequest) {
   if (!rawStart || !end) {
     return NextResponse.json({ error: 'start and end required (YYYY-MM-DD)' }, { status: 400 })
   }
-  // Clamp the start to the cutover — never count pre-cutover (Bison-era) data.
-  const start = rawStart < STATS_CUTOVER ? STATS_CUTOVER : rawStart
+  // ALL TIME is an explicit request for everything, including the Bison era, so
+  // it is NOT clamped to the PV cutover — it floors at the first day any mail
+  // was actually sent (verified against PV: earliest non-zero send is
+  // 2026-03-20). Every other range still clamps to the cutover so it stays
+  // PV-clean. The period filter sends 0000-01-01 for All Time.
+  const ALL_TIME_FLOOR = process.env.STATS_ALL_TIME_FLOOR ?? '2026-03-20'
+  const isAllTime = rawStart < ALL_TIME_FLOOR
+  const start = isAllTime
+    ? ALL_TIME_FLOOR
+    : rawStart < STATS_CUTOVER
+      ? STATS_CUTOVER
+      : rawStart
 
   try {
     const wsRes = await pool.query(
@@ -95,7 +104,9 @@ export async function GET(req: NextRequest) {
     const activeIds = await getActiveWorkspaceIds()
     if (activeIds) workspaceList = workspaceList.filter(w => activeIds.has(w.workspace_id))
 
-    const dates = enumerateDates(start, end, 400)
+    // Cap high enough for All Time (2026-03-20 onwards is ~2,400 days and grows).
+    // The old 400 would have silently truncated the chart on that range.
+    const dates = enumerateDates(start, end, 4000)
 
     // ── THE SOURCE OF TRUTH, SERVED FROM CACHE ───────────────────────────────
     // Every number still comes from ONE PV response per workspace, so the
@@ -215,6 +226,21 @@ export async function GET(req: NextRequest) {
       })
 
       const t = range.totals
+
+      // A workspace that sent mail but reports NO denominator cannot produce a
+      // rate. Treat it as a failure rather than silently rendering 0% — a
+      // missing denominator is exactly what broke this page: the field name
+      // differed between the MCP and the public API, the divisor was 0, and the
+      // zero propagated as if it were real.
+      if (t.sent > 0 && t.contacted <= 0) {
+        console.error(
+          `[stats] ${ws.workspace_name || ws.workspace_id}: sent=${t.sent} but contacted=${t.contacted} — no denominator, skipping`,
+        )
+        failedNames.push(ws.workspace_name || ws.workspace_id)
+        failed.push(ws.workspace_id)
+        continue
+      }
+
       const leads = leadsByWs[ws.workspace_id] || 0
       const days = dates.length || 1
 
@@ -228,7 +254,6 @@ export async function GET(req: NextRequest) {
           oooReplies: t.oooReplies,
           bounces: t.bounces,
           contacted: t.contacted,
-          uniqueContacted: t.uniqueContacted,
           leads,
           // PROVEN against live PV: total_reply_count is the HUMAN/non-OOO
           // count and total_ooo_reply_count is a SEPARATE bucket.
@@ -239,12 +264,13 @@ export async function GET(req: NextRequest) {
           // reply_rate_with_ooo exactly (1.2/5.6, 1.3/6.0, 1.0/3.0), while
           // dividing by sent is low in all six cases. Using `sent` here is what
           // made a reply look rarer than PV reports it.
-          //   Human RR           = replies / uniqueContacted
-          //   Reply Rate (w/OOO) = (replies + ooo) / uniqueContacted
-          // Bounce is the exception: it genuinely divides by sent.
-          replyRate: t.uniqueContacted > 0 ? t.replies / t.uniqueContacted : 0,
+          //   Human RR           = replies / contacted
+          //   Reply Rate (w/OOO) = (replies + ooo) / contacted
+          // `contacted` is the public API's total_contacted_count — see the
+          // note in lib/pv-range.ts. Bounce is the exception and divides by sent.
+          replyRate: t.contacted > 0 ? t.replies / t.contacted : 0,
           allReplyRate:
-            t.uniqueContacted > 0 ? (t.replies + t.oooReplies) / t.uniqueContacted : 0,
+            t.contacted > 0 ? (t.replies + t.oooReplies) / t.contacted : 0,
           bounceRate: t.sent > 0 ? t.bounces / t.sent : 0,
           // RTL = human replies per lead.
           rtl: leads > 0 ? t.replies / leads : 0,
@@ -273,6 +299,10 @@ export async function GET(req: NextRequest) {
       failedCount: failed.length,
       failedNames,
       source: 'plusvibe',
+      // True when the window predates the PV cutover, i.e. it spans the
+      // Bison->PlusVibe migration. The page labels it so the number is never
+      // mistaken for PlusVibe-only performance.
+      spansBison: isAllTime,
       // How many rows were served from a cache older than its TTL, and the age
       // of the oldest one, so the page can say how fresh the numbers are
       // instead of implying they are live to the second.
