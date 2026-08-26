@@ -104,6 +104,24 @@
     </div>
 
     <div class="fld">
+      <label for="qualifiers">What makes someone a fit</label>
+      <div class="why">The hard thresholds — size, spend, ownership, anything that decides whether a deal is possible. These go <b>in the email</b>, because no filter can find them; stating them plainly lets the wrong readers rule themselves out.</div>
+      <textarea id="qualifiers" placeholder="e.g. Needs 100 kWp+ of roof, which usually means 800 m² or more of refrigerated floor. Annual electricity over 150,000 kWh. Must own the freehold or hold 20+ years unexpired — a short lease cannot grant roof rights. First call asks only for a recent bill, never a site visit."></textarea>
+    </div>
+
+    <div class="fld">
+      <label for="forbidden">Never say this</label>
+      <div class="why">Anything that would be untrue, unapproved or would land the client in trouble. Treated as absolute.</div>
+      <textarea id="forbidden" placeholder="e.g. Never name the installation partner — no written consent yet. Never quote a savings figure or percentage; none have been modelled. Never imply we compare the market or are independent."></textarea>
+    </div>
+
+    <div class="fld">
+      <label for="copy_lessons">What already works</label>
+      <div class="why">Proven from this client's own campaigns — openers, angles and phrasing that got replies. Carries more weight than anything else here.</div>
+      <textarea id="copy_lessons" placeholder="e.g. Acknowledge they have looked at solar before and say that was reasonable — agreeing before contradicting is the biggest warmth lever. 'Cheers' not 'Kind regards'. No job title in the signature. Always offer the easy out: 'or tell me who does handle this'."></textarea>
+    </div>
+
+    <div class="fld">
       <label for="disqualifiers">Not a fit, and never claim</label>
       <div class="why">Who to avoid, and any claim that would be untrue or would get them in trouble.</div>
       <textarea id="disqualifiers" placeholder="e.g. Not sole traders. Not regulated financial firms. Never say 'guaranteed savings' or imply we are their accountant already."></textarea>
@@ -121,7 +139,7 @@
 let WS = '', LOADED = null;
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-const FIELDS = ['offer','icp','proof','objections','voice','disqualifiers'];
+const FIELDS = ['offer','icp','proof','objections','voice','disqualifiers','qualifiers','forbidden','copy_lessons'];
 const LABEL = { offer:'what they sell', icp:'who to reach', proof:'proof', objections:'objections', voice:'voice rules' };
 
 function msg(text, ok){

@@ -18875,6 +18875,17 @@ db.exec(`CREATE TABLE IF NOT EXISTS client_memory (
   updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
   created_at     TEXT NOT NULL DEFAULT (datetime('now'))
 )`);
+// Added after Hawthorne showed the six original fields could not hold what
+// actually makes a campaign work. The ICP research that produced their best
+// campaign — refrigeration load as the real qualifier, the 100 kWp threshold,
+// why ambient warehousing fails — lived in a chat log, so nothing the system
+// wrote could use it.
+//   qualifiers   — the hard thresholds that decide fit, and how to ask for them
+//   forbidden    — what must never be said (naming a partner, unmodelled figures)
+//   copy_lessons — what has been PROVEN to work in this client's own campaigns
+for (const col of ['qualifiers', 'forbidden', 'copy_lessons']) {
+  try { db.exec(`ALTER TABLE client_memory ADD COLUMN ${col} TEXT`); } catch { /* already there */ }
+}
 
 db.exec(`CREATE TABLE IF NOT EXISTS client_memory_lessons (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -19016,6 +19027,12 @@ function buildCopyUserPrompt(m, opts) {
   if (m.objections) L.push(`\nObjections that come back:\n${m.objections}`);
   if (m.voice) L.push(`\nVoice rules:\n${m.voice}`);
   if (m.disqualifiers) L.push(`\nNot a fit / never claim:\n${m.disqualifiers}`);
+  // The hard thresholds. These belong IN the copy, because the filters cannot
+  // express them — the email has to state them so the wrong reader opts out.
+  if (m.qualifiers) L.push(`\nWhat makes someone a fit (say these plainly in the email so people who do not qualify rule themselves out):\n${m.qualifiers}`);
+  if (m.forbidden) L.push(`\nABSOLUTELY MUST NOT appear in the email:\n${m.forbidden}`);
+  // Proven, not theoretical — what this client's own campaigns have shown.
+  if (m.copy_lessons) L.push(`\nWhat has already been PROVEN to work for this client — follow it closely:\n${m.copy_lessons}`);
   if (m.lessons?.length) {
     L.push(`\nLessons from their campaign manager (most recent first — these override the brief):`);
     for (const l of m.lessons) L.push(`- ${l.lesson}`);
@@ -19455,6 +19472,14 @@ Plan 3 to 6 campaigns, in the order they should be run. Each is one slice of the
 Return ONLY valid JSON, no prose, no code fence:
 {"summary":"two or three sentences on the overall approach and why this order","steps":[{"name":"short name","rationale":"why this slice, why now, why this position in the order","angle":"the one idea the emails should lead with","filters":{...}}]}
 
+SPLIT BY WHO YOU ARE WRITING TO, NOT ONLY BY SECTOR. The same company holds three different readers, and one email cannot serve them. Ottaly has run this split and it works — merged, the routing contacts drag the reply rate down, the operational ones carry it, and you cannot tell which copy did what.
+
+  DECISION-MAKERS — owner, founder, MD, CEO, directors. They can say yes. Pitch the offer, ask for the one piece of information that decides fit.
+  OPERATIONAL — site, plant, facilities, operations, energy and technical managers. They cannot sign, but they already KNOW the numbers and can send them without asking anyone. Usually the best source of data. Ask for the figure, do not pitch the deal.
+  ROUTING — EAs, PAs, office and admin managers. Never pitch these. One short question: who handles this? The name is the win. Pitch a gatekeeper and the route is lost for good.
+
+Where a client's audience genuinely contains all three, plan them as SEPARATE campaigns against the same sector rather than one merged list — different reader, different ask, and the reply rates stay readable.
+
 Ordering rules — this is the important part:
 - Start with the slice most likely to reply, not the biggest. A strong first campaign earns the client's patience.
 - Put slices with the largest untouched pools before nearly-exhausted ones; a campaign that runs dry in a fortnight is a waste of setup.
@@ -19472,7 +19497,15 @@ FILTERS MULTIPLY. This is the most common way these plans fail, so treat it as a
 So:
 - Use THREE filters per campaign, four at the very most. Industry plus seniority plus country is usually the whole thing.
 - NEVER set both jobTitle and seniority. They cover the same ground and stack brutally. **Prefer jobTitle** — it is set on 1,012,647 contacts against seniority's 915,778, and 96,869 people have a title but no seniority, so filtering on seniority silently throws them away.
-- **Use ROOT WORDS in jobTitle, not full titles.** Matching is loose, so "director" catches Director, Managing Director, Operations Director, Director of Operations and Finance Director in one word. Listing exact titles like "Managing Director,CEO,Chief Executive,Owner,Finance Director" misses most of the real decision-makers, because job titles are written a hundred different ways. Measured on care homes: the exact-title list returned 1,944 people; "director,owner,manager,head,chief,founder,partner" returned 9,692 from the same industry — five times more, and no less senior. Prefer a handful of root words.
+- **Use ROOT WORDS in jobTitle, not full titles, and include EVERY decision-maker.** Matching is loose, so one word catches all its variants — "director" alone covers Director (76,464), Managing Director (50,492), Operations Director, Director of Operations, Finance Director, Commercial Director and Technical Director. Listing exact titles misses most real buyers, because titles are written a hundred ways.
+
+  Unless the brief names a specific function, use this list as your default — it is measured to reach 583,762 of the 1,009,245 titled contacts in the database, and everyone in it can say yes to something:
+
+  director,owner,founder,ceo,chief,partner,principal,president,proprietor,head of,general manager,managing
+
+  Do NOT add a bare "manager" to that list. It looks like free volume and is not: it pulls in Marketing Manager, Project Manager, Account Manager and Office Manager, none of whom can approve anything, and replies from people who cannot buy cost deliverability as well as time. Where an operational manager genuinely runs the site — "registered manager" in care homes, "site manager" or "plant manager" in industry, "facilities manager" for anything about the building — add that exact phrase, never the bare word.
+
+  Narrow it only when the brief demands one function (say finance, or facilities), and then narrow by ADDING a word rather than by replacing the list — "finance director,financial controller,head of finance" rather than dropping everything else. Measured on care homes: an exact-title list returned 1,944 people where the decision-maker list returned 9,692 from the same industry.
 - keywords is the most destructive filter there is — it matches only contacts whose company description happens to contain that word, and most rows have no description at all. Do not use it to describe an industry you have already selected. Use it only when it is the ONLY way to express the audience, and never more than one word.
 - Prefer a wider slice with a sharper angle over a narrow slice with a generic one. The copy does the qualifying; the filter only has to get you into the right room.
 
@@ -19512,6 +19545,9 @@ async function generateCampaignPlan({ workspaceId, workspaceName, reason }) {
   if (m.proof) L.push(`\nProof available:\n${m.proof}`);
   if (m.objections) L.push(`\nObjections:\n${m.objections}`);
   if (m.disqualifiers) L.push(`\nNot a fit:\n${m.disqualifiers}`);
+  if (m.qualifiers) L.push(`\nHard qualifiers (the copy must state these; filters cannot):\n${m.qualifiers}`);
+  if (m.forbidden) L.push(`\nMust never appear in any email:\n${m.forbidden}`);
+  if (m.copy_lessons) L.push(`\nProven in this client's own campaigns:\n${m.copy_lessons}`);
   if (m.lessons?.length) {
     L.push(`\nLessons from their campaign manager:`);
     for (const l of m.lessons) L.push(`- ${l.lesson}`);
@@ -19747,7 +19783,13 @@ Industry is also blank on 102,232 contacts, so an industry filter loses those to
 Rules — filters MULTIPLY, and that is how these go wrong:
 - Use THREE filters, four at the very most. Measured on this database: food & beverages alone is 24,299 people; add seniority and it is 16,411; add company size and country and it is 3,609; add three keywords and it is 260. Four reasonable choices left a dead campaign.
 - NEVER set both jobTitle and seniority. They cover the same ground and stack brutally. **Prefer jobTitle** — it is set on 1,012,647 contacts against seniority's 915,778, and 96,869 people have a title but no seniority, so seniority silently throws them away.
-- **Use ROOT WORDS in jobTitle, not full titles.** Matching is loose, so "director" catches Director, Managing Director, Operations Director and Finance Director at once. Measured on care homes: an exact-title list returned 1,944 people; "director,owner,manager,head,chief,founder,partner" returned 9,692 from the same industry.
+- **Use ROOT WORDS in jobTitle, and include EVERY decision-maker.** Matching is loose, so "director" alone covers Director, Managing Director, Operations Director, Finance Director and Commercial Director. Unless the brief names one function, default to this measured list — it reaches 583,762 of the 1,009,245 titled contacts:
+
+  director,owner,founder,ceo,chief,partner,principal,president,proprietor,head of,general manager,managing
+
+  Do NOT add a bare "manager" to that list. It looks like free volume and is not: it pulls in Marketing Manager, Project Manager, Account Manager and Office Manager, none of whom can approve anything, and replies from people who cannot buy cost deliverability as well as time. Where an operational manager genuinely runs the site — "registered manager" in care homes, "site manager" or "plant manager" in industry, "facilities manager" for anything about the building — add that exact phrase, never the bare word.
+
+  Narrow only when the brief demands a specific function, and then by adding words rather than replacing the list. Measured on care homes: an exact-title list returned 1,944 where this returned 9,692.
 - **Do not set companyCountry.** 610,341 contacts (42% of the database) have no country recorded and would be thrown away; the database is UK-focused already. Measured: it halved a real audience from 1,944 to 959.
 - keywords is the most destructive filter available — it matches only contacts whose company description contains that word, and most rows have no description. Never use it to restate an industry you have already selected. One word, only if nothing else expresses the audience.
 - Never set both a key and its Exclude counterpart to the same value.
@@ -19928,15 +19970,18 @@ app.post('/api/memory/:workspaceId', requireSession, (req, res) => {
   try {
     const s = decodeSession(req);
     const ws = req.params.workspaceId;
-    const f = ['offer', 'icp', 'proof', 'objections', 'voice', 'disqualifiers'];
+    const f = ['offer', 'icp', 'proof', 'objections', 'voice', 'disqualifiers',
+               'qualifiers', 'forbidden', 'copy_lessons'];
     const vals = f.map(k => (req.body?.[k] ?? '').toString().slice(0, 8000));
-    db.prepare(`INSERT INTO client_memory (workspace_id, offer, icp, proof, objections, voice, disqualifiers, updated_by, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    db.prepare(`INSERT INTO client_memory (workspace_id, offer, icp, proof, objections, voice, disqualifiers,
+        qualifiers, forbidden, copy_lessons, updated_by, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(workspace_id) DO UPDATE SET
         offer=excluded.offer, icp=excluded.icp, proof=excluded.proof,
         objections=excluded.objections, voice=excluded.voice,
-        disqualifiers=excluded.disqualifiers, updated_by=excluded.updated_by,
-        updated_at=datetime('now')`)
+        disqualifiers=excluded.disqualifiers, qualifiers=excluded.qualifiers,
+        forbidden=excluded.forbidden, copy_lessons=excluded.copy_lessons,
+        updated_by=excluded.updated_by, updated_at=datetime('now')`)
       .run(ws, ...vals, s?.name || 'unknown');
     const m = memoryFor(ws);
     res.json({ ok: true, completeness: memoryCompleteness(m) });
