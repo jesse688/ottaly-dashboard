@@ -19036,9 +19036,28 @@ function buildCopyUserPrompt(m, opts) {
 const COPY_MODEL = process.env.COPY_MODEL || 'claude-opus-5';
 const OPUS_PRICE = { input: 5.00, output: 25.00, cache_write: 6.25, cache_read: 0.50 };
 
+// Hard monthly ceiling on copy spend. A runaway loop or an over-eager enrolment
+// should hit a wall here rather than on the Anthropic bill — and while the
+// account is on a small prepaid balance, running dry silently would look like
+// drafting is broken. Set COPY_BUDGET_USD to raise it.
+const COPY_BUDGET_USD = Number(process.env.COPY_BUDGET_USD || 4);
+
+function copySpendThisMonth() {
+  try {
+    return db.prepare(
+      `SELECT COALESCE(SUM(cost_usd), 0) AS c FROM copy_drafts
+       WHERE created_at >= date('now','start of month')`
+    ).get()?.c || 0;
+  } catch { return 0; }
+}
+
 async function generateCopyDraft({ workspaceId, workspaceName, campaignId, campaignName, reason, steps, variations }) {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error('ANTHROPIC_API_KEY is not set — cannot draft copy');
+  const spent = copySpendThisMonth();
+  if (spent >= COPY_BUDGET_USD) {
+    throw new Error(`Copy drafting has used its $${COPY_BUDGET_USD} budget for this month ($${spent.toFixed(2)}). Raise COPY_BUDGET_USD to continue.`);
+  }
   const m = memoryFor(workspaceId);
   const done = memoryCompleteness(m);
   if (!done.ready) {
@@ -19346,6 +19365,8 @@ app.get('/api/copy/health', requireSession, (req, res) => {
       // Below ~10% with a decent sample means drafts are going out unread.
       editRatePct: applied ? Math.round(((d.applied_edited || 0) / applied) * 1000) / 10 : null,
       lessons: db.prepare(`SELECT COUNT(*) n FROM client_memory_lessons WHERE active = 1`).get()?.n || 0,
+      budgetUsd: COPY_BUDGET_USD,
+      spentThisMonthUsd: Math.round(copySpendThisMonth() * 10000) / 10000,
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

@@ -63,7 +63,23 @@
       <div class="sub">Written from each client's brief. Read it, change what you want, then send it live.</div>
     </div>
     <button class="btn ghost" onclick="load()" id="refreshBtn">↻ Refresh</button>
+    <button class="btn" onclick="openTry()" id="tryBtn">Write one now</button>
     <span id="status" class="sub"></span>
+  </div>
+
+  <!-- Try it on a client without waiting for a campaign to go wrong. This is
+       how you judge whether the copy is any good before it matters. -->
+  <div id="tryBox" style="display:none;background:#fff;border:1px solid var(--border);border-radius:8px;padding:.8rem .9rem;margin-bottom:.8rem">
+    <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+      <select id="tryWs" style="padding:7px 10px;border:1px solid var(--border);border-radius:7px;font:600 13px Inter,sans-serif;min-width:15rem"><option value="">Choose a client…</option></select>
+      <input id="tryCamp" placeholder="PlusVibe campaign id (optional)" style="flex:1;min-width:14rem;padding:7px 10px;border:1px solid var(--border);border-radius:7px;font:500 12.5px Inter,sans-serif">
+      <button class="btn btn-sm btn-ok" onclick="doTry()" id="tryGo">Write it</button>
+      <button class="btn btn-sm btn-no" onclick="document.getElementById('tryBox').style.display='none'">Cancel</button>
+    </div>
+    <div class="hint" style="margin-top:.4rem">
+      Costs about 3p. Without a campaign id you get a draft to read but nothing to send it to —
+      fine for judging the writing.
+    </div>
   </div>
 
   <div class="health" id="health" style="display:none">
@@ -202,6 +218,50 @@ async function reject(id){
   } catch (e) { card.style.opacity = ''; msg(e.message, false); }
 }
 
+async function openTry(){
+  const box = document.getElementById('tryBox');
+  box.style.display = box.style.display === 'none' ? '' : 'none';
+  const sel = document.getElementById('tryWs');
+  if (sel.options.length > 1) return;
+  try {
+    const res = await fetch('/api/brief/clients');
+    const j = await res.json();
+    (j.clients || []).forEach(c => {
+      const o = document.createElement('option');
+      o.value = c.workspace_id;
+      // Only clients with a usable brief can be drafted for, so say which.
+      o.textContent = (c.has_brief ? '✓ ' : '· no brief — ') + (c.workspace_name || c.workspace_id);
+      o.dataset.name = c.workspace_name || '';
+      sel.appendChild(o);
+    });
+  } catch (e) { msg('Could not load clients: ' + e.message, false); }
+}
+
+async function doTry(){
+  const sel = document.getElementById('tryWs');
+  const ws = sel.value;
+  if (!ws) { msg('Pick a client first.', false); return; }
+  const btn = document.getElementById('tryGo');
+  btn.disabled = true; btn.textContent = 'Writing…';
+  try {
+    const res = await fetch('/api/copy/draft', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        workspace_id: ws,
+        workspace_name: sel.options[sel.selectedIndex].dataset.name || '',
+        campaign_id: document.getElementById('tryCamp').value.trim() || undefined,
+        reason: 'Written on request',
+      })
+    });
+    const j = await res.json();
+    if (!res.ok) { msg(j.error || 'Could not write it', false); return; }
+    document.getElementById('tryBox').style.display = 'none';
+    await load(); await loadHealth();
+    msg('Written — it is below. Cost about ' + ((j.cost || 0) * 0.79 * 100).toFixed(1) + 'p.', true);
+  } catch (e) { msg(e.message, false); }
+  finally { btn.disabled = false; btn.textContent = 'Write it'; }
+}
+
 async function load(){
   const btn = document.getElementById('refreshBtn');
   btn.disabled = true;
@@ -236,7 +296,14 @@ async function loadHealth(){
     // Drafting shares the Anthropic key with contact enrichment, so the bill
     // alone cannot say what copy cost. This counts only copy.
     const usd = Number(j.cost || 0);
-    document.getElementById('hCost').textContent = usd > 0 ? '£' + (usd * 0.79).toFixed(2) : '£0';
+    const el2 = document.getElementById('hCost');
+    el2.textContent = usd > 0 ? '£' + (usd * 0.79).toFixed(2) : '£0';
+    // Warn before the cap stops drafting rather than after.
+    const spent = Number(j.spentThisMonthUsd || 0), cap = Number(j.budgetUsd || 0);
+    if (cap > 0 && spent >= cap * 0.8) {
+      el2.style.color = spent >= cap ? 'var(--red)' : 'var(--amber)';
+      el2.title = `$${spent.toFixed(2)} of a $${cap} monthly cap`;
+    }
   } catch {}
 }
 
