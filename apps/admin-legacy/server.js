@@ -18348,6 +18348,12 @@ function apJobRunning(campaignId) {
 // survive. Re-expressing those rules here is exactly how the filter count and
 // the push count drifted apart before — see the comment on that route.
 async function apSelectContacts(bucket, want, cfg, state) {
+  // Same hard block as the contacts-page search/export (api-contacts.js): a
+  // captured filter snapshot predates the ownership rule and never carries
+  // it, so it must be re-applied here from the client's live config on every
+  // run rather than trusted from cfg.filter. Not optional — Autopilot must
+  // never push a domain that told us it doesn't own the building.
+  const clientRules = getClientRules(state.workspace_id, state.workspace_name);
   const filters = {
     ...(cfg.filter || {}),
     // Force the single provider being topped up, overriding whatever the
@@ -18355,6 +18361,7 @@ async function apSelectContacts(bucket, want, cfg, state) {
     // COMMA-SEPARATED STRING, not an array: _buildFilterClauses does
     // `filters.emailProviders.split(',')` (db-postgres.js), so an array throws.
     emailProviders: AP_BUCKET_TO_FILTER[bucket],
+    ...(clientRules?.require_owns_building ? { excludeNonOwnerDomain: true } : {}),
   };
   const r = await fetch(`http://127.0.0.1:${PORT}/api/contacts/sendability`, {
     method: 'POST',
