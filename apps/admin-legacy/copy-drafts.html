@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Copy Drafts — Ottaly</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+  :root{--navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--green:#16a34a;--red:#dc2626;--amber:#d97706;--border:#E5E7EB;--card:#fff;--bg:#F8F9FC;--muted:#6B7280}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--navy-dark);min-height:100vh}
+  .page{max-width:1200px;margin:0 auto;padding:1.25rem 1rem 4rem}
+  .top-bar{display:flex;align-items:center;gap:1rem;margin-bottom:.9rem;flex-wrap:wrap}
+  .page-title{font-family:'Genos',sans-serif;font-size:1.25rem;font-weight:800}
+  .sub{font-size:11px;color:var(--muted)}
+  .btn{padding:8px 14px;border:1.5px solid var(--navy);background:var(--navy);color:#fff;border-radius:8px;font:600 13px Inter,sans-serif;cursor:pointer}
+  .btn.ghost{background:#fff;color:var(--navy)}
+  .btn:disabled{opacity:.5;cursor:default}
+  .btn-sm{padding:5px 11px;font-size:12px;border-radius:6px}
+  .btn-ok{border-color:var(--green);background:var(--green)}
+  .btn-no{border-color:var(--border);background:#fff;color:var(--muted)}
+
+  .health{display:flex;gap:.5rem;margin-bottom:.9rem;flex-wrap:wrap}
+  .h-card{background:var(--card);border:1px solid var(--border);border-top:2px solid var(--navy);border-radius:6px;padding:.45rem .9rem;flex:1;min-width:118px}
+  .h-val{font-family:'Genos',sans-serif;font-size:1.4rem;font-weight:800;line-height:1}
+  .h-label{font-size:10px;font-weight:500;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.3px}
+
+  .draft{background:var(--card);border:1px solid var(--border);border-radius:8px;margin-bottom:.8rem;overflow:hidden}
+  .d-head{padding:.7rem .9rem;border-bottom:1px solid var(--border);display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap}
+  .d-client{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--teal)}
+  .d-camp{font-size:14px;font-weight:700;flex:1;min-width:12rem}
+  .d-reason{font-size:11.5px;color:var(--muted)}
+  .steps{padding:.6rem .9rem}
+  .step{border-left:2px solid var(--border);padding:.15rem 0 .55rem .7rem;margin-bottom:.55rem}
+  .step-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:var(--muted);margin-bottom:.3rem}
+  .vari{background:#FAFBFC;border:1px solid var(--border);border-radius:6px;padding:.5rem .6rem;margin-bottom:.4rem}
+  .v-tag{display:inline-block;font-size:9.5px;font-weight:700;background:var(--navy);color:#fff;border-radius:3px;padding:1px 5px;margin-right:.4rem}
+  .v-subj{width:100%;border:1px solid transparent;background:transparent;font:700 13px Inter,sans-serif;padding:2px 4px;border-radius:4px;color:var(--navy-dark)}
+  .v-body{width:100%;border:1px solid transparent;background:transparent;font:400 12.5px/1.6 Inter,sans-serif;padding:4px;border-radius:4px;resize:vertical;min-height:5.5rem;color:#374151}
+  .v-subj:focus,.v-body:focus{border-color:var(--navy);background:#fff;outline:none}
+  .v-subj:hover,.v-body:hover{border-color:var(--border)}
+  .d-foot{padding:.65rem .9rem;border-top:1px solid var(--border);background:#FAFBFC;display:flex;gap:.45rem;align-items:center;flex-wrap:wrap}
+  .lesson{flex:1;min-width:13rem;padding:6px 9px;border:1px solid var(--border);border-radius:6px;font:500 12px Inter,sans-serif}
+  .hint{font-size:10.5px;color:var(--muted);width:100%;line-height:1.45}
+  .edited{font-size:10.5px;font-weight:700;color:var(--amber)}
+  .empty{text-align:center;padding:3.5rem 1rem;color:var(--muted)}
+  .empty .big{font-family:'Genos',sans-serif;font-size:1.6rem;font-weight:800;color:var(--navy);margin-bottom:.3rem}
+  .err{background:#FEE2E2;border:1px solid #FECACA;color:#991B1B;padding:.5rem .7rem;border-radius:6px;font-size:12px;margin-bottom:.6rem}
+  .ok{background:#DCFCE7;border:1px solid #BBF7D0;color:#166534;padding:.5rem .7rem;border-radius:6px;font-size:12px;margin-bottom:.6rem}
+  .note{font-size:11.5px;color:var(--muted);padding:.75rem .9rem;background:#fff;border:1px solid var(--border);border-radius:8px;line-height:1.55;margin-top:1rem}
+</style>
+</head>
+<body>
+<script src="/nav.js" defer></script>
+
+<div class="page">
+  <div class="top-bar">
+    <div>
+      <div class="page-title">Copy Drafts</div>
+      <div class="sub">Written from each client's brief. Read it, change what you want, then send it live.</div>
+    </div>
+    <button class="btn ghost" onclick="load()" id="refreshBtn">↻ Refresh</button>
+    <span id="status" class="sub"></span>
+  </div>
+
+  <div class="health" id="health" style="display:none">
+    <div class="h-card"><div class="h-val" id="hWaiting">—</div><div class="h-label">Waiting on you</div></div>
+    <div class="h-card"><div class="h-val" id="hApplied">—</div><div class="h-label">Sent live (30d)</div></div>
+    <div class="h-card"><div class="h-val" id="hEdit">—</div><div class="h-label">You changed something</div></div>
+    <div class="h-card"><div class="h-val" id="hLessons">—</div><div class="h-label">Lessons taught</div></div>
+  </div>
+
+  <div id="msg"></div>
+  <div id="out" class="empty">Loading…</div>
+
+  <div class="note">
+    Drafts come from the client's brief plus everything you have taught it. When you change something
+    before sending, say why in a line — that is what stops the next draft making the same mistake.
+    The percentage above is worth watching: if it falls to nearly nothing, drafts are going out unread,
+    and the point of reviewing them has quietly gone away.
+  </div>
+</div>
+
+<script>
+let DRAFTS = [];
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function render(){
+  const el = document.getElementById('out');
+  if (!DRAFTS.length) {
+    el.className = 'empty';
+    el.innerHTML = '<div class="big">No drafts waiting</div><div class="sub">New copy appears here when a campaign needs it.</div>';
+    return;
+  }
+  el.className = '';
+  el.innerHTML = DRAFTS.map(d => {
+    const steps = (d.sequence?.steps || []).map(st =>
+      '<div class="step"><div class="step-label">Email ' + st.step +
+        (st.wait_time ? ' &middot; then wait ' + st.wait_time + ' day' + (st.wait_time === 1 ? '' : 's') : '') + '</div>' +
+      (st.variations || []).map(v =>
+        '<div class="vari">' +
+          '<div><span class="v-tag">' + esc(v.variation) + '</span>' +
+          '<input class="v-subj" value="' + esc(v.subject || '') + '" ' +
+            'data-d="' + d.id + '" data-s="' + st.step + '" data-v="' + esc(v.variation) + '" data-f="subject" ' +
+            'oninput="touch(' + d.id + ')"></div>' +
+          '<textarea class="v-body" data-d="' + d.id + '" data-s="' + st.step + '" data-v="' + esc(v.variation) + '" ' +
+            'data-f="body" oninput="touch(' + d.id + ')">' + esc(v.body || '') + '</textarea>' +
+        '</div>').join('') +
+      '</div>').join('');
+    return '<div class="draft" id="d-' + d.id + '">' +
+      '<div class="d-head">' +
+        '<span class="d-client">' + esc(d.workspace_name || d.workspace_id) + '</span>' +
+        '<span class="d-camp">' + esc(d.campaign_name || 'No campaign set') + '</span>' +
+        (d.reason ? '<span class="d-reason">' + esc(d.reason) + '</span>' : '') +
+        '<span class="edited" id="ed-' + d.id + '"></span>' +
+      '</div>' +
+      '<div class="steps">' + steps + '</div>' +
+      '<div class="d-foot">' +
+        '<button class="btn btn-sm btn-ok" onclick="approve(' + d.id + ')">Send it live</button>' +
+        '<button class="btn btn-sm btn-no" onclick="reject(' + d.id + ')">Reject</button>' +
+        '<input class="lesson" id="l-' + d.id + '" placeholder="If you changed or rejected it — why? One line.">' +
+        '<div class="hint">Going live writes these emails straight into the campaign in PlusVibe.</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+const TOUCHED = new Set();
+function touch(id){
+  TOUCHED.add(id);
+  document.getElementById('ed-' + id).textContent = 'edited';
+}
+
+// Read the (possibly edited) sequence back out of the inputs.
+function collect(id){
+  const d = DRAFTS.find(x => x.id === id);
+  if (!d) return null;
+  const seq = JSON.parse(JSON.stringify(d.sequence));
+  document.querySelectorAll('[data-d="' + id + '"]').forEach(inp => {
+    const st = seq.steps.find(s => String(s.step) === inp.dataset.s);
+    if (!st) return;
+    const v = st.variations.find(x => String(x.variation) === inp.dataset.v);
+    if (!v) return;
+    v[inp.dataset.f] = inp.value;
+  });
+  return seq;
+}
+
+function msg(text, ok){
+  document.getElementById('msg').innerHTML =
+    '<div class="' + (ok ? 'ok' : 'err') + '">' + esc(text) + '</div>';
+  if (ok) setTimeout(() => { document.getElementById('msg').innerHTML = ''; }, 5000);
+}
+
+async function approve(id){
+  const card = document.getElementById('d-' + id);
+  const lesson = document.getElementById('l-' + id).value.trim();
+  const edited = TOUCHED.has(id);
+  if (edited && !lesson) {
+    document.getElementById('l-' + id).focus();
+    msg('You changed this one — say why in a few words so the next draft is better.', false);
+    return;
+  }
+  card.style.opacity = '.5';
+  try {
+    const res = await fetch('/api/copy/draft/' + id + '/approve', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ sequence: edited ? collect(id) : undefined, lesson })
+    });
+    const j = await res.json();
+    if (!res.ok) { card.style.opacity = ''; msg(j.error || 'Could not send it', false); return; }
+    DRAFTS = DRAFTS.filter(d => d.id !== id);
+    render(); loadHealth();
+    msg('Live in PlusVibe.', true);
+  } catch (e) { card.style.opacity = ''; msg(e.message, false); }
+}
+
+async function reject(id){
+  const lesson = document.getElementById('l-' + id).value.trim();
+  if (!lesson) {
+    document.getElementById('l-' + id).focus();
+    msg('Say what was wrong with it — that is what stops the next one being wrong the same way.', false);
+    return;
+  }
+  const card = document.getElementById('d-' + id);
+  card.style.opacity = '.5';
+  try {
+    const res = await fetch('/api/copy/draft/' + id + '/reject', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ note: lesson })
+    });
+    const j = await res.json();
+    if (!res.ok) { card.style.opacity = ''; msg(j.error || 'Could not reject it', false); return; }
+    DRAFTS = DRAFTS.filter(d => d.id !== id);
+    render(); loadHealth();
+    msg('Rejected, and the reason is saved.', true);
+  } catch (e) { card.style.opacity = ''; msg(e.message, false); }
+}
+
+async function load(){
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/copy/drafts?status=draft');
+    const j = await res.json();
+    if (!res.ok) throw new Error(j.error || 'Failed to load');
+    DRAFTS = j.rows || [];
+    TOUCHED.clear();
+    render();
+    document.getElementById('status').textContent =
+      DRAFTS.length ? DRAFTS.length + ' waiting' : '';
+  } catch (e) {
+    document.getElementById('out').className = 'empty';
+    document.getElementById('out').textContent = 'Could not load drafts: ' + e.message;
+  } finally { btn.disabled = false; }
+}
+
+async function loadHealth(){
+  try {
+    const res = await fetch('/api/copy/health?days=30');
+    if (!res.ok) return;
+    const j = await res.json();
+    document.getElementById('health').style.display = '';
+    document.getElementById('hWaiting').textContent = DRAFTS.length;
+    document.getElementById('hApplied').textContent = j.applied ?? 0;
+    const er = j.editRatePct;
+    const el = document.getElementById('hEdit');
+    el.textContent = er == null ? '—' : er + '%';
+    el.style.color = er != null && (j.applied || 0) >= 10 && er < 10 ? 'var(--amber)' : '';
+    document.getElementById('hLessons').textContent = j.lessons ?? 0;
+  } catch {}
+}
+
+load().then(loadHealth);
+</script>
+</body>
+</html>

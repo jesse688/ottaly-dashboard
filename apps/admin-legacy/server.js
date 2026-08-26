@@ -18492,6 +18492,15 @@ async function autopilotTick({ dry = false, force = false } = {}) {
           const text = `⚠️ Autopilot — *${state.campaign_name}* (${state.workspace_name}): ${a.message}`;
           if (!dry) postBounceAlertToSlack(text).catch(() => {});
           entry.actions.push({ type: 'alert', kind: a.kind, message: a.message });
+
+          // Copy has stopped working — hand the CM a replacement, not just the
+          // bad news. Collapse only: it is measured against the client's own
+          // baseline, so it means "this used to work and has stopped", which
+          // is precisely when new copy is the answer.
+          if (a.kind === 'collapse' && !dry) {
+            const r = await maybeAutodraft(state, a);
+            entry.actions.push({ type: 'autodraft', ...r });
+          }
           if (a.kind === 'collapse' && s.autoPause && !dry) {
             try {
               const p = await apPauseCampaign(state);
@@ -18569,12 +18578,873 @@ async function autopilotTick({ dry = false, force = false } = {}) {
       }
       result.campaigns.push(entry);
     }
+
+    // Turn this tick into queue rows. Derived from the SAME state Autopilot
+    // just acted on, so the queue can never tell a CM something different from
+    // what the system believes. A dry run measures without writing rows.
+    if (!dry) {
+      try {
+        const seen = new Set();
+        for (const entry of result.campaigns) {
+          const cfg = cfgs[entry.campaign_id];
+          if (!cfg || !cfg.enabled) continue;
+          const st = _apStateCache.get(entry.campaign_id)?.state;
+          if (st) for (const k of qRowsForCampaign(st, cfg, s)) seen.add(k);
+          for (const k of qRowsForActions(entry, cfg)) seen.add(k);
+        }
+        // Close rows whose condition has cleared since we last looked — an
+        // overnight top-up should tidy up after itself.
+        const openKeys = db.prepare(
+          `SELECT DISTINCT dedupe_key FROM cm_queue WHERE status = 'open'`
+        ).all().map(r => r.dedupe_key);
+        const enrolled = new Set(Object.keys(cfgs));
+        const candidates = openKeys.filter(k => enrolled.has(String(k).split(':')[0]));
+        result.queueClosed = qAutoResolve(candidates, seen);
+        result.queueOpen = seen.size;
+      } catch (e) {
+        result.errors.push(`queue: ${e.message}`);
+      }
+    }
+
     if (!dry) apSaveRunState({ at: result.ran_at, campaigns: result.campaigns.length, errors: result.errors.length });
   } finally {
     _apTickRunning = false;
   }
   return result;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CM QUEUE
+//
+// One ranked list of decisions across a CM's clients. Autopilot already
+// MEASURES everything and already emits structured actions; until now those
+// went to Slack (easy to miss) and a JSON blob (nobody opens). The queue gives
+// them somewhere to land where a person can act on them.
+//
+// Rules of the road, learned from the pages nobody opened:
+//   • A row is a DECISION, never a statistic. If there is nothing to do about
+//     it, it does not belong here — it belongs on a stats page.
+//   • A row carries the work already done. "Reply rate collapsed" is a fact;
+//     "reply rate collapsed, here is the campaign and the numbers" is a row.
+//   • Rows are DERIVED from the same measurements Autopilot acts on, never
+//     invented separately, so the queue and Autopilot can never disagree.
+//   • New signals become new row KINDS here. They never become new pages.
+// ═══════════════════════════════════════════════════════════════════════════
+
+db.exec(`CREATE TABLE IF NOT EXISTS cm_queue (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  dedupe_key    TEXT NOT NULL,
+  kind          TEXT NOT NULL,
+  workspace_id  TEXT,
+  workspace_name TEXT,
+  campaign_id   TEXT,
+  campaign_name TEXT,
+  provider      TEXT,
+  severity      INTEGER NOT NULL DEFAULT 50,
+  headline      TEXT NOT NULL,
+  detail        TEXT,
+  evidence      TEXT,
+  status        TEXT NOT NULL DEFAULT 'open',
+  decided_by    TEXT,
+  decided_at    TEXT,
+  decision_note TEXT,
+  was_edited    INTEGER NOT NULL DEFAULT 0,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
+// One OPEN row per (dedupe_key). A tick that re-observes the same condition
+// refreshes the existing row rather than stacking duplicates — otherwise an
+// hourly tick would produce 24 identical "running dry" rows a day and the
+// queue would train people to ignore it within a week.
+try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_cm_queue_open
+  ON cm_queue(dedupe_key) WHERE status = 'open'`); } catch {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_cm_queue_status ON cm_queue(status, severity DESC)`); } catch {}
+
+// Severity drives ranking. Deliberately coarse — a CM should be able to guess
+// why a row is where it is without reading a manual.
+const QUEUE_SEVERITY = Object.freeze({
+  collapse:   90,  // replies fell off a cliff vs this client's own baseline
+  starved:    80,  // wanted to top up, no contacts available — client will go dry
+  dry:        70,  // a provider is out or nearly out of contacts
+  silence:    60,  // sent a lot, heard nothing back
+  no_filter:  40,  // enrolled but unusable — needs a human to set an audience
+  push_error: 85,  // a top-up actually failed
+});
+
+function qUpsertRow(row) {
+  const existing = db.prepare(
+    `SELECT id FROM cm_queue WHERE dedupe_key = ? AND status = 'open'`
+  ).get(row.dedupe_key);
+  if (existing) {
+    // Refresh the numbers on the row already sitting in someone's queue. The
+    // condition has not gone away; the measurement may have moved.
+    db.prepare(`UPDATE cm_queue
+      SET headline = ?, detail = ?, evidence = ?, severity = ?, updated_at = datetime('now')
+      WHERE id = ?`)
+      .run(row.headline, row.detail || null, JSON.stringify(row.evidence || {}), row.severity, existing.id);
+    return { id: existing.id, created: false };
+  }
+  const r = db.prepare(`INSERT INTO cm_queue
+    (dedupe_key, kind, workspace_id, workspace_name, campaign_id, campaign_name,
+     provider, severity, headline, detail, evidence)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(row.dedupe_key, row.kind, row.workspace_id || null, row.workspace_name || null,
+         row.campaign_id || null, row.campaign_name || null, row.provider || null,
+         row.severity, row.headline, row.detail || null, JSON.stringify(row.evidence || {}));
+  return { id: r.lastInsertRowid, created: true };
+}
+
+// A condition that has resolved itself should not keep sitting in the queue.
+// Autopilot topped the campaign up overnight? The "running dry" row closes on
+// its own and nobody has to tidy up. Self-healing rows are the difference
+// between a queue people trust and a to-do list that only grows.
+function qAutoResolve(dedupeKeys, seenKeys) {
+  if (!dedupeKeys.length) return 0;
+  let closed = 0;
+  const stmt = db.prepare(`UPDATE cm_queue
+    SET status = 'resolved', decided_by = 'system', decided_at = datetime('now'),
+        decision_note = 'condition cleared', updated_at = datetime('now')
+    WHERE dedupe_key = ? AND status = 'open'`);
+  for (const k of dedupeKeys) {
+    if (seenKeys.has(k)) continue;
+    closed += stmt.run(k).changes;
+  }
+  return closed;
+}
+
+// Turn one campaign's measured state into queue rows. Pure-ish: reads state,
+// writes rows, returns the dedupe keys it produced so the caller can close
+// anything that has cleared.
+function qRowsForCampaign(state, cfg, s) {
+  const keys = [];
+  const base = {
+    workspace_id: state.workspace_id || cfg.workspace_id,
+    workspace_name: state.workspace_name || cfg.workspace_name,
+    campaign_id: state.campaign_id,
+    campaign_name: state.campaign_name || cfg.campaign_name,
+  };
+
+  // 1. Reply-health alerts — the same ones that Slack gets.
+  for (const a of (state.alerts || [])) {
+    const kind = a.kind === 'collapse' ? 'collapse' : 'silence';
+    const key = `${base.campaign_id}:${kind}`;
+    keys.push(key);
+    // If a replacement sequence is already written and waiting, say so on the
+    // row. A row that carries the finished work is the whole point; a row that
+    // only reports a problem is the kind of thing people stop opening.
+    let draft = null;
+    try {
+      draft = db.prepare(
+        `SELECT id FROM copy_drafts WHERE campaign_id = ? AND status = 'draft'
+         ORDER BY created_at DESC LIMIT 1`
+      ).get(base.campaign_id) || null;
+    } catch { /* the queue must render even if this lookup fails */ }
+    qUpsertRow({
+      ...base, dedupe_key: key, kind,
+      severity: QUEUE_SEVERITY[kind] ?? 60,
+      headline: a.kind === 'collapse'
+        ? `Reply rate collapsed — ${base.campaign_name}`
+        : `No replies — ${base.campaign_name}`,
+      detail: a.message + (draft ? ' — new copy is written and waiting for you to read it.' : ''),
+      evidence: { alert: a, runwayDays: state.runwayDays, worstProvider: state.worstProvider,
+                  draft_id: draft?.id || null },
+    });
+  }
+
+  // 2. Per-provider supply. ESP matching means a campaign can be dry for
+  //    Google senders while looking healthy in total — so this is per provider,
+  //    exactly as Autopilot judges it.
+  for (const b of AP_BUCKETS) {
+    const p = state.providers?.[b];
+    if (!p) continue;
+    const empty = p.remaining === 0 && p.floor > 0;
+    const low = p.runwayDays != null && p.runwayDays < s.topUpBelowDays;
+    if (!empty && !low && !p.belowFloor) continue;
+    const key = `${base.campaign_id}:dry:${b}`;
+    keys.push(key);
+    qUpsertRow({
+      ...base, dedupe_key: key, kind: 'dry', provider: b,
+      severity: empty ? QUEUE_SEVERITY.dry + 10 : QUEUE_SEVERITY.dry,
+      headline: `${AP_BUCKET_LABEL[b] || b} contacts running out — ${base.campaign_name}`,
+      detail: empty
+        ? `No ${AP_BUCKET_LABEL[b] || b} contacts left. Senders for this provider have nothing to send.`
+        : `${p.remaining} left, about ${p.runwayDays == null ? '?' : Number(p.runwayDays).toFixed(1)} days at the current rate.`,
+      evidence: { provider: b, ...p },
+    });
+  }
+
+  // 3. Enrolled but unusable. Autopilot refuses to push without a captured
+  //    audience filter, and silently skipping it is how a client goes quiet
+  //    for a fortnight with nobody noticing.
+  if (!cfg.filter) {
+    const key = `${base.campaign_id}:no_filter`;
+    keys.push(key);
+    qUpsertRow({
+      ...base, dedupe_key: key, kind: 'no_filter',
+      severity: QUEUE_SEVERITY.no_filter,
+      headline: `No audience set — ${base.campaign_name}`,
+      detail: 'Autopilot is switched on for this campaign but has no contact filter, so it will never top it up. Set one on the Autopilot page.',
+      evidence: {},
+    });
+  }
+  return keys;
+}
+
+// Rows that come out of a tick's ACTIONS rather than its state — things that
+// were attempted and did not work. These matter more than the measurements,
+// because they represent work the system tried and failed to do for you.
+function qRowsForActions(entry, cfg) {
+  const keys = [];
+  const base = {
+    workspace_id: cfg.workspace_id,
+    workspace_name: cfg.workspace_name,
+    campaign_id: entry.campaign_id,
+    campaign_name: entry.campaign_name,
+  };
+  for (const a of (entry.actions || [])) {
+    if (a.type === 'starved') {
+      const key = `${base.campaign_id}:starved:${a.provider}`;
+      keys.push(key);
+      qUpsertRow({
+        ...base, dedupe_key: key, kind: 'starved', provider: a.provider,
+        severity: QUEUE_SEVERITY.starved,
+        headline: `Out of ${AP_BUCKET_LABEL[a.provider] || a.provider} contacts to send — ${base.campaign_name}`,
+        detail: 'Autopilot tried to top this campaign up and found nothing matching its filter. The contact pool for this audience is exhausted — it needs new data or a wider filter.',
+        evidence: a,
+      });
+    }
+    if (a.type === 'push' && a.error) {
+      const key = `${base.campaign_id}:push_error:${a.provider}`;
+      keys.push(key);
+      qUpsertRow({
+        ...base, dedupe_key: key, kind: 'push_error', provider: a.provider,
+        severity: QUEUE_SEVERITY.push_error,
+        headline: `Top-up failed — ${base.campaign_name}`,
+        detail: a.error,
+        evidence: a,
+      });
+    }
+  }
+  return keys;
+}
+
+// Which clients does this session see? Admins see everything; a manager sees
+// the clients assigned to them. Scoping matters more than it looks: a queue
+// showing another CM's clients is a queue you learn to skim.
+function qScopeWorkspaces(req) {
+  const s = decodeSession(req);
+  if (!s || s.role === 'admin') return null; // null = no restriction
+  try {
+    const rows = db.prepare(
+      `SELECT client_workspace_id FROM client_managers
+       WHERE manager_name = ? AND (end_date IS NULL OR end_date > date('now'))`
+    ).all(s.name);
+    return rows.map(r => r.client_workspace_id);
+  } catch { return null; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CLIENT MEMORY + COPY LOOP
+//
+// The memory file is what makes a draft sound like THIS client rather than
+// like a language model. It holds the durable things — offer, who it is for,
+// proof, objections, voice rules, disqualifiers — plus the LESSONS a CM
+// teaches it by editing and skipping drafts.
+//
+// Two deliberate constraints, both learned the hard way elsewhere:
+//
+//   Lessons are APPEND-ONLY and attributed. A model that rewrites its own
+//   brief will quietly drift, and when the copy goes bad six months later
+//   nobody can tell which edit did it. Every lesson keeps who said it and
+//   when, and a human can retire one.
+//
+//   Nothing is auto-extracted into the brief. The CM's own words are stored
+//   verbatim. Inferring "the lesson" from a diff sounds clever and is how you
+//   poison a brief with a typo fix promoted to a rule.
+// ═══════════════════════════════════════════════════════════════════════════
+
+db.exec(`CREATE TABLE IF NOT EXISTS client_memory (
+  workspace_id   TEXT PRIMARY KEY,
+  offer          TEXT,
+  icp            TEXT,
+  proof          TEXT,
+  objections     TEXT,
+  voice          TEXT,
+  disqualifiers  TEXT,
+  updated_by     TEXT,
+  updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
+
+db.exec(`CREATE TABLE IF NOT EXISTS client_memory_lessons (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  workspace_id TEXT NOT NULL,
+  lesson       TEXT NOT NULL,
+  source       TEXT,
+  draft_id     INTEGER,
+  author       TEXT,
+  active       INTEGER NOT NULL DEFAULT 1,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_lessons_ws ON client_memory_lessons(workspace_id, active)`); } catch {}
+
+db.exec(`CREATE TABLE IF NOT EXISTS copy_drafts (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  workspace_id   TEXT NOT NULL,
+  workspace_name TEXT,
+  campaign_id    TEXT,
+  campaign_name  TEXT,
+  reason         TEXT,
+  model          TEXT,
+  generated      TEXT NOT NULL,
+  edited         TEXT,
+  status         TEXT NOT NULL DEFAULT 'draft',
+  decided_by     TEXT,
+  decided_at     TEXT,
+  decision_note  TEXT,
+  pv_response    TEXT,
+  cost_usd       REAL DEFAULT 0,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_drafts_status ON copy_drafts(status, created_at DESC)`); } catch {}
+
+// ── Auto-drafting ──────────────────────────────────────────────────────────
+// When copy stops working, the queue should hand over a replacement rather
+// than a diagnosis. This is the only place the system spends money on its own,
+// so it is fenced in:
+//
+//   • Only on a COLLAPSE (measured against the client's own baseline), never
+//     on silence — silence at low volume is noise, and a campaign that has
+//     never worked needs a human, not another draft.
+//   • One auto-draft per campaign per cooldown window. Without this an hourly
+//     tick would bill for a fresh sequence every hour of a bad week.
+//   • Never when a draft for that campaign is already waiting to be read.
+//     Two unread drafts is worse than one.
+//   • Never without a usable brief. It would produce generic copy and teach
+//     the CM to distrust the whole thing.
+//   • Failures are swallowed. A model outage must not break the tick that
+//     keeps campaigns stocked.
+const AUTODRAFT_COOLDOWN_HOURS = 72;
+
+function autodraftAllowed(workspaceId, campaignId) {
+  const waiting = db.prepare(
+    `SELECT 1 FROM copy_drafts WHERE campaign_id = ? AND status IN ('draft','applying') LIMIT 1`
+  ).get(campaignId);
+  if (waiting) return { ok: false, why: 'a draft for this campaign is already waiting' };
+  const recent = db.prepare(
+    `SELECT created_at FROM copy_drafts
+     WHERE campaign_id = ? AND created_at > datetime('now', ?)
+     ORDER BY created_at DESC LIMIT 1`
+  ).get(campaignId, `-${AUTODRAFT_COOLDOWN_HOURS} hours`);
+  if (recent) return { ok: false, why: `already drafted for this campaign in the last ${AUTODRAFT_COOLDOWN_HOURS}h` };
+  const m = memoryFor(workspaceId);
+  const done = memoryCompleteness(m);
+  if (!done.ready) return { ok: false, why: `brief is only ${done.pct}% complete` };
+  return { ok: true };
+}
+
+async function maybeAutodraft(state, alert) {
+  const gate = autodraftAllowed(state.workspace_id, state.campaign_id);
+  if (!gate.ok) return { skipped: gate.why };
+  try {
+    const out = await generateCopyDraft({
+      workspaceId: state.workspace_id,
+      workspaceName: state.workspace_name,
+      campaignId: state.campaign_id,
+      campaignName: state.campaign_name,
+      reason: alert.message,
+      steps: 2, variations: 2,
+    });
+    return { drafted: out.id, cost: out.cost };
+  } catch (e) {
+    // Best effort by design — the tick's real job is keeping campaigns
+    // stocked, and that must survive a model outage.
+    console.warn(`[autodraft] ${state.campaign_id}: ${e.message}`);
+    return { error: e.message };
+  }
+}
+
+function memoryFor(workspaceId) {
+  const m = db.prepare('SELECT * FROM client_memory WHERE workspace_id = ?').get(workspaceId) || { workspace_id: workspaceId };
+  const lessons = db.prepare(
+    `SELECT lesson, author, created_at FROM client_memory_lessons
+     WHERE workspace_id = ? AND active = 1 ORDER BY created_at DESC LIMIT 60`
+  ).all(workspaceId);
+  return { ...m, lessons };
+}
+
+// How complete is this brief? A thin brief produces generic copy, the CM
+// concludes the AI is useless in week one, and that first impression is close
+// to irreversible — so say so BEFORE drafting rather than after.
+function memoryCompleteness(m) {
+  const fields = ['offer', 'icp', 'proof', 'objections', 'voice'];
+  const filled = fields.filter(f => (m[f] || '').trim().length >= 20);
+  return {
+    pct: Math.round((filled.length / fields.length) * 100),
+    missing: fields.filter(f => !((m[f] || '').trim().length >= 20)),
+    ready: filled.length >= 3,
+  };
+}
+
+const COPY_SYSTEM_PROMPT = `You write cold outreach email sequences for a UK B2B lead generation agency.
+
+You are given a client brief and lessons their campaign manager has taught you. Follow both exactly. The lessons override the brief where they conflict — they are more recent and come from a human who saw the results.
+
+Hard rules:
+- Write for deliverability first. Plain text. No images, no links unless the brief asks, no attachments.
+- No spam-trigger phrasing: no "guaranteed", no ALL CAPS, no exclamation marks, no "act now", no fake urgency, no "quick question" as a subject.
+- Subject lines: lower case or sentence case, under 45 characters, specific, no clickbait.
+- Short. A first email is 60-110 words. Follow-ups are shorter still.
+- Sound like one person emailing another. No marketing voice, no "I hope this email finds you well", no "I wanted to reach out".
+- Never invent proof, numbers, case studies or client names. Use only what the brief supplies. If the brief has no proof, write without it.
+- British English.
+- Use {{first_name}} for the recipient's first name. Do not use any other merge field unless the brief names one.
+
+Each variation must take a genuinely different angle — a different reason to care, not the same email reworded. Two variations that differ only in phrasing are worthless for testing and read as templated to spam filters.
+
+Return ONLY valid JSON, no prose, no code fence:
+{"steps":[{"step":1,"wait_time":3,"variations":[{"variation":"A","name":"short label","subject":"...","body":"..."},{"variation":"B","name":"short label","subject":"...","body":"..."}]},{"step":2,"wait_time":3,"variations":[...]}]}
+
+Body is plain text with \\n for line breaks. Sign off with the sender name from the brief if given, otherwise no sign-off block.`;
+
+function buildCopyUserPrompt(m, opts) {
+  const L = [];
+  L.push(`Client: ${opts.workspace_name || m.workspace_id}`);
+  if (m.offer) L.push(`\nWhat they sell:\n${m.offer}`);
+  if (m.icp) L.push(`\nWho they want to reach:\n${m.icp}`);
+  if (m.proof) L.push(`\nProof they can use (use ONLY this, invent nothing):\n${m.proof}`);
+  if (m.objections) L.push(`\nObjections that come back:\n${m.objections}`);
+  if (m.voice) L.push(`\nVoice rules:\n${m.voice}`);
+  if (m.disqualifiers) L.push(`\nNot a fit / never claim:\n${m.disqualifiers}`);
+  if (m.lessons?.length) {
+    L.push(`\nLessons from their campaign manager (most recent first — these override the brief):`);
+    for (const l of m.lessons) L.push(`- ${l.lesson}`);
+  }
+  if (opts.avoid?.length) {
+    L.push(`\nAngles already used and now burnt — take a different one:`);
+    for (const a of opts.avoid) L.push(`- ${a}`);
+  }
+  if (opts.reason) L.push(`\nWhy new copy is needed: ${opts.reason}`);
+  L.push(`\nWrite ${opts.steps || 2} steps, ${opts.variations || 2} variations each.`);
+  return L.join('\n');
+}
+
+// The best model available, not the cheapest. A sequence costs ~5p to draft on
+// Opus versus ~2p on Sonnet; at 50 clients redrafting weekly that is £11/month
+// against £4. Set against one sequence that lands better for one client, the
+// difference is not worth thinking about — so it is not optimised for.
+const COPY_MODEL = process.env.COPY_MODEL || 'claude-opus-5';
+const OPUS_PRICE = { input: 5.00, output: 25.00, cache_write: 6.25, cache_read: 0.50 };
+
+async function generateCopyDraft({ workspaceId, workspaceName, campaignId, campaignName, reason, steps, variations }) {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) throw new Error('ANTHROPIC_API_KEY is not set — cannot draft copy');
+  const m = memoryFor(workspaceId);
+  const done = memoryCompleteness(m);
+  if (!done.ready) {
+    throw new Error(`This client's brief is too thin to draft from (${done.pct}% complete, missing: ${done.missing.join(', ')}). Fill it in first — a thin brief produces generic copy.`);
+  }
+  // What has already been tried, so a redraft does not resurrect a burnt angle.
+  let avoid = [];
+  try {
+    avoid = db.prepare(
+      `SELECT DISTINCT json_extract(value, '$.name') AS n
+       FROM copy_drafts, json_each(json_extract(COALESCE(edited, generated), '$.steps'))
+       WHERE workspace_id = ? AND status = 'applied' LIMIT 12`
+    ).all(workspaceId).map(r => r.n).filter(Boolean);
+  } catch { /* best effort — an empty avoid list is fine */ }
+
+  const userPrompt = buildCopyUserPrompt({ ...m, workspace_name: workspaceName },
+    { workspace_name: workspaceName, reason, steps, variations, avoid });
+
+  // The system prompt is stable and the brief is not, so the prompt goes in
+  // that order and the cache breakpoint sits on the system block — every draft
+  // for every client reuses it.
+  const req = () => fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json', 'x-api-key': key,
+      'anthropic-version': '2023-06-01', 'anthropic-beta': 'prompt-caching-2024-07-31',
+    },
+    body: JSON.stringify({
+      model: COPY_MODEL,
+      max_tokens: 8000,
+      // Writing copy that has to beat spam filters and sound like a specific
+      // person is exactly the kind of task thinking helps with.
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'high' },
+      system: [{ type: 'text', text: COPY_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
+      messages: [{ role: 'user', content: userPrompt }],
+    }),
+  });
+  let r = await req();
+  if (!r.ok && (r.status === 429 || r.status >= 500)) {
+    await new Promise(res => setTimeout(res, 2500));
+    r = await req();
+  }
+  if (!r.ok) throw new Error(`Claude ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const j = await r.json();
+  // A safety refusal returns HTTP 200 with stop_reason 'refusal', so it has to
+  // be checked explicitly or it looks like an empty draft.
+  if (j?.stop_reason === 'refusal') {
+    throw new Error('The model declined to write this one. Check the brief for anything that reads as misleading.');
+  }
+  const u = j?.usage || {};
+  const cost = ((u.input_tokens || 0) * OPUS_PRICE.input + (u.output_tokens || 0) * OPUS_PRICE.output +
+    (u.cache_creation_input_tokens || 0) * OPUS_PRICE.cache_write +
+    (u.cache_read_input_tokens || 0) * OPUS_PRICE.cache_read) / 1_000_000;
+  // With thinking on, the response carries thinking blocks before the text —
+  // taking content[0] blindly would hand JSON.parse a reasoning summary.
+  const text = ((j?.content || []).filter(b => b.type === 'text').map(b => b.text).join('') || '')
+    .replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  let parsed;
+  try { parsed = JSON.parse(text); } catch { throw new Error('The model did not return usable JSON. Try again.'); }
+  const bad = validateSequence(parsed);
+  if (bad) throw new Error(`Draft rejected: ${bad}`);
+
+  const ins = db.prepare(`INSERT INTO copy_drafts
+    (workspace_id, workspace_name, campaign_id, campaign_name, reason, model, generated, cost_usd)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(workspaceId, workspaceName || null, campaignId || null, campaignName || null,
+         reason || null, COPY_MODEL, JSON.stringify(parsed), cost);
+  return { id: ins.lastInsertRowid, sequence: parsed, cost, completeness: done };
+}
+
+// Structural gate before anything reaches a human, let alone PlusVibe. Cheap,
+// and it catches the model's failure modes (empty body, missing subject, a
+// merge field nobody defined) without spending a CM's attention on them.
+function validateSequence(seq) {
+  if (!seq || !Array.isArray(seq.steps) || !seq.steps.length) return 'no steps';
+  for (const s of seq.steps) {
+    if (!Number.isFinite(s.step)) return 'a step has no number';
+    if (!Number.isFinite(s.wait_time) || s.wait_time < 1) return `step ${s.step} has an invalid wait time`;
+    if (!Array.isArray(s.variations) || !s.variations.length) return `step ${s.step} has no variations`;
+    for (const v of s.variations) {
+      if (!v.variation) return `step ${s.step} has a variation with no letter`;
+      if (!v.subject || !v.subject.trim()) return `step ${s.step}${v.variation} has no subject`;
+      if (!v.body || v.body.trim().length < 20) return `step ${s.step}${v.variation} has no real body`;
+      if (v.subject.length > 120) return `step ${s.step}${v.variation} subject is too long`;
+      const merge = String(v.body + v.subject).match(/\{\{\s*([a-z_]+)\s*\}\}/gi) || [];
+      for (const t of merge) {
+        if (!/first_name|last_name|company|company_name/i.test(t)) {
+          return `step ${s.step}${v.variation} uses ${t}, which may not exist on the lead`;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// Clients this session may write briefs for. /api/my-clients is manager-only
+// and returns nothing for an admin, which would leave the brief page with an
+// empty dropdown for the person most likely to be filling briefs in.
+app.get('/api/brief/clients', requireSession, (req, res) => {
+  try {
+    const s = decodeSession(req);
+    const rows = (s?.role === 'admin')
+      ? db.prepare(`SELECT workspace_id, workspace_name FROM clients ORDER BY workspace_name`).all()
+      : db.prepare(`SELECT c.workspace_id, c.workspace_name
+                    FROM client_managers cm
+                    JOIN clients c ON c.workspace_id = cm.client_workspace_id
+                    WHERE cm.manager_name = ? AND (cm.end_date IS NULL OR cm.end_date > date('now'))
+                    ORDER BY c.workspace_name`).all(s?.name || '');
+    // Flag which briefs are already usable, so a CM can see at a glance where
+    // the gaps are instead of clicking through every client to find out.
+    const filled = new Set(db.prepare(
+      `SELECT workspace_id FROM client_memory
+       WHERE LENGTH(COALESCE(offer,'')) >= 20 AND LENGTH(COALESCE(icp,'')) >= 20`
+    ).all().map(r => r.workspace_id));
+    res.json({ clients: rows.map(r => ({ ...r, has_brief: filled.has(r.workspace_id) })) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Client memory HTTP surface ─────────────────────────────────────────────
+app.get('/api/memory/:workspaceId', requireSession, (req, res) => {
+  try {
+    const m = memoryFor(req.params.workspaceId);
+    res.json({ memory: m, completeness: memoryCompleteness(m) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/memory/:workspaceId', requireSession, (req, res) => {
+  try {
+    const s = decodeSession(req);
+    const ws = req.params.workspaceId;
+    const f = ['offer', 'icp', 'proof', 'objections', 'voice', 'disqualifiers'];
+    const vals = f.map(k => (req.body?.[k] ?? '').toString().slice(0, 8000));
+    db.prepare(`INSERT INTO client_memory (workspace_id, offer, icp, proof, objections, voice, disqualifiers, updated_by, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(workspace_id) DO UPDATE SET
+        offer=excluded.offer, icp=excluded.icp, proof=excluded.proof,
+        objections=excluded.objections, voice=excluded.voice,
+        disqualifiers=excluded.disqualifiers, updated_by=excluded.updated_by,
+        updated_at=datetime('now')`)
+      .run(ws, ...vals, s?.name || 'unknown');
+    const m = memoryFor(ws);
+    res.json({ ok: true, completeness: memoryCompleteness(m) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/memory/:workspaceId/lesson', requireSession, (req, res) => {
+  try {
+    const s = decodeSession(req);
+    const lesson = (req.body?.lesson || '').toString().trim().slice(0, 500);
+    if (!lesson) return res.status(400).json({ error: 'Say what the lesson is' });
+    db.prepare(`INSERT INTO client_memory_lessons (workspace_id, lesson, source, draft_id, author)
+      VALUES (?, ?, ?, ?, ?)`)
+      .run(req.params.workspaceId, lesson, req.body?.source || 'manual',
+           req.body?.draft_id || null, s?.name || 'unknown');
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Retire a lesson. Lessons are append-only, so this flips active rather than
+// deleting — the record of what was once believed stays readable.
+app.post('/api/memory/lesson/:id/retire', requireSession, (req, res) => {
+  try {
+    const r = db.prepare('UPDATE client_memory_lessons SET active = 0 WHERE id = ? AND active = 1').run(Number(req.params.id));
+    res.json({ ok: true, changed: r.changes });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Copy draft HTTP surface ────────────────────────────────────────────────
+app.post('/api/copy/draft', requireSession, async (req, res) => {
+  try {
+    const out = await generateCopyDraft({
+      workspaceId: req.body?.workspace_id,
+      workspaceName: req.body?.workspace_name,
+      campaignId: req.body?.campaign_id,
+      campaignName: req.body?.campaign_name,
+      reason: req.body?.reason,
+      steps: Math.min(Number(req.body?.steps) || 2, 5),
+      variations: Math.min(Number(req.body?.variations) || 2, 3),
+    });
+    res.json(out);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.get('/api/copy/drafts', requireSession, (req, res) => {
+  try {
+    const status = req.query.status || 'draft';
+    const rows = db.prepare(
+      `SELECT id, workspace_id, workspace_name, campaign_id, campaign_name, reason,
+              status, decided_by, decided_at, cost_usd, created_at,
+              COALESCE(edited, generated) AS sequence
+       FROM copy_drafts WHERE status = ? ORDER BY created_at DESC LIMIT 100`
+    ).all(status).map(r => ({ ...r, sequence: JSON.parse(r.sequence) }));
+    res.json({ rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Approve a draft: write it into PlusVibe, live.
+//
+// The whole safety model rests on this being deliberate, so it records whether
+// the CM changed anything before approving. If that ratio collapses toward
+// zero the approval step has become a rubber stamp and this is an unsupervised
+// autosender — see /api/copy/health.
+app.post('/api/copy/draft/:id/approve', requireSession, async (req, res) => {
+  const id = Number(req.params.id);
+  const s = decodeSession(req);
+  try {
+    const row = db.prepare('SELECT * FROM copy_drafts WHERE id = ?').get(id);
+    if (!row) return res.status(404).json({ error: 'No such draft' });
+    if (row.status !== 'draft') return res.status(409).json({ error: `Already ${row.status}` });
+    if (!row.campaign_id) return res.status(400).json({ error: 'This draft has no campaign to write to' });
+
+    const edited = req.body?.sequence ? JSON.stringify(req.body.sequence) : null;
+    if (edited) {
+      const bad = validateSequence(req.body.sequence);
+      if (bad) return res.status(400).json({ error: `Cannot send that: ${bad}` });
+    }
+    const finalSeq = JSON.parse(edited || row.generated);
+    const wasEdited = edited && edited !== row.generated;
+
+    // Claim the draft BEFORE calling PlusVibe. Two people hitting Approve, or
+    // one double-click, must not produce two writes into a live campaign.
+    const claim = db.prepare(
+      `UPDATE copy_drafts SET status = 'applying', decided_by = ?, decided_at = datetime('now'),
+       edited = COALESCE(?, edited) WHERE id = ? AND status = 'draft'`
+    ).run(s?.name || 'unknown', edited, id);
+    if (!claim.changes) return res.status(409).json({ error: 'Someone just approved this' });
+
+    try {
+      const pvBody = {
+        // Both required in the BODY per the API spec, even though pvApi also
+        // puts workspace_id on the query string.
+        workspace_id: row.workspace_id,
+        campaign_id: row.campaign_id,
+        sequences: finalSeq.steps.map(st => ({
+          step: st.step,
+          wait_time: st.wait_time,
+          variations: st.variations.map(v => ({
+            variation: v.variation,
+            name: v.name || `${st.step}${v.variation}`,
+            subject: v.subject,
+            // PlusVibe stores HTML. Plain text with newlines becomes one run-on
+            // paragraph, so convert here rather than asking the model for HTML
+            // (which invites styling we do not want in a cold email).
+            body: v.body.split(/\n{2,}/).map(p => `<p>${p.replace(/\n/g, '<br>')}</p>`).join(''),
+          })),
+        })),
+      };
+      const pvRes = await pvApi('/campaign/update/campaign', {
+        method: 'PATCH', wsId: row.workspace_id, body: pvBody,
+      });
+      db.prepare(`UPDATE copy_drafts SET status = 'applied', pv_response = ? WHERE id = ?`)
+        .run(JSON.stringify(pvRes || {}).slice(0, 4000), id);
+
+      // A CM's edit is the most valuable signal in the system, but inferring
+      // the lesson from a diff is how a brief gets poisoned. Ask for it in
+      // their words instead; store only what they actually wrote.
+      const lesson = (req.body?.lesson || '').toString().trim().slice(0, 500);
+      if (lesson) {
+        db.prepare(`INSERT INTO client_memory_lessons (workspace_id, lesson, source, draft_id, author)
+          VALUES (?, ?, 'edit', ?, ?)`).run(row.workspace_id, lesson, id, s?.name || 'unknown');
+      }
+      res.json({ ok: true, edited: !!wasEdited, lessonSaved: !!lesson });
+    } catch (e) {
+      // Put it back so the CM can retry rather than losing the draft.
+      db.prepare(`UPDATE copy_drafts SET status = 'draft', decided_by = NULL, decided_at = NULL WHERE id = ?`).run(id);
+      res.status(502).json({ error: `PlusVibe refused the write: ${e.message}` });
+    }
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/copy/draft/:id/reject', requireSession, (req, res) => {
+  try {
+    const s = decodeSession(req);
+    const note = (req.body?.note || '').toString().trim().slice(0, 500);
+    if (!note) return res.status(400).json({ error: 'Say what was wrong with it — that is what stops the next one being wrong the same way.' });
+    const r = db.prepare(`UPDATE copy_drafts SET status = 'rejected', decided_by = ?, decided_at = datetime('now'),
+      decision_note = ? WHERE id = ? AND status = 'draft'`).run(s?.name || 'unknown', note, Number(req.params.id));
+    if (!r.changes) return res.status(409).json({ error: 'That draft has already been decided' });
+    const row = db.prepare('SELECT workspace_id FROM copy_drafts WHERE id = ?').get(Number(req.params.id));
+    if (row) {
+      db.prepare(`INSERT INTO client_memory_lessons (workspace_id, lesson, source, draft_id, author)
+        VALUES (?, ?, 'reject', ?, ?)`).run(row.workspace_id, note, Number(req.params.id), s?.name || 'unknown');
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Is the approval gate real? Same question as the queue's, asked of copy —
+// where the blast radius is a client's live sending rather than a task list.
+app.get('/api/copy/health', requireSession, (req, res) => {
+  try {
+    const days = Math.min(Number(req.query.days) || 30, 120);
+    const since = `-${days} days`;
+    const d = db.prepare(`SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN status='applied' THEN 1 ELSE 0 END) AS applied,
+        SUM(CASE WHEN status='rejected' THEN 1 ELSE 0 END) AS rejected,
+        SUM(CASE WHEN status='applied' AND edited IS NOT NULL AND edited <> generated THEN 1 ELSE 0 END) AS applied_edited,
+        ROUND(SUM(cost_usd), 4) AS cost
+      FROM copy_drafts WHERE created_at > datetime('now', ?)`).get(since);
+    const applied = d?.applied || 0;
+    res.json({
+      days, ...d,
+      // Below ~10% with a decent sample means drafts are going out unread.
+      editRatePct: applied ? Math.round(((d.applied_edited || 0) / applied) * 1000) / 10 : null,
+      lessons: db.prepare(`SELECT COUNT(*) n FROM client_memory_lessons WHERE active = 1`).get()?.n || 0,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── CM Queue HTTP surface ──────────────────────────────────────────────────
+app.get('/api/queue', requireSession, (req, res) => {
+  try {
+    const status = req.query.status || 'open';
+    const scope = qScopeWorkspaces(req);
+    let sql = `SELECT * FROM cm_queue WHERE status = ?`;
+    const params = [status];
+    if (scope && scope.length) {
+      sql += ` AND workspace_id IN (${scope.map(() => '?').join(',')})`;
+      params.push(...scope);
+    } else if (scope && !scope.length) {
+      return res.json({ rows: [], scoped: true, note: 'No clients assigned to you' });
+    }
+    if (req.query.mine === '0') { /* admin viewing all — no-op, scope already null */ }
+    sql += ` ORDER BY severity DESC, created_at ASC LIMIT 200`;
+    const rows = db.prepare(sql).all(...params).map(r => ({
+      ...r,
+      evidence: (() => { try { return JSON.parse(r.evidence || '{}'); } catch { return {}; } })(),
+      age_hours: Math.round((Date.now() - new Date(r.created_at + 'Z').getTime()) / 36e5),
+    }));
+    res.json({ rows, scoped: !!scope });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Decide a row. The conditional UPDATE on status is the idempotency guard: a
+// double-click, a retried request, or two CMs hitting Approve at once all
+// result in exactly one decision, and the loser is told so rather than
+// silently succeeding.
+app.post('/api/queue/:id/decide', requireSession, (req, res) => {
+  try {
+    const s = decodeSession(req);
+    const id = Number(req.params.id);
+    const decision = String(req.body?.decision || '').toLowerCase();
+    if (!['approved', 'ignored', 'done'].includes(decision)) {
+      return res.status(400).json({ error: 'decision must be approved, ignored or done' });
+    }
+    const note = (req.body?.note || '').toString().trim().slice(0, 500);
+    // An ignore without a reason teaches the system nothing, and "why did you
+    // say no" is the single most valuable thing a CM produces. It is one short
+    // line, asked once, at the moment they already have the answer in mind.
+    if (decision === 'ignored' && !note) {
+      return res.status(400).json({ error: 'Tell us why in a few words — it is how the queue gets better at what to show you.' });
+    }
+    const wasEdited = req.body?.edited === true ? 1 : 0;
+    const r = db.prepare(`UPDATE cm_queue
+      SET status = ?, decided_by = ?, decided_at = datetime('now'),
+          decision_note = ?, was_edited = ?, updated_at = datetime('now')
+      WHERE id = ? AND status = 'open'`)
+      .run(decision, s?.name || 'unknown', note || null, wasEdited, id);
+    if (!r.changes) {
+      const cur = db.prepare('SELECT status, decided_by FROM cm_queue WHERE id = ?').get(id);
+      if (!cur) return res.status(404).json({ error: 'No such row' });
+      return res.status(409).json({ error: `Already ${cur.status}${cur.decided_by ? ` by ${cur.decided_by}` : ''}`, status: cur.status });
+    }
+    res.json({ ok: true, id, decision });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Health of the queue itself. Two numbers matter and both are early warnings:
+//   • approve-without-edit rate — if this approaches 100%, the approval gate
+//     has become decorative and the system is effectively unsupervised.
+//   • rows generated per rule — a rule that stops firing makes the queue
+//     SHORTER, which looks like success. Absence needs an alarm.
+app.get('/api/queue/health', requireSession, (req, res) => {
+  try {
+    const days = Math.min(Number(req.query.days) || 14, 90);
+    const since = `-${days} days`;
+    const byKind = db.prepare(`SELECT kind,
+        COUNT(*) AS total,
+        SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) AS open,
+        SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) AS approved,
+        SUM(CASE WHEN status = 'ignored' THEN 1 ELSE 0 END) AS ignored,
+        SUM(CASE WHEN status = 'resolved' THEN 1 ELSE 0 END) AS self_resolved,
+        MAX(created_at) AS last_seen
+      FROM cm_queue WHERE created_at > datetime('now', ?)
+      GROUP BY kind ORDER BY total DESC`).all(since);
+    const decided = db.prepare(`SELECT COUNT(*) AS n,
+        SUM(CASE WHEN was_edited = 1 THEN 1 ELSE 0 END) AS edited
+      FROM cm_queue
+      WHERE status IN ('approved','done') AND decided_at > datetime('now', ?)`).get(since);
+    const n = decided?.n || 0;
+    const edited = decided?.edited || 0;
+    res.json({
+      days,
+      byKind,
+      decided: n,
+      edited,
+      // The number to watch. High = people are reading. Near zero = rubber stamp.
+      editRatePct: n ? Math.round((edited / n) * 1000) / 10 : null,
+      medianAgeHoursOpen: db.prepare(
+        `SELECT AVG(h) AS a FROM (SELECT (julianday('now') - julianday(created_at)) * 24 AS h
+         FROM cm_queue WHERE status = 'open')`).get()?.a ?? null,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // ── Autopilot HTTP surface ─────────────────────────────────────────────────
 app.get('/api/autopilot/settings', requireSession, (req, res) => {

@@ -4,6 +4,18 @@
 
   var SECTIONS = [
     {
+      // The front door. Deliberately first and deliberately alone: a CM should
+      // start here every morning and only go elsewhere when they want detail.
+      label: 'Queue',
+      color: '#34D399',
+      icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>',
+      pages: [
+        { href: 'queue.html',        label: 'Today' },
+        { href: 'copy-drafts.html',  label: 'Copy Drafts' },
+        { href: 'client-brief.html', label: 'Client Briefs' },
+      ]
+    },
+    {
       label: 'Infra',
       color: '#60A5FA',
       icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',

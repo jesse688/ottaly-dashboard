@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Queue — Ottaly</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+  :root{--navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--green:#16a34a;--red:#dc2626;--amber:#d97706;--border:#E5E7EB;--card:#fff;--bg:#F8F9FC;--muted:#6B7280}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--navy-dark);min-height:100vh}
+  .page{max-width:1100px;margin:0 auto;padding:1.25rem 1rem 4rem}
+  .top-bar{display:flex;align-items:center;gap:1rem;margin-bottom:.9rem;flex-wrap:wrap}
+  .page-title{font-family:'Genos',sans-serif;font-size:1.25rem;font-weight:800;color:var(--navy-dark)}
+  .sub{font-size:11px;color:var(--muted)}
+  .btn{padding:8px 14px;border:1.5px solid var(--navy);background:var(--navy);color:#fff;border-radius:8px;font:600 13px Inter,sans-serif;cursor:pointer}
+  .btn.ghost{background:#fff;color:var(--navy)}
+  .btn:disabled{opacity:.5;cursor:default}
+  .btn-sm{padding:5px 11px;font-size:12px;border-radius:6px}
+  .btn-ok{border-color:var(--green);background:var(--green)}
+  .btn-ign{border-color:var(--border);background:#fff;color:var(--muted)}
+
+  /* ── The queue itself ── */
+  .rows{display:flex;flex-direction:column;gap:.55rem}
+  .row{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--muted);border-radius:8px;padding:.85rem 1rem;display:flex;flex-direction:column;gap:.5rem}
+  .row.sev-crit{border-left-color:var(--red)}
+  .row.sev-warn{border-left-color:var(--amber)}
+  .row.sev-info{border-left-color:var(--navy)}
+  .row-head{display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap}
+  .row-client{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--teal)}
+  .row-headline{font-size:14px;font-weight:700;flex:1;min-width:14rem}
+  .row-age{font-size:10.5px;color:var(--muted);white-space:nowrap}
+  .row-detail{font-size:12.5px;color:#374151;line-height:1.5}
+  .row-eviden{display:flex;gap:1.1rem;flex-wrap:wrap;font-size:11px;color:var(--muted);padding-top:.15rem}
+  .row-eviden b{color:var(--navy-dark);font-weight:700;font-variant-numeric:tabular-nums}
+  .row-actions{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;padding-top:.15rem}
+  .row-actions .why{flex:1;min-width:11rem;padding:6px 9px;border:1px solid var(--border);border-radius:6px;font:500 12px Inter,sans-serif;display:none}
+  .row.asking .why{display:block}
+  .kind{display:inline-block;padding:1px 7px;border-radius:20px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;background:#F3F4F6;color:var(--muted)}
+
+  .empty{text-align:center;padding:3.5rem 1rem;color:var(--muted)}
+  .empty .big{font-family:'Genos',sans-serif;font-size:1.6rem;font-weight:800;color:var(--green);margin-bottom:.3rem}
+  .loading{text-align:center;padding:2.5rem 1rem;color:var(--muted);font-size:13px}
+  .err{background:#FEE2E2;border:1px solid #FECACA;color:#991B1B;padding:.5rem .7rem;border-radius:6px;font-size:12px;margin-bottom:.6rem}
+
+  /* ── Health strip: is the queue itself healthy? ── */
+  .health{display:flex;gap:.5rem;margin-bottom:.9rem;flex-wrap:wrap}
+  .h-card{background:var(--card);border:1px solid var(--border);border-top:2px solid var(--navy);border-radius:6px;padding:.45rem .9rem;flex:1;min-width:118px}
+  .h-val{font-family:'Genos',sans-serif;font-size:1.4rem;font-weight:800;line-height:1}
+  .h-label{font-size:10px;font-weight:500;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.3px}
+  .note{font-size:11.5px;color:var(--muted);padding:.75rem .9rem;background:#fff;border:1px solid var(--border);border-radius:8px;line-height:1.55;margin-top:1rem}
+  .fade{animation:fade .25s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+  @media(prefers-reduced-motion:reduce){.fade{animation:none}}
+</style>
+</head>
+<body>
+<script src="/nav.js" defer></script>
+
+<div class="page">
+  <div class="top-bar">
+    <div>
+      <div class="page-title">Queue</div>
+      <div class="sub">Everything that needs a decision today, across your clients. Most days this should be short.</div>
+    </div>
+    <button class="btn ghost" onclick="load()" id="refreshBtn">↻ Refresh</button>
+    <span id="status" class="sub"></span>
+  </div>
+
+  <div class="health" id="health" style="display:none">
+    <div class="h-card"><div class="h-val" id="hOpen">—</div><div class="h-label">Waiting on you</div></div>
+    <div class="h-card"><div class="h-val" id="hDecided">—</div><div class="h-label">Decided (14d)</div></div>
+    <div class="h-card"><div class="h-val" id="hEdit">—</div><div class="h-label">Changed before approving</div></div>
+    <div class="h-card"><div class="h-val" id="hSelf">—</div><div class="h-label">Cleared on their own</div></div>
+  </div>
+
+  <div id="err"></div>
+  <div id="out" class="loading">Loading…</div>
+
+  <div class="note">
+    Rows come straight from Autopilot's own measurements, so what you see here is exactly what the
+    system believes. A row disappears by itself once the problem goes away — an overnight top-up
+    tidies up after itself. When you skip something, the short reason you give is what teaches the
+    queue to stop showing you things you do not care about.
+  </div>
+</div>
+
+<script>
+let ROWS = [];
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function sevClass(n){ return n >= 80 ? 'sev-crit' : n >= 60 ? 'sev-warn' : 'sev-info'; }
+
+function age(h){
+  if (h == null) return '';
+  if (h < 1) return 'just now';
+  if (h < 24) return h + 'h ago';
+  const d = Math.round(h / 24);
+  return d + (d === 1 ? ' day ago' : ' days ago');
+}
+
+// Pull the two or three numbers that actually justify the row. Everything else
+// stays in the payload — a row people have to decode is a row people skip.
+function evidenceBits(r){
+  const e = r.evidence || {};
+  const out = [];
+  if (e.remaining != null) out.push(['Contacts left', e.remaining.toLocaleString()]);
+  if (e.runwayDays != null) out.push(['Runs dry in', Number(e.runwayDays).toFixed(1) + ' days']);
+  if (e.perDay != null && e.perDay > 0) out.push(['Sending', Math.round(e.perDay) + '/day']);
+  if (e.floor != null && e.floor > 0 && e.remaining != null) out.push(['Floor', e.floor.toLocaleString()]);
+  if (e.want != null) out.push(['Wanted', e.want.toLocaleString()]);
+  if (r.provider) out.unshift(['Provider', r.provider.charAt(0).toUpperCase() + r.provider.slice(1)]);
+  return out.slice(0, 4);
+}
+
+function render(){
+  const el = document.getElementById('out');
+  if (!ROWS.length) {
+    el.className = 'empty';
+    el.innerHTML = '<div class="big">Nothing needs you</div><div class="sub">Autopilot is watching. It will put something here when it needs a decision.</div>';
+    return;
+  }
+  el.className = 'rows';
+  el.innerHTML = ROWS.map(r => {
+    const bits = evidenceBits(r);
+    return '<div class="row ' + sevClass(r.severity) + '" id="row-' + r.id + '">' +
+      '<div class="row-head">' +
+        '<span class="row-client">' + esc(r.workspace_name || '—') + '</span>' +
+        '<span class="row-headline">' + esc(r.headline) + '</span>' +
+        '<span class="kind">' + esc(r.kind.replace(/_/g, ' ')) + '</span>' +
+        '<span class="row-age">' + esc(age(r.age_hours)) + '</span>' +
+      '</div>' +
+      (r.detail ? '<div class="row-detail">' + esc(r.detail) + '</div>' : '') +
+      (bits.length ? '<div class="row-eviden">' + bits.map(b => esc(b[0]) + ' <b>' + esc(b[1]) + '</b>').join('') + '</div>' : '') +
+      '<div class="row-actions">' +
+        '<button class="btn btn-sm btn-ok" onclick="decide(' + r.id + ',\'approved\')">Done</button>' +
+        '<button class="btn btn-sm btn-ign" onclick="askWhy(' + r.id + ')">Skip</button>' +
+        '<input class="why" id="why-' + r.id + '" placeholder="Why skip it? A few words is plenty…" ' +
+          'onkeydown="if(event.key===\'Enter\')decide(' + r.id + ',\'ignored\')">' +
+        '<button class="btn btn-sm btn-ign confirm" id="conf-' + r.id + '" style="display:none" ' +
+          'onclick="decide(' + r.id + ',\'ignored\')">Save</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function askWhy(id){
+  const row = document.getElementById('row-' + id);
+  row.classList.add('asking');
+  document.getElementById('conf-' + id).style.display = '';
+  document.getElementById('why-' + id).focus();
+}
+
+async function decide(id, decision){
+  const noteEl = document.getElementById('why-' + id);
+  const note = noteEl ? noteEl.value.trim() : '';
+  if (decision === 'ignored' && !note) { askWhy(id); return; }
+  const row = document.getElementById('row-' + id);
+  row.style.opacity = '.45';
+  try {
+    const res = await fetch('/api/queue/' + id + '/decide', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ decision, note })
+    });
+    const j = await res.json();
+    if (!res.ok) {
+      row.style.opacity = '';
+      showErr(j.error || 'Could not save that');
+      return;
+    }
+    ROWS = ROWS.filter(r => r.id !== id);
+    render();
+    loadHealth();
+  } catch (e) {
+    row.style.opacity = '';
+    showErr(e.message);
+  }
+}
+
+function showErr(msg){
+  document.getElementById('err').innerHTML = '<div class="err fade">' + esc(msg) + '</div>';
+  setTimeout(() => { document.getElementById('err').innerHTML = ''; }, 6000);
+}
+
+async function load(){
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true;
+  document.getElementById('status').textContent = 'Loading…';
+  try {
+    const res = await fetch('/api/queue');
+    const j = await res.json();
+    if (!res.ok) throw new Error(j.error || 'Failed to load');
+    ROWS = j.rows || [];
+    render();
+    document.getElementById('status').textContent =
+      ROWS.length ? ROWS.length + (ROWS.length === 1 ? ' thing to decide' : ' things to decide') : '';
+  } catch (e) {
+    document.getElementById('out').className = 'empty';
+    document.getElementById('out').textContent = 'Could not load the queue: ' + e.message;
+    document.getElementById('status').textContent = '';
+  } finally { btn.disabled = false; }
+}
+
+async function loadHealth(){
+  try {
+    const res = await fetch('/api/queue/health?days=14');
+    if (!res.ok) return;
+    const j = await res.json();
+    document.getElementById('health').style.display = '';
+    document.getElementById('hOpen').textContent = ROWS.length;
+    document.getElementById('hDecided').textContent = j.decided ?? 0;
+    // Watch this one. If it sits near zero, people are clicking Done without
+    // reading, and the approval step has stopped being a safety net.
+    const er = j.editRatePct;
+    const edEl = document.getElementById('hEdit');
+    edEl.textContent = er == null ? '—' : er + '%';
+    edEl.style.color = er != null && j.decided >= 20 && er < 10 ? 'var(--amber)' : '';
+    const selfRes = (j.byKind || []).reduce((s, k) => s + (k.self_resolved || 0), 0);
+    document.getElementById('hSelf').textContent = selfRes;
+  } catch {}
+}
+
+load().then(loadHealth);
+setInterval(load, 120000);
+</script>
+</body>
+</html>
