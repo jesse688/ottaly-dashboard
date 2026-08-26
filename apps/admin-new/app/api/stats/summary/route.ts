@@ -78,7 +78,12 @@ export async function GET(req: NextRequest) {
   // 2026-03-20). Every other range still clamps to the cutover so it stays
   // PV-clean. The period filter sends 0000-01-01 for All Time.
   const ALL_TIME_FLOOR = process.env.STATS_ALL_TIME_FLOOR ?? '2026-03-20'
-  const isAllTime = rawStart < ALL_TIME_FLOOR
+  // ALL TIME is the SENTINEL the period filter sends ('0000-01-01'), not merely
+  // "a date before the floor". Testing `rawStart < ALL_TIME_FLOOR` also matched
+  // This Year (2026-01-01), so This Year silently resolved to All Time and
+  // included Bison-era sending — measured live: it started 2026-03-20 instead
+  // of the cutover. Anything that is not the sentinel clamps to the cutover.
+  const isAllTime = rawStart <= '1900-01-01'
   const start = isAllTime
     ? ALL_TIME_FLOOR
     : rawStart < STATS_CUTOVER
