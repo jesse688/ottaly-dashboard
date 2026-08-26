@@ -137,19 +137,53 @@ function render(){
       '</div>' +
       '<div class="steps">' + steps + '</div>' +
       '<div class="d-foot">' +
-        '<button class="btn btn-sm btn-ok" onclick="approve(' + d.id + ')">Send it live</button>' +
+        (d.campaign_id
+          ? '<button class="btn btn-sm btn-ok" onclick="approve(' + d.id + ')">Send it live</button>'
+          : '<button class="btn btn-sm btn-ok" disabled title="This one was written to read, not to send">Send it live</button>') +
         '<button class="btn btn-sm btn-no" onclick="reject(' + d.id + ')">Reject</button>' +
-        '<input class="lesson" id="l-' + d.id + '" placeholder="If you changed or rejected it — why? One line.">' +
-        '<div class="hint">Going live writes these emails straight into the campaign in PlusVibe.</div>' +
+        '<input class="lesson" id="l-' + d.id + '" placeholder="Changed something? A line on why — or edit and it will suggest one.">' +
+        '<div class="hint">' + (d.campaign_id
+          ? 'Going live writes these emails straight into the campaign in PlusVibe.'
+          : 'Written without a campaign, so there is nowhere to send it — this one is for judging the writing. Draft again with a campaign id to send.') +
+        '</div>' +
       '</div>' +
     '</div>';
   }).join('');
 }
 
 const TOUCHED = new Set();
+const SUGGEST_TIMER = {};
+const LESSON_FROM_AI = new Set();
+
 function touch(id){
   TOUCHED.add(id);
   document.getElementById('ed-' + id).textContent = 'edited';
+  // Once they stop typing, ask what the edits taught. They confirm or
+  // overwrite it — nobody has to compose a lesson from a blank box.
+  clearTimeout(SUGGEST_TIMER[id]);
+  SUGGEST_TIMER[id] = setTimeout(() => suggestLesson(id), 2500);
+}
+
+async function suggestLesson(id){
+  const box = document.getElementById('l-' + id);
+  if (!box || (box.value.trim() && !LESSON_FROM_AI.has(id))) return; // never overwrite their words
+  const ed = document.getElementById('ed-' + id);
+  ed.textContent = 'edited · reading your changes…';
+  try {
+    const res = await fetch('/api/copy/draft/' + id + '/suggest-lesson', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ sequence: collect(id) })
+    });
+    const j = await res.json();
+    if (j.lesson) {
+      box.value = j.lesson;
+      LESSON_FROM_AI.add(id);
+      box.style.borderColor = 'var(--green)';
+      ed.textContent = 'edited · lesson suggested, change it if it is wrong';
+    } else {
+      ed.textContent = 'edited';
+    }
+  } catch { ed.textContent = 'edited'; }
 }
 
 // Read the (possibly edited) sequence back out of the inputs.
@@ -178,15 +212,20 @@ async function approve(id){
   const lesson = document.getElementById('l-' + id).value.trim();
   const edited = TOUCHED.has(id);
   if (edited && !lesson) {
+    // Only ask if the model could not work it out either.
     document.getElementById('l-' + id).focus();
-    msg('You changed this one — say why in a few words so the next draft is better.', false);
+    msg('What did you change and why? One line — it is what makes the next draft better.', false);
     return;
   }
   card.style.opacity = '.5';
   try {
     const res = await fetch('/api/copy/draft/' + id + '/approve', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ sequence: edited ? collect(id) : undefined, lesson })
+      body: JSON.stringify({
+        sequence: edited ? collect(id) : undefined,
+        lesson,
+        lesson_source: LESSON_FROM_AI.has(id) ? 'ai' : 'human',
+      })
     });
     const j = await res.json();
     if (!res.ok) { card.style.opacity = ''; msg(j.error || 'Could not send it', false); return; }

@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Audience — Ottaly</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+  :root{--navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--green:#16a34a;--red:#dc2626;--amber:#d97706;--border:#E5E7EB;--card:#fff;--bg:#F8F9FC;--muted:#6B7280}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--navy-dark);min-height:100vh}
+  .page{max-width:1100px;margin:0 auto;padding:1.25rem 1rem 4rem}
+  .top-bar{display:flex;align-items:center;gap:1rem;margin-bottom:.9rem;flex-wrap:wrap}
+  .page-title{font-family:'Genos',sans-serif;font-size:1.25rem;font-weight:800}
+  .sub{font-size:11px;color:var(--muted)}
+  .btn{padding:8px 14px;border:1.5px solid var(--navy);background:var(--navy);color:#fff;border-radius:8px;font:600 13px Inter,sans-serif;cursor:pointer}
+  .btn.ghost{background:#fff;color:var(--navy)}
+  .btn:disabled{opacity:.5;cursor:default}
+  .btn-sm{padding:5px 11px;font-size:12px;border-radius:6px}
+  .btn-ok{border-color:var(--green);background:var(--green)}
+  .btn-no{border-color:var(--border);background:#fff;color:var(--muted)}
+  select,input{padding:7px 10px;border:1px solid var(--border);border-radius:7px;font:500 12.5px Inter,sans-serif}
+
+  .prop{background:var(--card);border:1px solid var(--border);border-radius:8px;margin-bottom:.8rem;overflow:hidden}
+  .p-head{padding:.7rem .9rem;border-bottom:1px solid var(--border);display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap}
+  .p-client{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--teal)}
+  .p-why{font-size:13px;flex:1;min-width:14rem;line-height:1.5}
+  .counts{display:flex;gap:1.5rem;padding:.7rem .9rem;background:#FAFBFC;border-bottom:1px solid var(--border);flex-wrap:wrap}
+  .c-item{display:flex;flex-direction:column;gap:.1rem}
+  .c-val{font-family:'Genos',sans-serif;font-size:1.5rem;font-weight:800;line-height:1;font-variant-numeric:tabular-nums}
+  .c-lab{font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
+  .c-warn{color:var(--amber)}
+  .c-bad{color:var(--red)}
+  .filters{padding:.6rem .9rem;display:flex;flex-wrap:wrap;gap:.4rem}
+  .f{display:flex;align-items:center;gap:.3rem;background:#F3F4F6;border-radius:5px;padding:.25rem .5rem;font-size:11.5px}
+  .f b{color:var(--muted);font-weight:600}
+  .f input{border:none;background:transparent;font:600 11.5px Inter,sans-serif;padding:1px 2px;min-width:4rem;max-width:22rem}
+  .f input:focus{outline:none;background:#fff;border-radius:3px}
+  .f.locked{opacity:.6}
+  .p-foot{padding:.65rem .9rem;border-top:1px solid var(--border);background:#FAFBFC;display:flex;gap:.45rem;align-items:center;flex-wrap:wrap}
+  .note-in{flex:1;min-width:12rem}
+  .hint{font-size:10.5px;color:var(--muted);width:100%;line-height:1.45}
+  .empty{text-align:center;padding:3.5rem 1rem;color:var(--muted)}
+  .empty .big{font-family:'Genos',sans-serif;font-size:1.6rem;font-weight:800;color:var(--navy);margin-bottom:.3rem}
+  .err{background:#FEE2E2;border:1px solid #FECACA;color:#991B1B;padding:.5rem .7rem;border-radius:6px;font-size:12px;margin-bottom:.6rem}
+  .ok{background:#DCFCE7;border:1px solid #BBF7D0;color:#166534;padding:.5rem .7rem;border-radius:6px;font-size:12px;margin-bottom:.6rem}
+  .note{font-size:11.5px;color:var(--muted);padding:.75rem .9rem;background:#fff;border:1px solid var(--border);border-radius:8px;line-height:1.55;margin-top:1rem}
+</style>
+</head>
+<body>
+<script src="/nav.js" defer></script>
+
+<div class="page">
+  <div class="top-bar">
+    <div>
+      <div class="page-title">Audience</div>
+      <div class="sub">Who to send to, worked out from the client's brief and counted against the real database.</div>
+    </div>
+    <button class="btn ghost" onclick="load()" id="refreshBtn">↻ Refresh</button>
+    <button class="btn" onclick="openAsk()" id="askBtn">Work one out</button>
+    <span id="status" class="sub"></span>
+  </div>
+
+  <div id="askBox" style="display:none;background:#fff;border:1px solid var(--border);border-radius:8px;padding:.8rem .9rem;margin-bottom:.8rem">
+    <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+      <select id="askWs" style="min-width:15rem"><option value="">Choose a client…</option></select>
+      <input id="askWhy" placeholder="Anything to steer it? (optional)" style="flex:1;min-width:14rem">
+      <button class="btn btn-sm btn-ok" onclick="doAsk()" id="askGo">Work it out</button>
+      <button class="btn btn-sm btn-no" onclick="document.getElementById('askBox').style.display='none'">Cancel</button>
+    </div>
+    <div class="hint" style="margin-top:.4rem">About 3p. It picks filters from the brief, then counts them against the contacts database.</div>
+  </div>
+
+  <div id="msg"></div>
+  <div id="out" class="empty">Loading…</div>
+
+  <div class="note">
+    Every number here comes from the same check the push itself runs, so what you approve is what would
+    actually send. Change any value and the count updates. Do-not-contact and the blocked security
+    gateways are always applied and cannot be edited out.
+  </div>
+</div>
+
+<script>
+let PROPS = [];
+const LOCKED = ['excludeDNC','gatewayExclude'];
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function label(k){ return k.replace(/([A-Z])/g,' $1').replace(/^./,c=>c.toUpperCase()).trim(); }
+
+function render(){
+  const el = document.getElementById('out');
+  if (!PROPS.length) {
+    el.className = 'empty';
+    el.innerHTML = '<div class="big">No audiences waiting</div><div class="sub">Work one out when a client needs a new campaign or is running out of people to email.</div>';
+    return;
+  }
+  el.className = '';
+  el.innerHTML = PROPS.map(p => {
+    const keys = Object.keys(p.filters || {}).filter(k => !LOCKED.includes(k));
+    const locked = Object.keys(p.filters || {}).filter(k => LOCKED.includes(k));
+    const send = p.sendable, thin = send != null && send < 500;
+    return '<div class="prop" id="p-' + p.id + '">' +
+      '<div class="p-head">' +
+        '<span class="p-client">' + esc(p.workspace_name || p.workspace_id) + '</span>' +
+        '<span class="p-why">' + esc(p.rationale || '') + '</span>' +
+      '</div>' +
+      '<div class="counts">' +
+        '<div class="c-item"><span class="c-val">' + (p.matched == null ? '—' : Number(p.matched).toLocaleString()) + '</span><span class="c-lab">Match the filters</span></div>' +
+        '<div class="c-item"><span class="c-val ' + (thin ? 'c-warn' : '') + '" id="s-' + p.id + '">' +
+          (send == null ? '—' : Number(send).toLocaleString()) + '</span><span class="c-lab">Can actually be sent to</span></div>' +
+        (thin ? '<div class="c-item"><span class="c-lab c-warn" style="max-width:20rem;text-transform:none;letter-spacing:0;font-size:11.5px;line-height:1.45">That is a thin pool — this campaign would run dry quickly. Loosen a filter.</span></div>' : '') +
+      '</div>' +
+      '<div class="filters">' +
+        keys.map(k => '<span class="f"><b>' + esc(label(k)) + '</b>' +
+          '<input value="' + esc(p.filters[k]) + '" data-p="' + p.id + '" data-k="' + esc(k) + '" ' +
+          'oninput="dirty(' + p.id + ')" style="width:' + Math.min(22, Math.max(4, String(p.filters[k]).length * 0.62)) + 'rem"></span>').join('') +
+        locked.map(k => '<span class="f locked" title="Always applied"><b>' + esc(label(k)) + '</b> ' + esc(String(p.filters[k]).slice(0,40)) + '</span>').join('') +
+      '</div>' +
+      '<div class="p-foot">' +
+        '<button class="btn btn-sm ghost" onclick="recount(' + p.id + ')" id="rc-' + p.id + '">Re-count</button>' +
+        '<button class="btn btn-sm btn-ok" onclick="decide(' + p.id + ',\'approved\')">Use this audience</button>' +
+        '<button class="btn btn-sm btn-no" onclick="decide(' + p.id + ',\'rejected\')">Reject</button>' +
+        '<input class="note-in" id="n-' + p.id + '" placeholder="Changed or rejected it? Why, in a line.">' +
+        '<div class="hint" id="h-' + p.id + '">Approving saves the filter for this client. Nothing sends until you push it to a campaign.</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+const DIRTY = new Set();
+function dirty(id){
+  DIRTY.add(id);
+  document.getElementById('h-' + id).textContent = 'Filters changed — re-count before you approve, or the number above is stale.';
+  document.getElementById('s-' + id).style.opacity = '.35';
+}
+
+function collect(id){
+  const p = PROPS.find(x => x.id === id);
+  const f = { ...p.filters };
+  document.querySelectorAll('[data-p="' + id + '"]').forEach(i => {
+    if (i.value.trim()) f[i.dataset.k] = i.value.trim(); else delete f[i.dataset.k];
+  });
+  return f;
+}
+
+function msg(t, ok){
+  document.getElementById('msg').innerHTML = '<div class="' + (ok?'ok':'err') + '">' + esc(t) + '</div>';
+  if (ok) setTimeout(() => { document.getElementById('msg').innerHTML = ''; }, 5000);
+}
+
+async function recount(id){
+  const p = PROPS.find(x => x.id === id);
+  const btn = document.getElementById('rc-' + id);
+  btn.disabled = true; btn.textContent = 'Counting…';
+  try {
+    const res = await fetch('/api/audience/count', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ workspace_id: p.workspace_id, workspace_name: p.workspace_name, filters: collect(id) })
+    });
+    const j = await res.json();
+    if (!res.ok) { msg(j.error || 'Could not count that', false); return; }
+    p.matched = j.matched; p.sendable = j.sendable; p.filters = j.filters;
+    DIRTY.delete(id);
+    render();
+  } catch (e) { msg(e.message, false); }
+  finally { btn.disabled = false; btn.textContent = 'Re-count'; }
+}
+
+async function decide(id, decision){
+  const note = document.getElementById('n-' + id).value.trim();
+  if (decision === 'rejected' && !note) {
+    document.getElementById('n-' + id).focus();
+    msg('Say what was wrong with it — that is what stops the next one repeating it.', false);
+    return;
+  }
+  if (decision === 'approved' && DIRTY.has(id)) {
+    msg('You changed the filters — re-count first so you approve a real number.', false);
+    return;
+  }
+  const p = PROPS.find(x => x.id === id);
+  const card = document.getElementById('p-' + id);
+  card.style.opacity = '.5';
+  try {
+    const res = await fetch('/api/audience/' + id + '/decide', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ decision, note, filters: collect(id), matched: p.matched, sendable: p.sendable })
+    });
+    const j = await res.json();
+    if (!res.ok) { card.style.opacity = ''; msg(j.error || 'Could not save that', false); return; }
+    PROPS = PROPS.filter(x => x.id !== id);
+    render();
+    msg(decision === 'approved' ? 'Saved for this client.' : 'Rejected, and the reason is kept.', true);
+  } catch (e) { card.style.opacity = ''; msg(e.message, false); }
+}
+
+async function openAsk(){
+  const box = document.getElementById('askBox');
+  box.style.display = box.style.display === 'none' ? '' : 'none';
+  const sel = document.getElementById('askWs');
+  if (sel.options.length > 1) return;
+  try {
+    const res = await fetch('/api/brief/clients');
+    const j = await res.json();
+    (j.clients || []).forEach(c => {
+      const o = document.createElement('option');
+      o.value = c.workspace_id;
+      o.textContent = (c.has_brief ? '✓ ' : '· no brief — ') + (c.workspace_name || c.workspace_id);
+      o.dataset.name = c.workspace_name || '';
+      sel.appendChild(o);
+    });
+  } catch (e) { msg('Could not load clients: ' + e.message, false); }
+}
+
+async function doAsk(){
+  const sel = document.getElementById('askWs');
+  if (!sel.value) { msg('Pick a client first.', false); return; }
+  const btn = document.getElementById('askGo');
+  btn.disabled = true; btn.textContent = 'Working…';
+  try {
+    const res = await fetch('/api/audience/propose', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        workspace_id: sel.value,
+        workspace_name: sel.options[sel.selectedIndex].dataset.name || '',
+        reason: document.getElementById('askWhy').value.trim() || undefined,
+      })
+    });
+    const j = await res.json();
+    if (!res.ok) { msg(j.error || 'Could not work one out', false); return; }
+    document.getElementById('askBox').style.display = 'none';
+    await load();
+    msg(j.countError ? 'Worked one out, but could not count it: ' + j.countError : 'Worked one out — it is below.', !j.countError);
+  } catch (e) { msg(e.message, false); }
+  finally { btn.disabled = false; btn.textContent = 'Work it out'; }
+}
+
+async function load(){
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/audience/proposals');
+    const j = await res.json();
+    if (!res.ok) throw new Error(j.error || 'Failed to load');
+    PROPS = j.rows || [];
+    DIRTY.clear();
+    render();
+    document.getElementById('status').textContent = PROPS.length ? PROPS.length + ' waiting' : '';
+  } catch (e) {
+    document.getElementById('out').className = 'empty';
+    document.getElementById('out').textContent = 'Could not load: ' + e.message;
+  } finally { btn.disabled = false; }
+}
+
+load();
+</script>
+</body>
+</html>

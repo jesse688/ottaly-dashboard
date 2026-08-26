@@ -12,6 +12,7 @@
       pages: [
         { href: 'queue.html',        label: 'Today' },
         { href: 'copy-drafts.html',  label: 'Copy Drafts' },
+        { href: 'audience.html',     label: 'Audience' },
         { href: 'client-brief.html', label: 'Client Briefs' },
       ]
     },

@@ -19177,6 +19177,258 @@ app.get('/api/brief/clients', requireSession, (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// AUDIENCE PROPOSALS
+//
+// The other half of setup. Copy without an audience is half a campaign, and
+// today a CM defines the audience in a chat window and then rebuilds it by
+// hand in Contacts.
+//
+// The rule that makes this trustworthy: the model proposes a FILTER, never a
+// list of contacts. The filter then runs through the same /api/contacts/
+// sendability route the push itself uses, so the count a CM approves is the
+// count the push will deliver. A model that picked contacts directly could
+// hallucinate an audience; a model that picks filter VALUES cannot — the
+// database decides what matches.
+// ═══════════════════════════════════════════════════════════════════════════
+
+db.exec(`CREATE TABLE IF NOT EXISTS audience_proposals (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  workspace_id   TEXT NOT NULL,
+  workspace_name TEXT,
+  reason         TEXT,
+  rationale      TEXT,
+  filters        TEXT NOT NULL,
+  matched        INTEGER,
+  sendable       INTEGER,
+  status         TEXT NOT NULL DEFAULT 'draft',
+  decided_by     TEXT,
+  decided_at     TEXT,
+  decision_note  TEXT,
+  cost_usd       REAL DEFAULT 0,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_aud_status ON audience_proposals(status, created_at DESC)`); } catch {}
+
+// Only the filter keys a proposal may set. An allow-list rather than passing
+// the model's JSON through: an unknown key would be silently ignored by the
+// query builder, so the CM would approve a filter narrower than it appears.
+const AUDIENCE_FILTER_KEYS = new Set([
+  'jobTitle', 'jobTitleExclude', 'seniority', 'department', 'subDepartments',
+  'industry', 'industryExclude', 'keywords', 'keywordsExclude',
+  'sicCodes', 'technologies', 'technologiesExclude',
+  'numEmployeesRanges', 'numEmployeesExcludeRanges', 'companyAgeBand',
+  'companyCountry', 'companyRegion', 'companyCounty', 'companyTown', 'companyCity', 'companyState',
+  'companyCountryExclude', 'companyRegionExclude', 'companyCountyExclude',
+  'companyTownExclude', 'companyCityExclude', 'companyStateExclude',
+  'country', 'state', 'city', 'personRegion', 'personCounty', 'personTown',
+  'countryExclude', 'stateExclude', 'cityExclude',
+  'personRegionExclude', 'personCountyExclude', 'personTownExclude',
+  'ownsBuilding', 'ccodOwnsBuilding', 'solarMinKwp', 'solarStatus', 'solarStatusExclude',
+  'hasName', 'hasCompany', 'worksRemote', 'excludeRemote',
+]);
+
+// Guards a proposal must never weaken. These are the difference between a
+// filter and a liability, and a model asked to "widen the audience" would
+// happily drop them.
+const AUDIENCE_FORCED = Object.freeze({
+  excludeDNC: 'true',
+  gatewayExclude: 'Mimecast,Barracuda,Proofpoint,Cisco Ironport,Sophos',
+});
+
+function sanitiseAudienceFilters(raw) {
+  const out = {};
+  for (const [k, v] of Object.entries(raw || {})) {
+    if (!AUDIENCE_FILTER_KEYS.has(k)) continue;
+    if (v == null || v === '' || (Array.isArray(v) && !v.length)) continue;
+    out[k] = Array.isArray(v) ? v.join(',') : String(v);
+  }
+  return { ...out, ...AUDIENCE_FORCED };
+}
+
+const AUDIENCE_SYSTEM_PROMPT = `You choose the audience for a UK B2B cold email campaign by picking database filter values.
+
+You are given a client brief. Translate who they want to reach into filters over a contacts database.
+
+Return ONLY valid JSON, no prose, no code fence:
+{"rationale":"one or two sentences on who this targets and why","filters":{...}}
+
+Available filter keys (omit any you do not need — every key you set NARROWS the audience):
+- jobTitle, jobTitleExclude — comma-separated title words, matched loosely. e.g. "director,owner,managing director"
+- seniority — comma-separated. Valid: owner, founder, c_suite, partner, vp, head, director, manager
+- department, subDepartments — comma-separated
+- industry, industryExclude — comma-separated industry words
+- keywords, keywordsExclude — comma-separated words matched against company description
+- sicCodes — comma-separated UK SIC codes
+- numEmployeesRanges — comma-separated bands. Valid: 1-10, 11-20, 21-50, 51-100, 101-200, 201-500, 501-1000, 1001-2000, 2001-5000, 5001-10000, 10001+
+- companyCountry, companyRegion, companyCounty, companyTown, companyCity — and matching *Exclude keys
+- ownsBuilding — set to "true" only if the client needs the prospect to own their premises
+- ccodOwnsBuilding — set to "freehold" when freehold ownership specifically is required
+- solarMinKwp — minimum viable solar capacity in kWp, a number, only for solar clients
+- hasName — "first_only" requires a first name; omit if nameless company inboxes are acceptable
+- hasCompany — "yes" requires a company name
+
+Rules:
+- Prefer FEWER, broader filters. Every filter you add cuts the pool, and a campaign that runs dry in a week is worse than one that is slightly loose.
+- Never set both a key and its Exclude counterpart to the same value.
+- Use seniority OR jobTitle, rarely both — they overlap and stacking them can cut the pool to nothing.
+- Only set ownsBuilding, ccodOwnsBuilding or solarMinKwp when the brief genuinely requires them.
+- Do not set do-not-contact or gateway filters; those are applied automatically.`;
+
+async function generateAudienceProposal({ workspaceId, workspaceName, reason }) {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) throw new Error('ANTHROPIC_API_KEY is not set — cannot propose an audience');
+  const spent = copySpendThisMonth();
+  if (spent >= COPY_BUDGET_USD) {
+    throw new Error(`AI drafting has used its $${COPY_BUDGET_USD} budget for this month ($${spent.toFixed(2)}).`);
+  }
+  const m = memoryFor(workspaceId);
+  const done = memoryCompleteness(m);
+  if (!(m.icp || '').trim()) {
+    throw new Error('This client\'s brief does not say who they want to reach. Fill in "Who they want to reach" first.');
+  }
+  const L = [`Client: ${workspaceName || workspaceId}`];
+  if (m.offer) L.push(`\nWhat they sell:\n${m.offer}`);
+  L.push(`\nWho they want to reach:\n${m.icp}`);
+  if (m.disqualifiers) L.push(`\nNot a fit:\n${m.disqualifiers}`);
+  if (m.lessons?.length) {
+    L.push(`\nLessons from their campaign manager:`);
+    for (const l of m.lessons) L.push(`- ${l.lesson}`);
+  }
+  if (reason) L.push(`\nWhy a new audience is needed: ${reason}`);
+
+  const req = () => fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json', 'x-api-key': key,
+      'anthropic-version': '2023-06-01', 'anthropic-beta': 'prompt-caching-2024-07-31',
+    },
+    body: JSON.stringify({
+      model: COPY_MODEL, max_tokens: 4000,
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'high' },
+      system: [{ type: 'text', text: AUDIENCE_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
+      messages: [{ role: 'user', content: L.join('\n') }],
+    }),
+  });
+  let r = await req();
+  if (!r.ok && (r.status === 429 || r.status >= 500)) {
+    await new Promise(res => setTimeout(res, 2500));
+    r = await req();
+  }
+  if (!r.ok) throw new Error(`Claude ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const j = await r.json();
+  if (j?.stop_reason === 'refusal') throw new Error('The model declined to propose an audience for this brief.');
+  const u = j?.usage || {};
+  const cost = ((u.input_tokens || 0) * OPUS_PRICE.input + (u.output_tokens || 0) * OPUS_PRICE.output +
+    (u.cache_creation_input_tokens || 0) * OPUS_PRICE.cache_write +
+    (u.cache_read_input_tokens || 0) * OPUS_PRICE.cache_read) / 1_000_000;
+  const text = ((j?.content || []).filter(b => b.type === 'text').map(b => b.text).join('') || '')
+    .replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  let parsed;
+  try { parsed = JSON.parse(text); } catch { throw new Error('The model did not return usable JSON. Try again.'); }
+  const filters = sanitiseAudienceFilters(parsed.filters);
+  if (Object.keys(filters).length <= Object.keys(AUDIENCE_FORCED).length) {
+    throw new Error('The proposal had no usable filters — the brief may be too vague about who to reach.');
+  }
+
+  // Count it for real, through the same guards the push uses. A proposal
+  // without a measured count is a guess, and a guess is what the CM is
+  // already doing by hand.
+  let matched = null, sendable = null, countError = null;
+  try {
+    const cr = await fetch(`http://127.0.0.1:${PORT}/api/contacts/sendability`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-admin-key': ADMIN_KEY },
+      body: JSON.stringify({ workspace_id: workspaceId, workspace_name: workspaceName, filters, loose: true }),
+    });
+    if (cr.ok) {
+      const cj = await cr.json();
+      matched = cj.total ?? cj.matched ?? null;
+      sendable = cj.sendable ?? cj.pushable ?? null;
+    } else {
+      countError = `count failed (HTTP ${cr.status})`;
+    }
+  } catch (e) { countError = e.message; }
+
+  const ins = db.prepare(`INSERT INTO audience_proposals
+    (workspace_id, workspace_name, reason, rationale, filters, matched, sendable, cost_usd)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(workspaceId, workspaceName || null, reason || null,
+         String(parsed.rationale || '').slice(0, 1000), JSON.stringify(filters), matched, sendable, cost);
+  return { id: ins.lastInsertRowid, rationale: parsed.rationale, filters, matched, sendable, countError, cost };
+}
+
+// ── Audience HTTP surface ──────────────────────────────────────────────────
+app.post('/api/audience/propose', requireSession, async (req, res) => {
+  try {
+    res.json(await generateAudienceProposal({
+      workspaceId: req.body?.workspace_id,
+      workspaceName: req.body?.workspace_name,
+      reason: req.body?.reason,
+    }));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.get('/api/audience/proposals', requireSession, (req, res) => {
+  try {
+    const rows = db.prepare(
+      `SELECT * FROM audience_proposals WHERE status = ? ORDER BY created_at DESC LIMIT 50`
+    ).all(req.query.status || 'draft').map(r => ({
+      ...r, filters: (() => { try { return JSON.parse(r.filters); } catch { return {}; } })(),
+    }));
+    res.json({ rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Re-count an edited filter without spending anything on the model. Editing
+// and then approving a stale number is the obvious way to get this wrong.
+app.post('/api/audience/count', requireSession, async (req, res) => {
+  try {
+    const filters = sanitiseAudienceFilters(req.body?.filters);
+    const cr = await fetch(`http://127.0.0.1:${PORT}/api/contacts/sendability`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-admin-key': ADMIN_KEY },
+      body: JSON.stringify({
+        workspace_id: req.body?.workspace_id, workspace_name: req.body?.workspace_name,
+        filters, loose: true,
+      }),
+    });
+    if (!cr.ok) return res.status(502).json({ error: `Could not count that (HTTP ${cr.status})` });
+    const cj = await cr.json();
+    res.json({ matched: cj.total ?? cj.matched ?? null, sendable: cj.sendable ?? cj.pushable ?? null, filters });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/audience/:id/decide', requireSession, (req, res) => {
+  try {
+    const s = decodeSession(req);
+    const decision = String(req.body?.decision || '').toLowerCase();
+    if (!['approved', 'rejected'].includes(decision)) {
+      return res.status(400).json({ error: 'decision must be approved or rejected' });
+    }
+    const note = (req.body?.note || '').toString().trim().slice(0, 500);
+    if (decision === 'rejected' && !note) {
+      return res.status(400).json({ error: 'Say what was wrong with it — that is what stops the next one repeating it.' });
+    }
+    const edited = req.body?.filters ? JSON.stringify(sanitiseAudienceFilters(req.body.filters)) : null;
+    const r = db.prepare(`UPDATE audience_proposals
+      SET status = ?, decided_by = ?, decided_at = datetime('now'), decision_note = ?,
+          filters = COALESCE(?, filters),
+          matched = COALESCE(?, matched), sendable = COALESCE(?, sendable)
+      WHERE id = ? AND status = 'draft'`)
+      .run(decision, s?.name || 'unknown', note || null, edited,
+           req.body?.matched ?? null, req.body?.sendable ?? null, Number(req.params.id));
+    if (!r.changes) return res.status(409).json({ error: 'That proposal has already been decided' });
+    const row = db.prepare('SELECT workspace_id FROM audience_proposals WHERE id = ?').get(Number(req.params.id));
+    if (row && note) {
+      db.prepare(`INSERT INTO client_memory_lessons (workspace_id, lesson, source, author)
+        VALUES (?, ?, ?, ?)`).run(row.workspace_id, note, `audience-${decision}`, s?.name || 'unknown');
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Client memory HTTP surface ─────────────────────────────────────────────
 app.get('/api/memory/:workspaceId', requireSession, (req, res) => {
   try {
@@ -19312,13 +19564,15 @@ app.post('/api/copy/draft/:id/approve', requireSession, async (req, res) => {
       db.prepare(`UPDATE copy_drafts SET status = 'applied', pv_response = ? WHERE id = ?`)
         .run(JSON.stringify(pvRes || {}).slice(0, 4000), id);
 
-      // A CM's edit is the most valuable signal in the system, but inferring
-      // the lesson from a diff is how a brief gets poisoned. Ask for it in
-      // their words instead; store only what they actually wrote.
+      // The lesson reaching here has always been seen by a human — either they
+      // typed it, or the model proposed it from their edits and they let it
+      // stand. Nothing is inferred straight into the brief.
       const lesson = (req.body?.lesson || '').toString().trim().slice(0, 500);
       if (lesson) {
         db.prepare(`INSERT INTO client_memory_lessons (workspace_id, lesson, source, draft_id, author)
-          VALUES (?, ?, 'edit', ?, ?)`).run(row.workspace_id, lesson, id, s?.name || 'unknown');
+          VALUES (?, ?, ?, ?, ?)`)
+          .run(row.workspace_id, lesson, req.body?.lesson_source === 'ai' ? 'edit-ai' : 'edit',
+               id, s?.name || 'unknown');
       }
       res.json({ ok: true, edited: !!wasEdited, lessonSaved: !!lesson });
     } catch (e) {
@@ -19344,6 +19598,76 @@ app.post('/api/copy/draft/:id/reject', requireSession, (req, res) => {
     }
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Read a CM's edits and say what the lesson probably was.
+//
+// The earlier design made the CM type the lesson. That is a tax paid dozens of
+// times a day for a benefit that lands later and invisibly, and it is exactly
+// the sort of thing that decays into "n/a" within a fortnight.
+//
+// So the model does the articulating and the human does the judging: it reads
+// the before and after and proposes the durable rule, the CM confirms, edits or
+// drops it in one click. What it must NOT do is write to the brief on its own —
+// a typo fix promoted to a voice rule poisons every future draft, and nobody
+// would be able to tell which inference did it months later.
+const DIFF_SYSTEM_PROMPT = `A campaign manager edited an AI-written cold email sequence. You are shown the before and after.
+
+Say what durable lesson the edits teach about writing for THIS client in future.
+
+Return ONLY valid JSON, no prose, no code fence:
+{"lesson":"...","confident":true}
+
+Rules:
+- One sentence, written as an instruction for next time. e.g. "Open with a plain question, not a claim about their business."
+- Only durable preferences: voice, structure, what to claim, what to avoid, how to open or close.
+- Set confident:false and lesson:"" if the edits are only typos, formatting, names, or one-off facts — those teach nothing and must not enter the brief.
+- Never invent a reason the edits do not support.
+- Write it as the campaign manager would say it, plainly.`;
+
+async function proposeLessonFromEdit(before, after) {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) return null;
+  if (copySpendThisMonth() >= COPY_BUDGET_USD) return null;
+  const flat = seq => (seq?.steps || []).flatMap(s =>
+    (s.variations || []).map(v => `[step ${s.step}${v.variation}]\nSubject: ${v.subject}\n${v.body}`)).join('\n\n');
+  const b = flat(before), a = flat(after);
+  if (!b || !a || b === a) return null;
+  try {
+    // Haiku is the right tool here: comparing two texts and naming the
+    // difference is not the job that needed Opus.
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json', 'x-api-key': key,
+        'anthropic-version': '2023-06-01', 'anthropic-beta': 'prompt-caching-2024-07-31',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5', max_tokens: 400,
+        system: [{ type: 'text', text: DIFF_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
+        messages: [{ role: 'user', content: `BEFORE:\n${b.slice(0, 6000)}\n\n---\n\nAFTER:\n${a.slice(0, 6000)}` }],
+      }),
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const text = ((j?.content || []).filter(x => x.type === 'text').map(x => x.text).join('') || '')
+      .replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+    const parsed = JSON.parse(text);
+    if (!parsed.confident || !parsed.lesson) return null;
+    return String(parsed.lesson).slice(0, 500);
+  } catch { return null; }
+}
+
+// Called by the page after a CM edits, BEFORE they approve: returns a proposed
+// lesson for them to accept or overwrite. Costs a fraction of a penny.
+app.post('/api/copy/draft/:id/suggest-lesson', requireSession, async (req, res) => {
+  try {
+    const row = db.prepare('SELECT generated FROM copy_drafts WHERE id = ?').get(Number(req.params.id));
+    if (!row) return res.status(404).json({ error: 'No such draft' });
+    if (!req.body?.sequence) return res.json({ lesson: null });
+    const lesson = await proposeLessonFromEdit(JSON.parse(row.generated), req.body.sequence);
+    res.json({ lesson });
+  } catch (e) { res.json({ lesson: null, note: e.message }); }
 });
 
 // Is the approval gate real? Same question as the queue's, asked of copy —
