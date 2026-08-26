@@ -8,6 +8,7 @@ const dnsPromises = require('dns').promises;
 // identical expression or Postgres silently ignores the index — importing it
 // rather than re-typing it makes drift impossible.
 const { DOMAIN_NORM_SQL } = require('./lib/adscheck/schema');
+const { DISQUALIFIER_TIERS, SNOOZE_MONTHS } = require('./scripts/extract-reply-facts');
 
 // Dedicated resolver for high-volume MX enrichment. Routing these lookups through
 // public resolvers (Cloudflare / Google) instead of the server's default resolver
@@ -1204,7 +1205,12 @@ class PostgresDatabase {
         ['industry',          `CREATE INDEX IF NOT EXISTS idx_contacts_industry_trgm          ON contacts USING GIN (industry gin_trgm_ops)`],
         ['keywords',          `CREATE INDEX IF NOT EXISTS idx_contacts_keywords_trgm          ON contacts USING GIN (keywords gin_trgm_ops)`],
         ['technologies',      `CREATE INDEX IF NOT EXISTS idx_contacts_technologies_trgm      ON contacts USING GIN (technologies gin_trgm_ops)`],
-        ['company_name',      `CREATE INDEX IF NOT EXISTS idx_contacts_company_name_trgm     ON contacts USING GIN (company_name gin_trgm_ops)`],
+        // LOWER() here matches the actual query at /api/admin/database/contacts
+        // (LOWER(company_name) LIKE ...) -- a plain-column trgm index can't be
+        // used for a lower()-wrapped predicate, so the old idx_contacts_company_name_trgm
+        // was dead weight (224MB, 0 uses) while every load fell back to a
+        // 1.46M-row seq scan. Measured fix: 3033ms -> 361ms. See project_contacts_page_trgm_mismatch.
+        ['company_name',      `CREATE INDEX IF NOT EXISTS idx_contacts_company_name_lower_trgm ON contacts USING GIN (LOWER(company_name) gin_trgm_ops)`],
         // B-tree on lowered email domain — catch-all propagation matches
         // by domain on every verify batch. Without this it was a full
         // 230k-row seq scan and held a pool connection for seconds.
@@ -1238,8 +1244,14 @@ class PostgresDatabase {
         // run completes, so "next unverified batch" scans stay O(batch) on 592k rows.
         ['ch_unverified',    `CREATE INDEX IF NOT EXISTS idx_contacts_ch_unverified ON contacts (id) WHERE ch_verified_at IS NULL`],
         ['exported_apollo',  `CREATE INDEX IF NOT EXISTS idx_contacts_exported_apollo ON contacts (exported_to_apollo_at)`],
-        ['first_name',       `CREATE INDEX IF NOT EXISTS idx_contacts_first_name_trgm ON contacts USING GIN (first_name gin_trgm_ops)`],
-        ['last_name',        `CREATE INDEX IF NOT EXISTS idx_contacts_last_name_trgm ON contacts USING GIN (last_name gin_trgm_ops)`],
+        // Same LOWER()-mismatch fix as company_name above.
+        ['first_name',       `CREATE INDEX IF NOT EXISTS idx_contacts_first_name_lower_trgm ON contacts USING GIN (LOWER(first_name) gin_trgm_ops)`],
+        ['last_name',        `CREATE INDEX IF NOT EXISTS idx_contacts_last_name_lower_trgm ON contacts USING GIN (LOWER(last_name) gin_trgm_ops)`],
+        // email had no trgm index at all -- search fell back to a full seq scan.
+        ['email_trgm',       `CREATE INDEX IF NOT EXISTS idx_contacts_email_trgm ON contacts USING GIN (LOWER(email) gin_trgm_ops)`],
+        // Default sort column for /api/admin/database/contacts -- every page
+        // load (even with zero filters) sorts by this. Measured fix: 2194ms -> 3ms.
+        ['imported_at',      `CREATE INDEX IF NOT EXISTS idx_contacts_imported_at ON contacts (imported_at DESC)`],
         ['tags_gin',         `CREATE INDEX IF NOT EXISTS idx_contacts_tags_gin ON contacts USING GIN (tags)`],
         // Per-client 60-day cooldown filter does `emailed_workspaces ? $ws`
         // on every search/count when a client is selected — jsonb_path_ops
@@ -2446,6 +2458,54 @@ class PostgresDatabase {
         WHERE rf.company_domain = LOWER(SPLIT_PART(contacts.email,'@',2))
           AND ((rf.attribute = 'premises_tenure' AND rf.value = 'rented')
             OR rf.attribute = 'no_premises'))`);
+    });
+
+    // Hard block, automatic for every client, no toggle: a domain that told a
+    // PREVIOUS client "we already have an accountant" / "no bad debt" / etc.
+    // is excluded from every future send in that same vertical, the same way
+    // ccodOwnsBuilding is force-excluded for solar. Snooze length is tiered
+    // per ATTRIBUTE — a 6-month "has a provider" fact expires and the domain
+    // becomes sendable again; a much longer "doesn't need this at all" fact
+    // effectively never does. One EXISTS clause per attribute (not a shared
+    // duration for the whole vertical), so a short-tier fact can never
+    // inherit a long-tier fact's window just because they share a vertical.
+    // filters.vertical (set earlier in this function from client_verticals)
+    // drives WHICH facts apply — a fact tagged for a different vertical is
+    // irrelevant. filters.disqualifierOverrides (set by api-contacts.js from
+    // the LIVE disqualifier_rule_settings table, edited on
+    // /disqualifiers.html) wins over the DISQUALIFIER_TIERS/SNOOZE_MONTHS
+    // hardcoded defaults below — those defaults only apply to a rule that has
+    // never been saved on that page. A rule with enabled:false is skipped
+    // entirely: it stops being an automatic exclusion just as it stops being
+    // extracted at all (see extractWithRules's disabledKeys param).
+    safe('excludeVerticalDisqualifiers', () => {
+      const v = filters.vertical;
+      if (!v) return;
+      const overrides = filters.disqualifierOverrides || {};
+      // Keys with no ':' (premises_tenure, no_premises, ceased_trading) are
+      // universal — they disqualify a lead regardless of vertical, so they
+      // always apply. Keys with ':vertical' only apply to a matching vertical.
+      const attrs = Object.keys(DISQUALIFIER_TIERS)
+        .filter(key => !key.includes(':') || key.endsWith(':' + v))
+        .map(key => key.includes(':') ? key.slice(0, key.indexOf(':')) : key);
+      if (!attrs.length) return;
+      const today = new Date().toISOString().slice(0, 10);
+      for (const attr of attrs) {
+        const ruleKey = DISQUALIFIER_TIERS[`${attr}:${v}`] !== undefined ? `${attr}:${v}` : attr;
+        const override = overrides[ruleKey];
+        if (override && override.enabled === false) continue;
+        const months = override && Number.isFinite(override.snoozeMonths)
+          ? override.snoozeMonths
+          : SNOOZE_MONTHS[DISQUALIFIER_TIERS[ruleKey]];
+        clauses.push(`NOT EXISTS (
+          SELECT 1 FROM reply_facts rf
+          WHERE rf.company_domain = LOWER(SPLIT_PART(contacts.email,'@',2))
+            AND rf.attribute = $${p}
+            AND (rf.vertical = $${p+1} OR rf.vertical IS NULL)
+            AND rf.observed_at + ($${p+2} || ' months')::interval >= $${p+3}::date
+        )`);
+        params.push(attr, v, months, today); p += 4;
+      }
     });
 
     // hasFact=<attribute>[:<value>][:<vertical>] — the inverse, for reviewing

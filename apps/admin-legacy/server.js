@@ -690,6 +690,23 @@ try { db.exec(`ALTER TABLE client_verticals ADD COLUMN excluded_counties      TE
 try { db.exec(`ALTER TABLE client_verticals ADD COLUMN excluded_cities        TEXT DEFAULT ''`); } catch {}
 try { db.exec(`ALTER TABLE client_verticals ADD COLUMN excluded_job_titles    TEXT DEFAULT ''`); } catch {}
 
+// ── Reply-disqualifier rule settings ──────────────────────────────────────
+// Per-rule snooze duration + on/off, editable from /disqualifiers.html. Row
+// key is "attribute:vertical" (or bare "attribute" for a universal rule like
+// premises_tenure), matching DISQUALIFIER_TIERS' key format in
+// scripts/extract-reply-facts.js. This table is the LIVE source of truth —
+// db-postgres.js's excludeVerticalDisqualifiers clause and the LLM cron pass
+// both read it, falling back to DISQUALIFIER_TIERS' hardcoded defaults only
+// for a rule that has never been saved here.
+db.exec(`CREATE TABLE IF NOT EXISTS disqualifier_rule_settings (
+  rule_key      TEXT PRIMARY KEY,
+  attribute     TEXT NOT NULL,
+  vertical      TEXT,
+  snooze_months INTEGER NOT NULL DEFAULT 6,
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  updated_at    TEXT DEFAULT (datetime('now'))
+)`);
+
 // ── Webhook event store (SQLite — survives restarts) ─────────────────────
 db.exec(`CREATE TABLE IF NOT EXISTS webhook_events (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -20392,7 +20409,8 @@ app.get('/api/contacts/fact-options', requireSession, async (req, res) => {
   }
 });
 
-// Hourly rules-pass over replies that arrived since the last run.
+// Hourly rules-pass (+ LLM pass on the leftovers) over replies that arrived
+// since the last run.
 //
 // WHY THIS EXISTS: extraction was a manual script. The 2026-08-18 backfill ran
 // once and nothing has scanned a reply since, so every fact stated after that
@@ -20403,10 +20421,15 @@ app.get('/api/contacts/fact-options', requireSession, async (req, res) => {
 //   GET /api/cron/reply-facts?secret=$CRON_SECRET
 //   &hours=24   how far back to look (default 24, max 720)
 //   &dry=1      extract and report WITHOUT writing
+//   &llm=0      skip the LLM pass this run (rules-only, the old behaviour)
 //
-// Rules only, deliberately: the pass is free, instant and high precision, so it
-// can run hourly without cost or quota. The LLM pass stays manual — it is
-// throttled to ~2s/call and would not finish inside a cron window.
+// Two passes, same order as the CLI: rules first (free, instant, exact —
+// see extract-reply-facts.js's RULES/DISQUALIFIER_TIERS), then the Gemini
+// pass ONLY on replies the rules found nothing in. Running the LLM on
+// everything would re-derive, at cost, answers the rules already got right
+// for free — the LLM's job is the long tail regex can't shape a pattern for.
+// Capped to LLM_BUDGET per run so one hourly tick can't run indefinitely;
+// anything past the cap is picked up by the next hourly tick instead.
 app.get('/api/cron/reply-facts', async (req, res) => {
   const secret = process.env.CRON_SECRET;
   const sess = decodeSession(req);
@@ -20418,11 +20441,25 @@ app.get('/api/cron/reply-facts', async (req, res) => {
     const pgdb = req.app.locals.pgDb;
     if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
 
-    // Same module the CLI uses, so the rules cannot drift between the two.
-    const { extractWithRules, RULES_VERSION } = require('./scripts/extract-reply-facts.js');
+    // Same module the CLI uses, so the rules and LLM guardrails cannot drift
+    // between the two entry points.
+    const { extractWithRules, cleanBody, RULES_VERSION, callGemini, norm, GEMINI_KEY, GEMINI_MODEL }
+      = require('./scripts/extract-reply-facts.js');
+
+    // Live settings from /disqualifiers.html (disqualifier_rule_settings) —
+    // a rule an operator has switched OFF is skipped by both the rules pass
+    // (extractWithRules) and the LLM pass (its own prompt/schema shrink to
+    // match, via callGemini's disabledKeys param), so nothing gets written
+    // for it either way.
+    const disabledKeys = new Set(
+      db.prepare(`SELECT rule_key FROM disqualifier_rule_settings WHERE enabled = 0`).all()
+        .map(r => r.rule_key)
+    );
 
     const hours = Math.min(720, Math.max(1, parseInt(req.query.hours, 10) || 24));
     const dry   = req.query.dry === '1' || req.query.dry === 'true';
+    const useLlm = req.query.llm !== '0' && req.query.llm !== 'false' && !!GEMINI_KEY;
+    const LLM_BUDGET = Math.min(500, Math.max(0, parseInt(req.query.llmLimit, 10) || 300));
 
     // Human categories only. Warmup is our own mailboxes talking to each other
     // and OOO is noise for these attributes; departures have their own pass.
@@ -20438,35 +20475,86 @@ app.get('/api/cron/reply-facts', async (req, res) => {
       [String(hours)]
     );
 
-    let kept = 0, wrote = 0;
+    let kept = 0, wrote = 0, llmScanned = 0, llmKept = 0, llmRejected = 0, llmErrors = 0;
     const samples = [];
+
+    const writeFact = async (email, domain, f, extractor) => {
+      kept++;
+      if (samples.length < 25) samples.push({ email, attribute: f.attribute, value: f.value, quote: f.quote.slice(0, 120), extractor });
+      if (dry) return;
+      // Idempotent: re-running corrects rows in place rather than duplicating.
+      const ins = await pgdb.query(
+        `INSERT INTO reply_facts
+           (lead_email, company_domain, attribute, value, vertical,
+            confidence, quote, source_reply_id, observed_at, extractor)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         ON CONFLICT ON CONSTRAINT reply_facts_unique DO UPDATE SET
+           value = EXCLUDED.value, quote = EXCLUDED.quote,
+           confidence = EXCLUDED.confidence, extractor = EXCLUDED.extractor
+         RETURNING 1`,
+        [email, domain, f.attribute, f.value, f.vertical,
+         f.confidence, f.quote, f.source_reply_id, f.observed_at, extractor]
+      );
+      wrote += ins.rowCount;
+    };
+
+    let llmBudgetLeft = useLlm ? LLM_BUDGET : 0;
     for (const r of rows) {
       const email = String(r.lead_email).toLowerCase();
       const domain = (email.split('@')[1] || '').toLowerCase();
       if (!domain) continue;
-      for (const f of extractWithRules(r.body_preview)) {
-        kept++;
-        if (samples.length < 25) samples.push({ email, attribute: f.attribute, value: f.value, quote: f.quote.slice(0, 120) });
-        if (dry) continue;
-        // Idempotent: re-running corrects rows in place rather than duplicating.
-        const ins = await pgdb.query(
-          `INSERT INTO reply_facts
-             (lead_email, company_domain, attribute, value, vertical,
-              confidence, quote, source_reply_id, observed_at, extractor)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-           ON CONFLICT ON CONSTRAINT reply_facts_unique DO UPDATE SET
-             value = EXCLUDED.value, quote = EXCLUDED.quote,
-             confidence = EXCLUDED.confidence, extractor = EXCLUDED.extractor
-           RETURNING 1`,
-          [email, domain, f.attribute, f.value, f.vertical,
-           f.confidence, f.quote, r.id, r.received_at, RULES_VERSION]
-        );
-        wrote += ins.rowCount;
+
+      const ruleFacts = extractWithRules(r.body_preview, disabledKeys);
+      for (const f of ruleFacts) {
+        await writeFact(email, domain, { ...f, source_reply_id: r.id, observed_at: r.received_at }, RULES_VERSION);
+      }
+
+      // LLM only on what the rules found NOTHING in, and only until the
+      // per-run budget runs out — the rest waits for next hour's tick rather
+      // than blowing out this run's duration or cost.
+      if (ruleFacts.length === 0 && llmBudgetLeft > 0) {
+        const body = cleanBody(r.body_preview);
+        if (body && body.length >= 10) {
+          llmBudgetLeft--;
+          llmScanned++;
+          let llmFacts = [];
+          try { llmFacts = await callGemini(body, 0, disabledKeys); } catch { llmErrors++; }
+          const hay = norm(body);
+          for (const f of llmFacts) {
+            // Anti-hallucination gate — identical to the CLI's, so a fact
+            // that would be rejected offline can't sneak in live.
+            if (!f.quote || !norm(f.quote) || !hay.includes(norm(f.quote))) { llmRejected++; continue; }
+            if ((f.confidence ?? 0) < 0.7) { llmRejected++; continue; }
+            if (f.attribute === 'team_size' && !/^\d{1,6}$/.test(String(f.value))) { llmRejected++; continue; }
+
+            let subjectEmail = email, subjectDomain = domain;
+            if (f.attribute === 'person_left') {
+              const s = String(f.subject_email || '').trim().toLowerCase();
+              if (s && s !== 'sender') {
+                if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s)) { llmRejected++; continue; }
+                subjectEmail = s;
+                subjectDomain = (s.split('@')[1] || domain).toLowerCase();
+              }
+            }
+            llmKept++;
+            await writeFact(subjectEmail, subjectDomain, {
+              attribute: f.attribute, value: String(f.value), vertical: f.vertical || null,
+              quote: String(f.quote).slice(0, 400), confidence: Number(f.confidence),
+              source_reply_id: r.id, observed_at: r.received_at,
+            }, `gemini:${GEMINI_MODEL}:v1`);
+          }
+          // The key allows a short burst then throttles hard. Pacing here
+          // costs far less than the backoff that hammering provokes.
+          await new Promise(res => setTimeout(res, 2000));
+        }
       }
     }
 
-    res.json({ ok: true, hours, dry, extractor: RULES_VERSION,
-               replies_scanned: rows.length, facts_found: kept, facts_written: wrote, samples });
+    res.json({ ok: true, hours, dry, useLlm, llmBudget: LLM_BUDGET,
+               extractor: RULES_VERSION,
+               replies_scanned: rows.length, facts_found: kept, facts_written: wrote,
+               llm_scanned: llmScanned, llm_facts_kept: llmKept, llm_rejected: llmRejected, llm_errors: llmErrors,
+               samples });
   } catch (err) {
     console.error('[cron/reply-facts] error:', err.message);
     res.status(500).json({ error: err.message });
@@ -20550,6 +20638,65 @@ app.get('/api/cron/reply-facts/why', async (req, res) => {
   }
 });
 
+// ── Disqualifier rule settings (/disqualifiers.html) ────────────────────────
+// One row per rule (vertical > attribute), each with a snooze duration and an
+// on/off toggle. GET returns every rule from DISQUALIFIER_TIERS/RULE_LABELS,
+// grouped by vertical, with the LIVE setting merged in (falling back to the
+// hardcoded default for anything never saved). POST saves one rule's setting
+// — read live by db-postgres.js's excludeVerticalDisqualifiers clause (via
+// api-contacts.js) and by the /api/cron/reply-facts LLM+rules pass, so a
+// change here takes effect on the very next search/push/cron tick, no
+// redeploy needed.
+app.get('/api/disqualifier-rules', requireSession, (req, res) => {
+  try {
+    const { DISQUALIFIER_TIERS, SNOOZE_MONTHS, RULE_LABELS } = require('./scripts/extract-reply-facts.js');
+    const saved = {};
+    for (const row of db.prepare(`SELECT rule_key, snooze_months, enabled FROM disqualifier_rule_settings`).all()) {
+      saved[row.rule_key] = { snoozeMonths: row.snooze_months, enabled: !!row.enabled };
+    }
+    const rules = Object.entries(DISQUALIFIER_TIERS).map(([ruleKey, tier]) => {
+      const [attribute, vertical] = ruleKey.includes(':') ? ruleKey.split(':') : [ruleKey, null];
+      const meta = RULE_LABELS[ruleKey] || {};
+      const override = saved[ruleKey];
+      return {
+        ruleKey, attribute, vertical: vertical || meta.vertical || null,
+        label: meta.label || attribute, example: meta.example || '',
+        defaultSnoozeMonths: SNOOZE_MONTHS[tier], defaultTier: tier,
+        snoozeMonths: override ? override.snoozeMonths : SNOOZE_MONTHS[tier],
+        enabled: override ? override.enabled : true,
+        isOverridden: !!override,
+      };
+    });
+    res.json({ ok: true, rules });
+  } catch (err) {
+    console.error('[disqualifier-rules] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/disqualifier-rules', requireAdmin, (req, res) => {
+  try {
+    const { ruleKey, snoozeMonths, enabled } = req.body || {};
+    if (!ruleKey || typeof ruleKey !== 'string') return res.status(400).json({ error: 'ruleKey required' });
+    const months = parseInt(snoozeMonths, 10);
+    if (!Number.isFinite(months) || months <= 0 || months > 1200) {
+      return res.status(400).json({ error: 'snoozeMonths must be a positive number (months)' });
+    }
+    const [attribute, vertical] = ruleKey.includes(':') ? ruleKey.split(':') : [ruleKey, null];
+    db.prepare(`
+      INSERT INTO disqualifier_rule_settings (rule_key, attribute, vertical, snooze_months, enabled, updated_at)
+      VALUES (?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(rule_key) DO UPDATE SET
+        snooze_months = excluded.snooze_months, enabled = excluded.enabled, updated_at = excluded.updated_at
+    `).run(ruleKey, attribute, vertical, months, enabled ? 1 : 0);
+    res.json({ ok: true, ruleKey, snoozeMonths: months, enabled: !!enabled });
+  } catch (err) {
+    console.error('[disqualifier-rules save] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/disqualifiers.html', (req, res) => res.sendFile(path.join(__dirname, 'disqualifiers.html')));
 
 app.get('/api/contacts/verified-today', requireSession, async (req, res) => {
   try {

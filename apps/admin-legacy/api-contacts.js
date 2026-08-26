@@ -656,7 +656,7 @@ module.exports = (db) => {
             const row = sq.prepare(`
               SELECT excluded_industries, excluded_company_sizes, excluded_keywords,
                      excluded_counties, excluded_cities, excluded_job_titles,
-                     require_owns_building
+                     require_owns_building, vertical
                 FROM client_verticals WHERE workspace_id = ?
             `).get(rest.cooldownWorkspace);
             if (row) {
@@ -676,6 +676,32 @@ module.exports = (db) => {
               // that requires ownership. Silence (no reply_facts row) is NOT
               // evidence of tenancy and stays sendable — see excludeNonOwnerDomain.
               if (row.require_owns_building) filters.excludeNonOwnerDomain = true;
+              // Same treatment for the reply-fact disqualifiers (has_supplier,
+              // no_bad_debt, no_finance_need, etc. — see DISQUALIFIER_TIERS in
+              // extract-reply-facts.js): force the client's OWN configured
+              // vertical rather than trust the caller to pass one. Before this,
+              // a lead who told Client A "we already have an accountant" could
+              // still be shown/pushed to Client B in the same vertical, because
+              // excludeVerticalDisqualifiers only fires when filters.vertical is
+              // set, and nothing forced it to be set. A caller-supplied
+              // rest.vertical (e.g. reviewing a different vertical's facts on
+              // purpose) still wins — this only fills the gap when absent.
+              if (row.vertical && !filters.vertical) filters.vertical = row.vertical;
+
+              // Live per-rule snooze/on-off settings from /disqualifiers.html
+              // (disqualifier_rule_settings). A rule never saved there falls
+              // back to extract-reply-facts.js's hardcoded DISQUALIFIER_TIERS
+              // default inside db-postgres.js — this only carries OVERRIDES.
+              const settingRows = sq.prepare(
+                `SELECT rule_key, snooze_months, enabled FROM disqualifier_rule_settings`
+              ).all();
+              if (settingRows.length) {
+                filters.disqualifierOverrides = {};
+                for (const sr of settingRows) {
+                  filters.disqualifierOverrides[sr.rule_key] =
+                    { snoozeMonths: sr.snooze_months, enabled: !!sr.enabled };
+                }
+              }
             }
           }
         } catch (e) {

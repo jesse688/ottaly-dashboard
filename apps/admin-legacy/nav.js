@@ -80,9 +80,10 @@
       color: '#F87171',
       icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 4.93l1.41 1.41M4.93 19.07l1.41-1.41M19.07 19.07l-1.41-1.41M12 2v2M12 20v2M2 12h2M20 12h2"/></svg>',
       pages: [
-        { href: 'admin.html',      label: 'Admin Settings', admin: true },
-        { href: 'workload.html',   label: 'CM Workload',    manager: true },
-        { href: 'commission.html', label: 'Commission',     manager: true },
+        { href: 'admin.html',        label: 'Admin Settings', admin: true },
+        { href: 'disqualifiers.html', label: 'Disqualifiers', manager: true },
+        { href: 'workload.html',    label: 'CM Workload',    manager: true },
+        { href: 'commission.html',  label: 'Commission',     manager: true },
       ]
     },
   ];
