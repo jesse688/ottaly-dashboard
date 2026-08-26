@@ -14,7 +14,13 @@ export const dynamic = 'force-dynamic'
  * deploy-confirm step can hit it without a session.
  */
 export async function GET() {
+  // BUILD_STAMP is inlined by next.config.ts at BUILD time, so it changes on
+  // every real build and cannot be left stale by hand. It is checked FIRST
+  // because GIT_SHA is a manually-set env var on the Easypanel service, and a
+  // hand-set value survives deploys — it reported 13a8777 for 180 commits,
+  // which is precisely the failure this endpoint exists to catch.
   const sha =
+    process.env.BUILD_STAMP ??
     process.env.GIT_SHA ??
     process.env.VERCEL_GIT_COMMIT_SHA ??
     process.env.SOURCE_COMMIT ?? // Easypanel/Coolify build arg

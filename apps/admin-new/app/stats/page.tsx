@@ -26,6 +26,7 @@ interface WsTotals {
   oooReplies: number
   bounces: number
   contacted: number
+  uniqueContacted: number
   leads: number
   replyRate: number
   allReplyRate: number
@@ -44,6 +45,8 @@ interface Workspace {
 interface SummaryResponse {
   workspaces: Workspace[]
   partial?: boolean
+  failedCount?: number
+  failedNames?: string[]
   updatedAt: string | null
   error?: string
 }
@@ -134,7 +137,7 @@ const brTone = (br: number): 'ok' | 'warn' | 'error' => (br >= 0.05 ? 'error' : 
 // Build the synthetic "All Workspaces" aggregate row (legacy buildAllWorkspaces).
 function buildAllWorkspaces(list: Workspace[]): Workspace | null {
   if (!list.length) return null
-  const t = { sent: 0, replies: 0, posReplies: 0, oooReplies: 0, bounces: 0, contacted: 0, leads: 0 }
+  const t = { sent: 0, replies: 0, posReplies: 0, oooReplies: 0, bounces: 0, contacted: 0, uniqueContacted: 0, leads: 0 }
   const byDate: Record<string, DayData> = {}
   let nDays = 0
   for (const w of list) {
@@ -144,6 +147,10 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
     t.oooReplies += w.totals.oooReplies
     t.bounces += w.totals.bounces
     t.contacted += w.totals.contacted
+    // Reply-rate denominator, summed across workspaces. Distinct people are
+    // distinct per workspace (a workspace owns its own leads), so adding these
+    // is sound and keeps the agency headline on the same basis as each row.
+    t.uniqueContacted += w.totals.uniqueContacted
     t.leads += w.totals.leads
     nDays = Math.max(nDays, w.series.length)
     for (const d of w.series) {
@@ -175,9 +182,12 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
     name: `All Workspaces (${list.length})`,
     totals: {
       ...t,
-      // replies = human (OOO separate). Human RR = replies/sent; w/OOO adds ooo.
-      replyRate: t.sent > 0 ? t.replies / t.sent : 0,
-      allReplyRate: t.sent > 0 ? (t.replies + t.oooReplies) / t.sent : 0,
+      // replies = human (OOO separate). Rates divide by unique-contacted, which
+      // is what PlusVibe itself divides by — see the note in the summary route.
+      // Bounce is the exception and divides by sent.
+      replyRate: t.uniqueContacted > 0 ? t.replies / t.uniqueContacted : 0,
+      allReplyRate:
+        t.uniqueContacted > 0 ? (t.replies + t.oooReplies) / t.uniqueContacted : 0,
       bounceRate: t.sent > 0 ? t.bounces / t.sent : 0,
       // RTL = Replies-To-Lead: replies needed per lead (replies ÷ leads).
       // RTL = human replies per lead; replies is already human.
@@ -398,6 +408,10 @@ export default function StatsPage() {
   const [status, setStatus] = useState<'loading' | 'ok' | 'empty' | 'error'>('loading')
   const [errMsg, setErrMsg] = useState('')
   const [updatedAt, setUpdatedAt] = useState<string | null>(null)
+  // Workspaces PlusVibe could not answer for. While this is non-empty the
+  // agency-wide denominator is short, so no rate on this page is trustworthy
+  // and every one of them is blanked rather than printed.
+  const [failedNames, setFailedNames] = useState<string[]>([])
   const [refreshing, setRefreshing] = useState(false)
   const reqId = useRef(0)
 
@@ -415,6 +429,7 @@ export default function StatsPage() {
       const data: SummaryResponse = await sumRes.json()
       if (data.error) throw new Error(data.error)
       setUpdatedAt(data.updatedAt)
+      setFailedNames(data.partial ? (data.failedNames ?? []) : [])
 
       if (provRes.ok) {
         const pj: ProvidersResponse = await provRes.json()
@@ -434,6 +449,7 @@ export default function StatsPage() {
     } catch (e) {
       if (id !== reqId.current) return
       setStatus('error')
+      setFailedNames([])
       setErrMsg(e instanceof Error ? e.message : String(e))
     }
   }, [])
@@ -476,6 +492,10 @@ export default function StatsPage() {
   const agg = useMemo(() => buildAllWorkspaces(rows), [rows])
   const displayRows = useMemo(() => (agg ? [agg, ...rows] : rows), [agg, rows])
   const loading = status === 'loading'
+  // Any workspace PlusVibe failed to answer for makes the agency-wide totals
+  // short on the denominator side. A rate computed from that reads HIGH — the
+  // bug this page was fixed for — so we show nothing instead of a wrong number.
+  const incomplete = failedNames.length > 0
 
   return (
     <PageShell
@@ -516,28 +536,48 @@ export default function StatsPage() {
         </div>
       }
     >
+      {incomplete && (
+        <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+          <div className="font-semibold text-amber-700 dark:text-amber-400">
+            Incomplete data &mdash; rates hidden
+          </div>
+          <div className="mt-0.5 text-muted-foreground">
+            PlusVibe didn&rsquo;t return stats for {failedNames.length}{' '}
+            {failedNames.length === 1 ? 'workspace' : 'workspaces'} ({failedNames.join(', ')}).
+            Showing a rate now would divide by a short denominator and read too high.
+          </div>
+          <button
+            type="button"
+            onClick={() => load(currentRange())}
+            className="mt-2 rounded-md border border-amber-500/40 px-2.5 py-1 text-xs font-medium hover:bg-amber-500/10"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Agency KPIs — Human RR (real human replies, OOO+warmup excluded) and Reply
           Rate ((human+OOO)/sent). Warmup is never counted in either. */}
       <div className="mb-5 grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
-        <KpiCard label="Sent" value={num(agg?.totals.sent ?? 0)} tone="navy" loading={loading} />
+        <KpiCard label="Sent" value={incomplete ? '—' : num(agg?.totals.sent ?? 0)} tone="navy" loading={loading} />
         <KpiCard
           label="Human RR"
-          value={pct(agg?.totals.replyRate ?? 0)}
-          sub="real replies"
+          value={incomplete ? '—' : pct(agg?.totals.replyRate ?? 0)}
+          sub={incomplete ? 'unavailable' : 'real replies'}
           tone="teal"
           loading={loading}
         />
         <KpiCard
           label="Reply Rate"
-          value={pct(agg?.totals.allReplyRate ?? 0)}
-          sub="incl. OOO/auto"
+          value={incomplete ? '—' : pct(agg?.totals.allReplyRate ?? 0)}
+          sub={incomplete ? 'unavailable' : 'incl. OOO/auto'}
           tone="purple"
           loading={loading}
         />
-        <KpiCard label="Bounce Rate" value={pct(agg?.totals.bounceRate ?? 0)} tone="red" loading={loading} />
+        <KpiCard label="Bounce Rate" value={incomplete ? '—' : pct(agg?.totals.bounceRate ?? 0)} tone="red" loading={loading} />
         <KpiCard label="Leads" value={num(agg?.totals.leads ?? 0)} sub="in range" tone="green" loading={loading} />
-        <KpiCard label="RTL" value={agg && agg.totals.leads > 0 ? dec(agg.totals.rtl, 1) : '—'} sub="replies / lead" tone="yellow" loading={loading} />
-        <KpiCard label="LPT" value={agg && agg.totals.leads > 0 ? dec(agg.totals.lpt, 0) : '—'} sub="contacts / lead" tone="green" loading={loading} />
+        <KpiCard label="RTL" value={!incomplete && agg && agg.totals.leads > 0 ? dec(agg.totals.rtl, 1) : '—'} sub="replies / lead" tone="yellow" loading={loading} />
+        <KpiCard label="LPT" value={!incomplete && agg && agg.totals.leads > 0 ? dec(agg.totals.lpt, 0) : '—'} sub="contacts / lead" tone="green" loading={loading} />
       </div>
 
       {status === 'error' && (
