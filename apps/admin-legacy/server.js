@@ -19220,31 +19220,64 @@ async function computeTamSnapshot(pg) {
   const rows = [];
   const q = async (sql, params = []) => (await pg.pool.query(sql, params)).rows;
 
-  // EVERY count below is of USABLE contacts only, so the three numbers always
-  // reconcile: usable = emailed + untouched.
+  // Counts are of PEOPLE, deduplicated by email — not rows.
   //
-  // The first version counted `emailed` over ALL contacts while counting
-  // `usable` over complete ones, which compares two different populations. On
-  // engine data — 6,690 rows, only 567 complete, but 3,600 already emailed —
-  // that produced "635% used". Nonsense on its face, and it would have made
-  // every plan built on these numbers wrong.
+  // The same person exists under several sources: Ottaly exports its data to
+  // Apollo for enrichment and reimports it, so one human becomes a `plusvibe`
+  // row AND an `apollo_csv` row. Measured: 1,462,400 rows but only 1,074,957
+  // distinct emails — 387,443 duplicates, of which plusvibe+plusvibe_csv is
+  // 165,323 and apollo_csv+plusvibe 57,258. Counting rows overstated the
+  // market by 43%, and every plan built on it would have promised a pool that
+  // does not exist.
+  //
+  // A person counts as usable if ANY of their rows has a name and company (the
+  // Apollo round trip is what fills those in), and as emailed if ANY row has
+  // been pushed. So usable = emailed + untouched, exactly.
+  const perEmail = `
+    SELECT LOWER(email) AS person,
+           BOOL_OR(${TAM_USABLE_SQL}) AS usable,
+           BOOL_OR(NOT (${TAM_UNTOUCHED_SQL})) AS emailed
+    FROM contacts WHERE email IS NOT NULL AND email <> '' GROUP BY 1`;
+
   const [overall] = await q(
-    `SELECT COUNT(*)::int total,
-            COUNT(*) FILTER (WHERE ${TAM_USABLE_SQL})::int usable,
-            COUNT(*) FILTER (WHERE ${TAM_USABLE_SQL} AND NOT (${TAM_UNTOUCHED_SQL}))::int emailed,
-            COUNT(*) FILTER (WHERE ${TAM_USABLE_SQL} AND ${TAM_UNTOUCHED_SQL})::int untouched
-     FROM contacts`);
+    `WITH pe AS (${perEmail})
+     SELECT (SELECT COUNT(*)::int FROM contacts) AS total,
+            COUNT(*) FILTER (WHERE usable)::int usable,
+            COUNT(*) FILTER (WHERE usable AND emailed)::int emailed,
+            COUNT(*) FILTER (WHERE usable AND NOT emailed)::int untouched
+     FROM pe`);
   rows.push({ scope: 'all', dimension: null, value: null, ...overall });
 
-  // 2. By the dimensions a CM actually cuts an audience on.
+  // Companies, not just people — a CM cutting an audience cares how many
+  // businesses are reachable, and ~2.2 people share each domain.
+  const [domains] = await q(
+    `WITH pe AS (
+       SELECT LOWER(email) AS person, SPLIT_PART(LOWER(email),'@',2) AS dom,
+              BOOL_OR(${TAM_USABLE_SQL}) AS usable,
+              BOOL_OR(NOT (${TAM_UNTOUCHED_SQL})) AS emailed
+       FROM contacts WHERE email IS NOT NULL AND email <> '' GROUP BY 1,2)
+     SELECT COUNT(DISTINCT dom) FILTER (WHERE usable)::int usable,
+            COUNT(DISTINCT dom) FILTER (WHERE usable AND emailed)::int emailed,
+            COUNT(DISTINCT dom) FILTER (WHERE usable AND NOT emailed)::int untouched
+     FROM pe`);
+  rows.push({ scope: 'domains', dimension: null, value: null, total: domains.usable, ...domains });
+
+  // 2. By the dimensions a CM actually cuts an audience on. Attributes are
+  //    taken from whichever of a person's rows carries them.
   for (const [dim, col] of [['industry', 'industry'], ['seniority', 'seniority'], ['source', 'source']]) {
     const r = await q(
-      `SELECT COALESCE(NULLIF(${col},''),'(not set)') AS value,
+      `WITH pe AS (
+         SELECT LOWER(email) AS person,
+                MAX(NULLIF(${col},'')) AS val,
+                BOOL_OR(${TAM_USABLE_SQL}) AS usable,
+                BOOL_OR(NOT (${TAM_UNTOUCHED_SQL})) AS emailed
+         FROM contacts WHERE email IS NOT NULL AND email <> '' GROUP BY 1)
+       SELECT COALESCE(val,'(not set)') AS value,
               COUNT(*)::int total,
-              COUNT(*) FILTER (WHERE ${TAM_USABLE_SQL})::int usable,
-              COUNT(*) FILTER (WHERE ${TAM_USABLE_SQL} AND NOT (${TAM_UNTOUCHED_SQL}))::int emailed,
-              COUNT(*) FILTER (WHERE ${TAM_USABLE_SQL} AND ${TAM_UNTOUCHED_SQL})::int untouched
-       FROM contacts GROUP BY 1 ORDER BY usable DESC LIMIT 40`);
+              COUNT(*) FILTER (WHERE usable)::int usable,
+              COUNT(*) FILTER (WHERE usable AND emailed)::int emailed,
+              COUNT(*) FILTER (WHERE usable AND NOT emailed)::int untouched
+       FROM pe GROUP BY 1 ORDER BY usable DESC LIMIT 40`);
     for (const x of r) rows.push({ scope: 'all', dimension: dim, ...x });
   }
 
@@ -19257,10 +19290,14 @@ async function computeTamSnapshot(pg) {
   //    ever emailed. A contact another client has used is still available to
   //    this one (subject to the cross-client spacing guards), so subtracting
   //    the global burn would understate every client's runway.
+  //    DISTINCT on the EMAIL, not the row id: the same person exists under
+  //    several sources after the Apollo round trip, so counting ids would
+  //    double-count their burn.
   const per = await q(
-    `SELECT pc->>'workspace_id' AS ws, COUNT(DISTINCT c.id)::int emailed
+    `SELECT pc->>'workspace_id' AS ws, COUNT(DISTINCT LOWER(c.email))::int emailed
      FROM contacts c, jsonb_array_elements(COALESCE(c.pushed_campaigns,'[]'::jsonb)) pc
-     WHERE pc->>'workspace_id' IS NOT NULL AND (${TAM_USABLE_SQL})
+     WHERE pc->>'workspace_id' IS NOT NULL AND c.email IS NOT NULL AND c.email <> ''
+       AND (${TAM_USABLE_SQL})
      GROUP BY 1`);
   for (const x of per) {
     rows.push({ scope: 'client', workspace_id: x.ws, dimension: null, value: null,
@@ -19295,6 +19332,7 @@ app.get('/api/tam', requireSession, (req, res) => {
   try {
     const ws = req.query.workspace_id;
     const overall = db.prepare(`SELECT * FROM tam_snapshot WHERE scope='all' AND dimension IS NULL`).get() || null;
+    const domains = db.prepare(`SELECT * FROM tam_snapshot WHERE scope='domains' AND dimension IS NULL`).get() || null;
     const byDim = {};
     for (const d of ['industry', 'seniority', 'source']) {
       byDim[d] = db.prepare(
@@ -19304,7 +19342,7 @@ app.get('/api/tam', requireSession, (req, res) => {
     const client = ws
       ? db.prepare(`SELECT * FROM tam_snapshot WHERE scope='client' AND workspace_id=?`).get(ws) || null
       : null;
-    res.json({ overall, byDimension: byDim, client, stale: !overall });
+    res.json({ overall, domains, byDimension: byDim, client, stale: !overall });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -19407,9 +19445,17 @@ Ordering rules — this is the important part:
 - Do not plan two consecutive campaigns at the same people with a different subject line. Each step must be a genuinely different audience or a genuinely different reason to care.
 - If the brief only really supports one or two audiences, plan two or three. Do not pad.
 
-Filters use these keys (same as the audience tool): jobTitle, jobTitleExclude, seniority, department, industry, industryExclude, keywords, keywordsExclude, sicCodes, numEmployeesRanges, companyCountry, companyRegion, companyCounty, companyTown, ownsBuilding, ccodOwnsBuilding, solarMinKwp, hasName, hasCompany. Comma-separated strings. Omit what you do not need — every filter narrows the pool.
+Filters use these keys: jobTitle, jobTitleExclude, seniority, department, industry, industryExclude, keywords, keywordsExclude, sicCodes, numEmployeesRanges, companyCountry, companyRegion, companyCounty, companyTown, ownsBuilding, ccodOwnsBuilding, solarMinKwp, hasName, hasCompany. Comma-separated strings.
 
-Judge pool sizes against the numbers you are given. A slice under about 2,000 sendable will run dry quickly; say so in its rationale if you plan it anyway.`;
+FILTERS MULTIPLY. This is the most common way these plans fail, so treat it as a hard constraint, not advice. Each filter you add cuts the pool again, and four reasonable-looking filters routinely leave under 300 people out of 20,000. Measured on this database: food & beverages alone is 24,299; adding seniority takes it to 16,411; adding company size and country takes it to 3,609; adding three keywords takes it to 260. That last campaign is dead on arrival.
+
+So:
+- Use THREE filters per campaign, four at the very most. Industry plus seniority plus country is usually the whole thing.
+- NEVER set both jobTitle and seniority. They cover the same ground and stack brutally. **Prefer jobTitle** — it is set on 1,012,647 contacts against seniority's 915,778, and 96,869 people have a title but no seniority, so filtering on seniority silently throws them away. It also targets the actual decision-maker rather than a band.
+- keywords is the most destructive filter there is — it matches only contacts whose company description happens to contain that word, and most rows have no description at all. Do not use it to describe an industry you have already selected. Use it only when it is the ONLY way to express the audience, and never more than one word.
+- Prefer a wider slice with a sharper angle over a narrow slice with a generic one. The copy does the qualifying; the filter only has to get you into the right room.
+
+Judge pool sizes against the numbers you are given. Aim for at least 5,000 sendable per campaign. Under 2,000 will run dry within weeks — do not plan it unless the brief leaves no alternative, and say so plainly in the rationale if you do.`;
 
 function tamContextForPrompt() {
   const o = db.prepare(`SELECT * FROM tam_snapshot WHERE scope='all' AND dimension IS NULL`).get();
@@ -19670,11 +19716,13 @@ Available filter keys (omit any you do not need — every key you set NARROWS th
 - hasName — "first_only" requires a first name; omit if nameless company inboxes are acceptable
 - hasCompany — "yes" requires a company name
 
-Rules:
-- Prefer FEWER, broader filters. Every filter you add cuts the pool, and a campaign that runs dry in a week is worse than one that is slightly loose.
+Rules — filters MULTIPLY, and that is how these go wrong:
+- Use THREE filters, four at the very most. Measured on this database: food & beverages alone is 24,299 people; add seniority and it is 16,411; add company size and country and it is 3,609; add three keywords and it is 260. Four reasonable choices left a dead campaign.
+- NEVER set both jobTitle and seniority. They cover the same ground and stack brutally. **Prefer jobTitle** — it is set on 1,012,647 contacts against seniority's 915,778, and 96,869 people have a title but no seniority, so seniority silently throws them away.
+- keywords is the most destructive filter available — it matches only contacts whose company description contains that word, and most rows have no description. Never use it to restate an industry you have already selected. One word, only if nothing else expresses the audience.
 - Never set both a key and its Exclude counterpart to the same value.
-- Use seniority OR jobTitle, rarely both — they overlap and stacking them can cut the pool to nothing.
-- Only set ownsBuilding, ccodOwnsBuilding or solarMinKwp when the brief genuinely requires them.
+- Only set ownsBuilding, ccodOwnsBuilding or solarMinKwp when the brief genuinely requires them — each one roughly halves the pool.
+- Prefer a wider slice with a sharper angle over a narrow slice. The copy does the qualifying; the filter only has to get you into the right room.
 - Do not set do-not-contact or gateway filters; those are applied automatically.`;
 
 async function generateAudienceProposal({ workspaceId, workspaceName, reason }) {

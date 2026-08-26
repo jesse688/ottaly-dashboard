@@ -106,8 +106,10 @@ function render(){
   el.className = '';
   el.innerHTML =
     '<div class="big-row">' +
-      '<div class="big"><div class="big-val">' + n(usable) + '</div><div class="big-lab">Can be emailed</div>' +
-        '<div class="big-note">Of ' + n(o.total) + ' rows. The rest have no name or no company.</div></div>' +
+      '<div class="big"><div class="big-val">' + n(usable) + '</div><div class="big-lab">People we can email</div>' +
+        '<div class="big-note">Real people with a first name <b>and</b> a company name — the only ones worth sending to. ' +
+        'From ' + n(o.total) + ' rows, deduplicated by email.' +
+        (DATA.domains ? ' Across ' + n(DATA.domains.usable) + ' companies.' : '') + '</div></div>' +
       '<div class="big warn"><div class="big-val">' + n(used) + '</div><div class="big-lab">' + (c ? 'Emailed by them' : 'Emailed by anyone') + '</div>' +
         '<div class="big-note">' + pct + '% used</div></div>' +
       '<div class="big good"><div class="big-val">' + n(left) + '</div><div class="big-lab">' + (c ? 'Left for them' : 'Never touched') + '</div>' +
