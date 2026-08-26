@@ -181,8 +181,10 @@ export async function GET(req: NextRequest) {
         // SIMPLIFIED ROUTING (never hide a possible lead):
         //   • a reply from an ALREADY-marked lead → 'lead_replies' (client follow-up)
         //   • else folder = defaultFolderForCategory(): confident noise goes to its
-        //     own folder (warmup/unsubscribe/ooo) or confident not_interested; and
-        //     EVERYTHING else — interested, question, "other", low-confidence — → Review.
+        //     own folder (warmup/unsubscribe/ooo, confident not_interested, and
+        //     confident 'other' — marketing blasts and newsletters); and
+        //     EVERYTHING else — interested, question, low-confidence anything,
+        //     including an 'other' the model hedged on — → Review.
         const m = await client.query(
           `SELECT 1 FROM unibox_replies
             WHERE workspace_id = $1 AND lower(lead_email) = lower($2)
