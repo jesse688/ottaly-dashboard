@@ -297,7 +297,10 @@ async function doTry(){
     if (!res.ok) { msg(j.error || 'Could not write it', false); return; }
     document.getElementById('tryBox').style.display = 'none';
     await load(); await loadHealth();
-    msg('Written — it is below. Cost about ' + ((j.cost || 0) * 0.79 * 100).toFixed(1) + 'p.', true);
+    const cost = 'Cost about ' + ((j.cost || 0) * 0.79 * 100).toFixed(1) + 'p.';
+    // The audience warning is the more important half of this message, so it
+    // leads and the cost follows.
+    msg(j.warning ? j.warning + ' ' + cost : 'Written — it is below. ' + cost, !j.warning);
   } catch (e) { msg(e.message, false); }
   finally { btn.disabled = false; btn.textContent = 'Write it'; }
 }

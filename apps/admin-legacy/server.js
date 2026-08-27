@@ -18943,6 +18943,18 @@ function autodraftAllowed(workspaceId, campaignId) {
   const m = memoryFor(workspaceId);
   const done = memoryCompleteness(m);
   if (!done.ready) return { ok: false, why: `brief is only ${done.pct}% complete` };
+  // An audience waiting to be approved blocks the copy that would be written
+  // for it. The brief's `icp` field is somebody's description of the reader;
+  // an audience proposal is the actual filter, counted against the real
+  // database, and the two can disagree. Drafting against the description while
+  // the real thing sits unapproved manufactures work in the wrong order — and
+  // hands the CM copy to judge before they have agreed who it is for.
+  const pendingAudience = db.prepare(
+    `SELECT id FROM audience_proposals WHERE workspace_id = ? AND status = 'draft' LIMIT 1`
+  ).get(workspaceId);
+  if (pendingAudience) {
+    return { ok: false, why: 'an audience is waiting to be approved — copy comes after the audience' };
+  }
   return { ok: true };
 }
 
@@ -19623,6 +19635,20 @@ function nextActionFor(workspaceId, workspaceName) {
       '/tam.html', 'Open Market');
   }
 
+  // Audience BEFORE copy, always. You cannot judge whether copy is any good
+  // without knowing who it is aimed at, so an unapproved audience has to be
+  // settled first. These two checks used to sit the other way round, which
+  // made the numbering below a lie: copy returned first and the audience step
+  // stayed invisible until the copy was cleared. A CM was being asked to
+  // approve writing for a reader nobody had agreed on yet.
+  const aud = db.prepare(
+    `SELECT id FROM audience_proposals WHERE workspace_id=? AND status='draft' LIMIT 1`).get(workspaceId);
+  if (aud) {
+    return N(4, 'Check the audience',
+      'An audience is worked out and waiting for you to approve it. Do this before the copy — the copy is written for these people.',
+      '/audience.html', 'Check it');
+  }
+
   const draft = db.prepare(
     `SELECT id, campaign_name FROM copy_drafts WHERE workspace_id=? AND status='draft'
      ORDER BY created_at DESC LIMIT 1`).get(workspaceId);
@@ -19630,14 +19656,6 @@ function nextActionFor(workspaceId, workspaceName) {
     return N(5, 'Read the copy',
       `Copy for ${draft.campaign_name || 'a campaign'} is written and waiting on you.`,
       '/copy-drafts.html', 'Read it');
-  }
-
-  const aud = db.prepare(
-    `SELECT id FROM audience_proposals WHERE workspace_id=? AND status='draft' LIMIT 1`).get(workspaceId);
-  if (aud) {
-    return N(4, 'Check the audience',
-      'An audience is worked out and waiting for you to approve it.',
-      '/audience.html', 'Check it');
   }
 
   const plan = db.prepare(
@@ -20125,8 +20143,22 @@ app.post('/api/memory/lesson/:id/retire', requireSession, (req, res) => {
 // ── Copy draft HTTP surface ────────────────────────────────────────────────
 app.post('/api/copy/draft', requireSession, async (req, res) => {
   try {
+    const wsId = req.body?.workspace_id;
+    // A person asking for copy on purpose is not the same as the tick doing it
+    // unprompted, so this warns rather than refuses — the CM may have a good
+    // reason. But they are told, because copy written before the audience is
+    // settled is copy aimed at a reader nobody has agreed on yet.
+    let warning = null;
+    if (wsId) {
+      const pendingAudience = db.prepare(
+        `SELECT id FROM audience_proposals WHERE workspace_id = ? AND status = 'draft' LIMIT 1`
+      ).get(wsId);
+      if (pendingAudience) {
+        warning = 'There is an audience still waiting to be approved for this client. Copy is normally written after the audience is settled, so this may be aimed at the wrong people.';
+      }
+    }
     const out = await generateCopyDraft({
-      workspaceId: req.body?.workspace_id,
+      workspaceId: wsId,
       workspaceName: req.body?.workspace_name,
       campaignId: req.body?.campaign_id,
       campaignName: req.body?.campaign_name,
@@ -20134,7 +20166,7 @@ app.post('/api/copy/draft', requireSession, async (req, res) => {
       steps: Math.min(Number(req.body?.steps) || 2, 5),
       variations: Math.min(Number(req.body?.variations) || 2, 3),
     });
-    res.json(out);
+    res.json(warning ? { ...out, warning } : out);
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
