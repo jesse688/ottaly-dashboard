@@ -26,11 +26,17 @@ RUN cd email-finder-local && npm install --omit=dev
 COPY apps/admin-legacy/package*.json ./
 RUN npm install --omit=dev
 
+# THIS is the Dockerfile EasyPanel builds for admin-legacy. Proved it on
+# 2026-08-27: /healthz reported 2026-08-26-queue-01, which is the value that
+# was in THIS file, while the root Dockerfile said 2026-08-27-joined-01 and
+# was ignored. Bump this one every deploy; the root Dockerfile is not used
+# for this service.
+#
 # Cache-bust the source COPY. EasyPanel's Docker cache was reusing an old
 # `COPY apps/admin-legacy/ ./` layer even when the commit changed, shipping
 # stale code on a "successful" build. Bumping CACHEBUST (any new value each
 # deploy) forces this layer — and everything after it — to rebuild.
-ARG CACHEBUST=2026-08-26-queue-01
+ARG CACHEBUST=2026-08-27-joined-02
 COPY apps/admin-legacy/ ./
 
 # Stamp the build so the running container can state WHICH code it is, exposed

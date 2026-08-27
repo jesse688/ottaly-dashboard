@@ -21,8 +21,10 @@ RUN npx playwright install --with-deps chromium
 # successful. Bump CACHEBUST (any new value) every deploy to force this layer —
 # and everything after it — to rebuild.
 #
-# THIS is the Dockerfile EasyPanel builds. apps/admin-legacy/Dockerfile is an
-# unused copy that drifted stale; edit this one.
+# NOT the Dockerfile EasyPanel builds for admin-legacy, despite what the
+# comment here used to claim. Proved on 2026-08-27: this file said
+# 2026-08-27-joined-01 while /healthz reported 2026-08-26-queue-01 — the value
+# from apps/admin-legacy/Dockerfile. **Bump that one, not this one.**
 ARG CACHEBUST=2026-08-27-joined-01
 
 # copy all admin-legacy files (server.js, email-finder-local/, public/, etc.)
