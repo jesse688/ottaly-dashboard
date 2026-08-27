@@ -19764,12 +19764,23 @@ function nextActionFor(workspaceId, workspaceName) {
           '/plan.html', 'Write the copy');
   }
 
-  const live = db.prepare(
-    `SELECT COUNT(*) n FROM campaign_plan_steps WHERE plan_id=? AND status='live'`).get(plan.id)?.n || 0;
+  // Approved and live are different things, and saying "live" for copy that is
+  // sitting in a PlusVibe draft would be the most misleading sentence on the
+  // page — it is the difference between emails going out and not.
+  const counts = db.prepare(
+    `SELECT SUM(status='live') live, SUM(status='approved') approved
+       FROM campaign_plan_steps WHERE plan_id=?`).get(plan.id) || {};
+  const live = counts.live || 0, approved = counts.approved || 0;
+  if (approved) {
+    return N(6, 'Waiting on you in PlusVibe',
+      `${approved} campaign${approved === 1 ? ' has' : 's have'} approved copy saved as a DRAFT in PlusVibe. ` +
+      `Nothing sends until ${approved === 1 ? 'it is' : 'they are'} launched there.`,
+      '/console.html', 'Open the console');
+  }
   return N(6, 'Nothing right now',
     live ? `All ${live} planned campaigns are live. The queue will tell you when one needs attention.`
          : 'Everything in the plan has been dealt with.',
-    '/queue.html', 'Open the queue');
+    '/console.html', 'Open the console');
 }
 
 app.get('/api/next-action', requireSession, (req, res) => {
@@ -20450,7 +20461,6 @@ app.post('/api/copy/draft/:id/approve', requireSession, async (req, res) => {
     const row = db.prepare('SELECT * FROM copy_drafts WHERE id = ?').get(id);
     if (!row) return res.status(404).json({ error: 'No such draft' });
     if (row.status !== 'draft') return res.status(409).json({ error: `Already ${row.status}` });
-    if (!row.campaign_id) return res.status(400).json({ error: 'This draft has no campaign to write to' });
 
     const edited = req.body?.sequence ? JSON.stringify(req.body.sequence) : null;
     if (edited) {
@@ -20469,11 +20479,34 @@ app.post('/api/copy/draft/:id/approve', requireSession, async (req, res) => {
     if (!claim.changes) return res.status(409).json({ error: 'Someone just approved this' });
 
     try {
+      // Approving means "this copy is good", not "start emailing people".
+      // A campaign PlusVibe creates is DRAFT and stays DRAFT until someone
+      // launches it there, so writing into a NEW campaign is what makes the
+      // safe outcome the automatic one. Nothing here ever launches, and an
+      // existing campaign's status is left exactly as the operator set it.
+      let campaignId = row.campaign_id;
+      let createdCampaign = false;
+      if (!campaignId) {
+        const name = row.campaign_name || `Ottaly — draft ${id}`;
+        const made = await pvApi('/campaign/add/campaign', {
+          method: 'POST', wsId: row.workspace_id,
+          body: { workspace_id: row.workspace_id, camp_name: name },
+        });
+        campaignId = String(made?.id || made?.data?.id || made?._id || '');
+        if (!campaignId) throw new Error('PlusVibe did not return a campaign id');
+        createdCampaign = true;
+        db.prepare('UPDATE copy_drafts SET campaign_id = ? WHERE id = ?').run(campaignId, id);
+        if (row.plan_step_id) {
+          db.prepare('UPDATE campaign_plan_steps SET campaign_id = ? WHERE id = ?')
+            .run(campaignId, row.plan_step_id);
+        }
+      }
+
       const pvBody = {
         // Both required in the BODY per the API spec, even though pvApi also
         // puts workspace_id on the query string.
         workspace_id: row.workspace_id,
-        campaign_id: row.campaign_id,
+        campaign_id: campaignId,
         sequences: finalSeq.steps.map(st => ({
           step: st.step,
           wait_time: st.wait_time,
@@ -20493,10 +20526,11 @@ app.post('/api/copy/draft/:id/approve', requireSession, async (req, res) => {
       });
       db.prepare(`UPDATE copy_drafts SET status = 'applied', pv_response = ? WHERE id = ?`)
         .run(JSON.stringify(pvRes || {}).slice(0, 4000), id);
-      // Sending copy live completes the plan step, so the plan shows real
-      // progress and the next campaign becomes the obvious thing to do.
+      // The step is approved, not live. It becomes live when someone launches
+      // the campaign in PlusVibe — saying "live" here would have the plan
+      // claiming emails are going out when nothing has been sent.
       if (row.plan_step_id) {
-        db.prepare(`UPDATE campaign_plan_steps SET status='live' WHERE id=? AND status='in_review'`)
+        db.prepare(`UPDATE campaign_plan_steps SET status='approved' WHERE id=? AND status='in_review'`)
           .run(row.plan_step_id);
       }
 
@@ -20510,7 +20544,11 @@ app.post('/api/copy/draft/:id/approve', requireSession, async (req, res) => {
           .run(row.workspace_id, lesson, req.body?.lesson_source === 'ai' ? 'edit-ai' : 'edit',
                id, s?.name || 'unknown');
       }
-      res.json({ ok: true, edited: !!wasEdited, lessonSaved: !!lesson });
+      res.json({ ok: true, edited: !!wasEdited, lessonSaved: !!lesson,
+                 campaign_id: campaignId, created_campaign: createdCampaign,
+                 note: createdCampaign
+                   ? 'Saved to a new DRAFT campaign in PlusVibe. Nothing sends until you launch it there.'
+                   : 'Written to the existing campaign in PlusVibe. Its status is unchanged.' });
     } catch (e) {
       // Put it back so the CM can retry rather than losing the draft.
       db.prepare(`UPDATE copy_drafts SET status = 'draft', decided_by = NULL, decided_at = NULL WHERE id = ?`).run(id);

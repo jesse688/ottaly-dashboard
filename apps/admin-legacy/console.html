@@ -136,6 +136,8 @@
   .none .big{font-family:'Genos',sans-serif;font-size:1.5rem;font-weight:800;color:var(--green);margin-bottom:.25rem}
   .err{background:#FEE2E2;border:1px solid #FECACA;color:#991B1B;padding:.5rem .7rem;
        border-radius:6px;font-size:12px;margin-bottom:.6rem}
+.okbox{background:#DCFCE7;border:1px solid #BBF7D0;color:#166534;padding:.6rem .8rem;
+          border-radius:6px;font-size:13px;margin-bottom:.6rem;line-height:1.5}
   .warnbox{background:#FEF3C7;border:1px solid #FDE68A;color:#92400E;padding:.65rem .85rem;
        border-radius:6px;font-size:13px;margin-bottom:.6rem;line-height:1.5}
   .load{text-align:center;padding:2.5rem;color:var(--muted);font-size:13px}
@@ -196,6 +198,12 @@ const esc = s => String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&
 const sev = n => n>=80?'crit':n>=60?'warn':n>=40?'info':'';
 const age = h => h==null?'':h<1?'just now':h<24?h+'h ago':Math.round(h/24)+'d ago';
 const num = n => Number(n||0).toLocaleString();
+
+function showOk(m){
+  const el=document.getElementById('main');
+  el.insertAdjacentHTML('afterbegin','<div class="okbox">'+esc(m)+'</div>');
+  setTimeout(()=>{const e=el.querySelector('.okbox');if(e)e.remove();},8000);
+}
 
 function showErr(m){
   const el=document.getElementById('main');
@@ -436,7 +444,7 @@ function drawDraft(d, blocked){
     }).join('')+
     '<div class="acts">'+
       '<button class="btn ok" id="dap-'+d.id+'" onclick="decideD('+d.id+',\'approve\')"'+
-        (blocked?' disabled title="Approve the audience above first"':'')+'>Approve &amp; send live</button>'+
+        (blocked?' disabled title="Approve the audience above first"':'')+'>Approve &amp; save to PlusVibe</button>'+
       '<button class="btn mut" onclick="askD('+d.id+')">Reject</button>'+
       '<span class="edited" id="ded-'+d.id+'"></span>'+
       '<input class="why" id="dw-'+d.id+'" placeholder="What was wrong with it?" '+
@@ -478,7 +486,14 @@ async function decideD(id, action){
     const seq = collect(id);
     if (seq) { body.sequence = seq; body.edited = true; }
   }
-  try { await post('/api/copy/draft/'+id+'/'+action, body); TOUCHED.delete(id); await load(SEL); }
+  try {
+    const j = await post('/api/copy/draft/'+id+'/'+action, body);
+    TOUCHED.delete(id);
+    await load(SEL);
+    // Say plainly that nothing has been sent. "Approved" on its own reads as
+    // "it has gone out", which is the one thing that has NOT happened.
+    if (j && j.note) showOk(j.note);
+  }
   catch(e){ showErr(e.message); }
 }
 
