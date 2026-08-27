@@ -385,6 +385,12 @@ function renderMainInner(el){
       h += drawDraft(d, !!a, s);
     } else if (!counted) {
       h += '<div class="empty">Count the audience first, then write the copy.</div>';
+    } else if (s.status === 'starting') {
+      // Writing takes 30-60 seconds. Saying so beats a button that looks
+      // untouched and invites a second click that only earns an error.
+      h += '<div class="empty">Writing the copy now — this takes up to a minute.</div>'+
+           '<div class="acts"><button class="btn ghost" disabled>Writing…</button>'+
+           '<button class="btn mut" onclick="load(SEL)">Check again</button></div>';
     } else {
       h += '<div class="empty">No copy yet.</div>'+
            '<div class="acts"><button class="btn ghost" onclick="writeCopy('+s.id+',this)">Write the copy</button></div>';

@@ -20337,9 +20337,31 @@ app.post('/api/plan/step/:id/start', requireSession, async (req, res) => {
     const st = db.prepare(`SELECT s.*, p.workspace_id, p.workspace_name FROM campaign_plan_steps s
       JOIN campaign_plans p ON p.id = s.plan_id WHERE s.id = ?`).get(Number(req.params.id));
     if (!st) return res.status(404).json({ error: 'No such step' });
-    if (st.status !== 'planned') return res.status(409).json({ error: `That step is already ${st.status}` });
-    const claim = db.prepare(`UPDATE campaign_plan_steps SET status='starting' WHERE id=? AND status='planned'`).run(st.id);
-    if (!claim.changes) return res.status(409).json({ error: 'Someone just started this step' });
+    // A step stuck on 'starting' is a crash, not a running job: the claim is
+    // written before the model call and reverted after it, and the process
+    // dying in between leaves it claimed with nothing to clear it. Writing
+    // copy takes well under two minutes, so anything older than that is
+    // wreckage and must be reclaimable — otherwise a campaign is dead forever
+    // and the only fix is editing the database by hand.
+    const STARTING_STALE_MS = 2 * 60 * 1000;
+    if (st.status === 'starting') {
+      const age = Date.now() - new Date((st.decided_at || st.created_at || '') + 'Z').getTime();
+      if (!Number.isFinite(age) || age > STARTING_STALE_MS) {
+        db.prepare(`UPDATE campaign_plan_steps SET status='planned' WHERE id=? AND status='starting'`).run(st.id);
+        st.status = 'planned';
+      } else {
+        return res.status(409).json({ error: 'Copy for this one is being written right now — give it a moment.' });
+      }
+    }
+    if (st.status !== 'planned') {
+      return res.status(409).json({ error: `That campaign is already ${String(st.status).replace('_', ' ')}.` });
+    }
+    // Stamp decided_at with the claim so the staleness check above has
+    // something to measure against.
+    const claim = db.prepare(
+      `UPDATE campaign_plan_steps SET status='starting', decided_at=datetime('now')
+       WHERE id=? AND status='planned'`).run(st.id);
+    if (!claim.changes) return res.status(409).json({ error: 'Someone just started this one.' });
     try {
       const out = await generateCopyDraft({
         workspaceId: st.workspace_id, workspaceName: st.workspace_name,
