@@ -177,6 +177,17 @@ function pick(id){ SEL = id; renderRail(); renderMain(); }
 // ── Right pane ─────────────────────────────────────────────────────────────
 function renderMain(){
   const el = document.getElementById('main');
+  try { renderMainInner(el); }
+  catch (e) {
+    // One malformed record must not blank the console. This page is a CM's
+    // whole morning; losing every client because one draft has an unexpected
+    // shape is exactly how a tool loses trust in week one.
+    el.innerHTML = '<div class="err">Something on this client would not draw: '+esc(e.message)+
+      '</div><div class="empty">The other clients on the left still work.</div>';
+  }
+}
+
+function renderMainInner(el){
   const c = DATA.clients.find(x => x.workspace_id === SEL);
   if (!c) { el.innerHTML = '<div class="none"><div class="big">Pick a client</div>'+
     '<div class="sub">Everything for them shows here — no page hopping.</div></div>'; return; }
@@ -243,9 +254,18 @@ function renderMain(){
       '<div class="row-h"><span class="row-t">'+esc(d.campaign_name||'Copy draft')+'</span>'+
       '<span class="age">'+esc(age(Math.round((Date.now()-new Date(d.created_at+'Z').getTime())/36e5)))+'</span></div>'+
       (d.reason?'<div class="row-d">'+esc(d.reason)+'</div>':'')+
-      (d.sequence||[]).slice(0,3).map((s,i) =>
-        '<div class="mail"><div class="mail-s">'+(i+1)+'. '+esc(s.subject||'(no subject)')+'</div>'+
-        esc(s.body||'')+'</div>').join('')+
+      // A sequence is { steps: [ { step, wait_time, variations: [ {subject, body} ] } ] }.
+      // Show the first variation of each step — that is the email that actually
+      // goes out, and the rest belong on the full Copy Drafts page.
+      ((d.sequence && d.sequence.steps) || []).map(st => {
+        const v = (st.variations || [])[0] || {};
+        const more = (st.variations || []).length - 1;
+        return '<div class="mail">'+
+          '<div class="mail-s">'+esc(st.step)+'. '+esc(v.subject||'(no subject)')+
+          (st.wait_time?' <span class="pill">wait '+esc(st.wait_time)+'d</span>':'')+
+          (more>0?' <span class="pill">+'+more+' variation'+(more>1?'s':'')+'</span>':'')+
+          '</div>'+esc(v.body||'')+'</div>';
+      }).join('')+
       '<div class="acts">'+
         '<button class="btn ok" onclick="decideD('+d.id+',\'approve\')">Approve &amp; send live</button>'+
         '<button class="btn mut" onclick="askD('+d.id+')">Reject</button>'+
