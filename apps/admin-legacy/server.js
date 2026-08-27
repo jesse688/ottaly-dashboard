@@ -19229,6 +19229,31 @@ const CAMPAIGN_HOURS = Object.freeze({ from: '07:00', to: '17:00' });
 // a warming inboxing.com box is how a domain gets burned. Capacity therefore
 // rises on its own as warmup finishes, with no action from anyone.
 
+// Apply the standard settings to a campaign. Split out of setUpCampaign so it
+// can also run the MOMENT a campaign is created — a campaign that exists with
+// PlusVibe's defaults is one somebody could launch with ESP matching off and
+// no per-domain cap, and the window between approving and stocking is exactly
+// where that would happen.
+//
+// dailyLimit is optional: at creation there are no senders yet, so the limit is
+// left alone and set properly once mailboxes are attached.
+async function applyCampaignSettings(workspaceId, campaignId, dailyLimit) {
+  const body = { workspace_id: workspaceId, campaign_id: campaignId, ...CAMPAIGN_DEFAULTS };
+  if (dailyLimit != null) {
+    // 'schedules' is an array and carries daily_limit and a required
+    // start_date. A bare 'schedule' object is rejected, and daily_limit is not
+    // accepted at the top level — both confirmed against the live API.
+    body.schedules = [{
+      start_date: new Date().toISOString().slice(0, 10),
+      daily_limit: Math.max(1, Math.round(dailyLimit)),
+      timezone: CAMPAIGN_TZ,
+      days: { ...CAMPAIGN_DAYS },
+      timing: { ...CAMPAIGN_HOURS },
+    }];
+  }
+  await pvApi('/campaign/update/campaign', { method: 'PATCH', wsId: workspaceId, body });
+}
+
 async function setUpCampaign({ workspaceId, workspaceName, campaignId, campaignName, filters, planStepId }) {
   const out = { mailboxes: 0, seeded: {}, enrolled: false, settings: false,
                 daily_limit: 0, capacity: 0, warming: 0, warnings: [] };
@@ -19289,30 +19314,12 @@ async function setUpCampaign({ workspaceId, workspaceName, campaignId, campaignN
     out.warnings.push(`Could not attach mailboxes: ${e.message}`);
   }
 
-  // 2. Settings, including the daily limit that follows from the sender count.
+  // 2. Settings again, now with the daily limit the sender count implies.
+  //     They were already applied when the campaign was created; this pass is
+  //     what puts the real limit on and re-asserts the rest.
   try {
-    // A campaign cannot send more than its senders allow, so the campaign cap
-    // is the senders' combined capacity. Never 0 — PlusVibe rejects that, and a
-    // client whose mailboxes are all paused needs the warning above, not a
-    // campaign that silently cannot be launched.
     out.daily_limit = Math.max(1, Math.round(out.capacity || 0));
-    await pvApi('/campaign/update/campaign', {
-      method: 'PATCH', wsId: workspaceId,
-      body: {
-        workspace_id: workspaceId, campaign_id: campaignId,
-        ...CAMPAIGN_DEFAULTS,
-        // 'schedules' is an array and carries daily_limit and start_date.
-        // A bare 'schedule' object is rejected outright, and daily_limit is
-        // not accepted at the top level — both confirmed against the API.
-        schedules: [{
-          start_date: new Date().toISOString().slice(0, 10),
-          daily_limit: out.daily_limit,
-          timezone: CAMPAIGN_TZ,
-          days: { ...CAMPAIGN_DAYS },
-          timing: { ...CAMPAIGN_HOURS },
-        }],
-      },
-    });
+    await applyCampaignSettings(workspaceId, campaignId, out.daily_limit);
     out.settings = true;
   } catch (e) {
     out.warnings.push(`Could not apply the standard campaign settings: ${e.message}`);
@@ -20764,6 +20771,14 @@ app.post('/api/copy/draft/:id/approve', requireSession, async (req, res) => {
         campaignId = String(made?.id || made?.data?.id || made?._id || '');
         if (!campaignId) throw new Error('PlusVibe did not return a campaign id');
         createdCampaign = true;
+        // Configure it immediately. Waiting until "Put on Autopilot" would
+        // leave a campaign sitting in PlusVibe with the wrong defaults, and a
+        // CM could launch it from there in the meantime.
+        try {
+          await applyCampaignSettings(row.workspace_id, campaignId);
+        } catch (e) {
+          console.warn(`[approve] settings on new campaign ${campaignId}: ${e.message}`);
+        }
         db.prepare('UPDATE copy_drafts SET campaign_id = ? WHERE id = ?').run(campaignId, id);
         if (row.plan_step_id) {
           db.prepare('UPDATE campaign_plan_steps SET campaign_id = ? WHERE id = ?')
