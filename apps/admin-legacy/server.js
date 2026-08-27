@@ -104,14 +104,33 @@ function getPvKey() { return _pvKeyOverride || PLUSVIBE_KEY; }
 // PlusVibe is STATELESS — workspace_id is a query param, no session switching.
 // The API base and auth header:
 const PV_API_BASE = 'https://api.plusvibe.ai/api/v1';
-let _pvLastCall = 0;
 const PV_MIN_GAP_MS = 600; // 100 req/min
 
-async function pvApi(path, { method = 'GET', body, wsId, params } = {}) {
-  const now = Date.now();
-  const wait = _pvLastCall + PV_MIN_GAP_MS - now;
+// Two lanes, because background work must never be able to freeze a page.
+// A single shared gate meant one warmer taking a 30s backoff pushed the gate
+// into the future for EVERY caller, so a CM's page load sat waiting on a job
+// they never asked for. Each lane keeps its own next-free-slot, so a 429 in
+// the background is paid for by the background alone.
+//   page — anything a human is waiting on. Fast, priority.
+//   bg   — warmers, ticks, backfills. Slower on purpose, yields to page work.
+const PV_LANES = {
+  page: { next: 0, gap: PV_MIN_GAP_MS },
+  bg:   { next: 0, gap: 1200 },
+};
+
+async function pvApi(path, { method = 'GET', body, wsId, params, lane = 'page' } = {}) {
+  // Claim a slot BEFORE sleeping, not after. The old version read _pvLastCall,
+  // awaited, and only then wrote it — so every caller that arrived during that
+  // await read the same stale timestamp, computed the same wait, and they all
+  // woke up together and fired at once. Ten queued callers were not spaced
+  // 600ms apart; they were one burst, which is exactly what earns a 429.
+  // Reserving the slot synchronously makes the queue actually serialise: each
+  // caller takes the next free slot and nobody can be handed the same one.
+  const L = PV_LANES[lane] || PV_LANES.page;
+  const slot = Math.max(Date.now(), L.next);
+  L.next = slot + L.gap;
+  const wait = slot - Date.now();
   if (wait > 0) await new Promise(r => setTimeout(r, wait));
-  _pvLastCall = Date.now();
   const url = new URL(PV_API_BASE + path);
   if (wsId) url.searchParams.set('workspace_id', String(wsId));
   if (params) for (const [k, v] of Object.entries(params)) {
@@ -125,9 +144,13 @@ async function pvApi(path, { method = 'GET', body, wsId, params } = {}) {
     if (r.ok) return r.status === 204 ? null : r.json();
     if (r.status === 429) {
       const backoff = Math.min(Math.pow(2, attempt + 1) * 2000, 30000);
-      console.warn(`[PlusVibe] 429 on ${path} — backing off ${backoff/1000}s`);
-      _pvLastCall = Date.now() + backoff;
-      await new Promise(res => setTimeout(res, backoff));
+      console.warn(`[PlusVibe] 429 on ${path} (${lane}) — backing off ${backoff/1000}s`);
+      // Push only THIS lane's gate. A background warmer being throttled must
+      // not stall the page lane — that was the "global 429 freezes page loads"
+      // failure. Jitter stops several callers that were throttled together
+      // from retrying in lockstep and earning another 429 as a group.
+      L.next = Math.max(L.next, Date.now() + backoff);
+      await new Promise(res => setTimeout(res, backoff + Math.floor(Math.random() * 400)));
       continue;
     }
     const txt = await r.text();
@@ -11522,7 +11545,7 @@ async function reconcileBisonReplies() {
         for (let page = 0; page < 40 && !caughtUp; page++) {
           const params = {};
           if (pageTrail) params.page_trail = pageTrail;
-          const resp = await pvApi('/unibox/emails', { wsId: workspaceId, params });
+          const resp = await pvApi('/unibox/emails', { lane: 'bg', wsId: workspaceId, params });
           const batch = Array.isArray(resp?.data) ? resp.data : [];
           if (!batch.length) break;
           pageTrail = resp.page_trail || null;
@@ -18108,6 +18131,7 @@ async function apProviderCounts(wsId, campaignId) {
   let truncated = false;
   for (let page = 1; page <= AP_MAX_PAGES; page++) {
     const resp = await pvApi('/lead/workspace-leads', {
+      lane: 'bg',
       wsId, params: { campaign_id: campaignId, status: 'NOT_CONTACTED', limit: AP_PAGE_LIMIT, page },
     });
     const list = Array.isArray(resp) ? resp : (resp?.leads || resp?.data || []);
@@ -18151,6 +18175,7 @@ async function apSendsByProvider(wsId, campaignId, days) {
   let scanned = 0, truncated = false;
   for (let page = 1; page <= AP_SENT_MAX_PAGES; page++) {
     const resp = await pvApi('/lead/workspace-leads', {
+      lane: 'bg',
       wsId, params: { campaign_id: campaignId, status: 'CONTACTED',
                       limit: AP_PAGE_LIMIT, page, sort: 'last_sent_at', direction: 'desc' },
     });
