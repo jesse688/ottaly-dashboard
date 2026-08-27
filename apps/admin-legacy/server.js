@@ -19728,6 +19728,152 @@ app.get('/api/next-action', requireSession, (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// CONSOLE — the six Queue pages as one screen
+//
+// Today, Campaign Plan, Copy Drafts, Audience, Market and Client Briefs were
+// six pages, and five of them opened with a "pick a client" dropdown. At 30
+// clients that is pick-read-pick-read, thirty times, across five pages, just
+// to see the portfolio once. The pages were not the problem on their own —
+// the dropdown was. It made every page a keyhole onto one client.
+//
+// This endpoint answers the whole screen in ONE call, for EVERY client at
+// once, and reads only SQLite. No PlusVibe: a request a human waits on must
+// never sit behind a rate limiter, which is the rule that keeps this fast
+// however many clients get added.
+//
+// Every client comes back, including the ones with nothing to do. A console
+// that hides healthy clients cannot answer "how is Acme doing?", which is the
+// question that sent people back to the old pages.
+// ═══════════════════════════════════════════════════════════════════════════
+app.get('/api/console', requireSession, (req, res) => {
+  try {
+    const scope = qScopeWorkspaces(req);
+    let clients = db.prepare(
+      `SELECT workspace_id, workspace_name FROM clients ORDER BY workspace_name`).all();
+    if (scope) clients = clients.filter(c => scope.includes(c.workspace_id));
+    const ids = clients.map(c => c.workspace_id);
+    const inHolder = ids.length ? ids.map(() => '?').join(',') : "''";
+
+    // One query per concern across ALL clients, then grouped in memory. The
+    // alternative — a query per client per concern — is the N+1 that makes a
+    // 30-client page slow enough that people stop opening it.
+    const group = (rows, key = 'workspace_id') => {
+      const m = new Map();
+      for (const r of rows) {
+        if (!m.has(r[key])) m.set(r[key], []);
+        m.get(r[key]).push(r);
+      }
+      return m;
+    };
+
+    const queueRows = ids.length ? db.prepare(
+      `SELECT id, workspace_id, workspace_name, campaign_id, campaign_name, provider,
+              kind, severity, headline, detail, evidence, created_at
+         FROM cm_queue WHERE status='open' AND workspace_id IN (${inHolder})
+        ORDER BY severity DESC, created_at ASC`).all(...ids) : [];
+    const byQueue = group(queueRows.map(r => ({
+      ...r,
+      evidence: (() => { try { return JSON.parse(r.evidence || '{}'); } catch { return {}; } })(),
+      age_hours: Math.round((Date.now() - new Date(r.created_at + 'Z').getTime()) / 36e5),
+    })));
+
+    const drafts = ids.length ? db.prepare(
+      `SELECT id, workspace_id, campaign_id, campaign_name, reason, cost_usd, created_at,
+              COALESCE(edited, generated) AS sequence
+         FROM copy_drafts WHERE status='draft' AND workspace_id IN (${inHolder})
+        ORDER BY created_at DESC`).all(...ids) : [];
+    const byDraft = group(drafts.map(d => ({
+      ...d,
+      sequence: (() => { try { return JSON.parse(d.sequence); } catch { return []; } })(),
+    })));
+
+    const auds = ids.length ? db.prepare(
+      `SELECT id, workspace_id, reason, rationale, filters, matched, sendable, created_at
+         FROM audience_proposals WHERE status='draft' AND workspace_id IN (${inHolder})
+        ORDER BY created_at DESC`).all(...ids) : [];
+    const byAud = group(auds.map(a => ({
+      ...a,
+      filters: (() => { try { return JSON.parse(a.filters || '{}'); } catch { return {}; } })(),
+    })));
+
+    const plans = ids.length ? db.prepare(
+      `SELECT id, workspace_id, summary, status, created_at FROM campaign_plans
+        WHERE status!='archived' AND workspace_id IN (${inHolder})
+        ORDER BY created_at DESC`).all(...ids) : [];
+    const stepStmt = db.prepare(
+      `SELECT id, plan_id, position, name, status, sendable, est_pool, angle, rationale,
+              filters, campaign_id, draft_id
+         FROM campaign_plan_steps WHERE plan_id=? ORDER BY position`);
+    // Newest plan per client only. An archived-but-not-deleted history is
+    // useful on the plan page; on a console it is noise.
+    const planFor = new Map();
+    for (const p of plans) if (!planFor.has(p.workspace_id)) planFor.set(p.workspace_id, p);
+
+    const briefs = ids.length ? db.prepare(
+      `SELECT * FROM client_memory WHERE workspace_id IN (${inHolder})`).all(...ids) : [];
+    const briefBy = new Map(briefs.map(b => [b.workspace_id, b]));
+
+    const out = clients.map(c => {
+      const q     = byQueue.get(c.workspace_id) || [];
+      const draft = byDraft.get(c.workspace_id) || [];
+      const aud   = byAud.get(c.workspace_id)   || [];
+      const plan  = planFor.get(c.workspace_id) || null;
+      const brief = briefBy.get(c.workspace_id) || { workspace_id: c.workspace_id };
+      const comp  = memoryCompleteness(brief);
+      const next  = nextActionFor(c.workspace_id, c.workspace_name);
+      const steps = plan ? stepStmt.all(plan.id).map(s => ({
+        ...s, filters: (() => { try { return JSON.parse(s.filters || '{}'); } catch { return {}; } })(),
+      })) : [];
+      return {
+        workspace_id: c.workspace_id,
+        workspace_name: c.workspace_name,
+        next,
+        // The counts drive the collapsed row. The full objects are here too so
+        // that opening a client needs no second request — at these sizes the
+        // payload is far cheaper than a round trip per expand.
+        counts: {
+          queue: q.length, drafts: draft.length, audiences: aud.length,
+          plan_steps: steps.length,
+          plan_todo: steps.filter(s => s.status === 'planned').length,
+        },
+        top_severity: q.length ? Math.max(...q.map(r => r.severity)) : 0,
+        brief: { pct: comp.pct, ready: comp.ready, missing: comp.missing },
+        queue: q, drafts: draft, audiences: aud,
+        plan: plan ? { ...plan, steps } : null,
+      };
+    });
+
+    // Worst first, then whoever is earliest in the workflow — a client with a
+    // burning campaign outranks one waiting on a brief, but both outrank a
+    // client with nothing outstanding.
+    out.sort((a, b) =>
+      b.top_severity - a.top_severity ||
+      (b.counts.queue + b.counts.drafts + b.counts.audiences) -
+      (a.counts.queue + a.counts.drafts + a.counts.audiences) ||
+      a.next.step - b.next.step ||
+      String(a.workspace_name).localeCompare(String(b.workspace_name)));
+
+    const tam = db.prepare(
+      `SELECT * FROM tam_snapshot WHERE scope='all' AND dimension IS NULL`).get() || null;
+
+    res.json({
+      as_of: new Date().toISOString(),
+      scoped: !!scope,
+      market: tam,
+      totals: {
+        clients: out.length,
+        needs_you: out.filter(c => c.counts.queue + c.counts.drafts + c.counts.audiences > 0).length,
+        queue: queueRows.length, drafts: drafts.length, audiences: auds.length,
+      },
+      clients: out,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/console', requireSession, (req, res) => res.sendFile(path.join(__dirname, 'console.html')));
+app.get('/console.html', requireSession, (req, res) => res.sendFile(path.join(__dirname, 'console.html')));
+
 // ── Campaign plan HTTP surface ─────────────────────────────────────────────
 app.post('/api/plan/generate', requireSession, async (req, res) => {
   try {

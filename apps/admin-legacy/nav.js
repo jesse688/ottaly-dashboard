@@ -10,6 +10,10 @@
       color: '#059669',
       icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>',
       pages: [
+        // Console first, and the six it replaces kept underneath it while it
+        // earns trust. Deleting them on day one would turn a UX bet into an
+        // outage; they come out once nobody is reaching for them.
+        { href: 'console.html',      label: 'Console' },
         { href: 'queue.html',        label: 'Today' },
         { href: 'plan.html',         label: 'Campaign Plan' },
         { href: 'copy-drafts.html',  label: 'Copy Drafts' },

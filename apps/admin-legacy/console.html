@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Console — Ottaly</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+  :root{--navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--green:#16a34a;--red:#dc2626;
+        --amber:#d97706;--border:#E5E7EB;--card:#fff;--bg:#F8F9FC;--muted:#6B7280}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--navy-dark);height:100vh;overflow:hidden}
+
+  /* Two panes, each scrolling on its own. The page itself never scrolls, so
+     the client list stays put while you read a client — the thing six
+     separate pages could not do. */
+  .shell{display:grid;grid-template-columns:340px 1fr;height:100vh}
+  .rail{border-right:1px solid var(--border);background:var(--card);display:flex;flex-direction:column;min-height:0}
+  .main{overflow-y:auto;min-height:0;padding:1.1rem 1.3rem 4rem}
+
+  .rail-hd{padding:.85rem .9rem .6rem;border-bottom:1px solid var(--border);flex-shrink:0}
+  .title{font-family:'Genos',sans-serif;font-size:1.3rem;font-weight:800;line-height:1}
+  .sub{font-size:11px;color:var(--muted);margin-top:2px}
+  .totals{display:flex;gap:.4rem;margin-top:.6rem;flex-wrap:wrap}
+  .chip{border:1px solid var(--border);border-radius:20px;padding:2.5px 9px;font-size:11px;font-weight:600;
+        color:var(--muted);background:#fff;cursor:pointer;white-space:nowrap}
+  .chip.on{background:var(--navy);border-color:var(--navy);color:#fff}
+  .chip b{font-variant-numeric:tabular-nums}
+
+  .search{margin:.55rem .9rem;flex-shrink:0}
+  .search input{width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:7px;
+                font:500 12.5px Inter,sans-serif;outline:none}
+  .search input:focus{border-color:var(--teal)}
+
+  .clients{flex:1;overflow-y:auto;min-height:0;padding-bottom:1rem}
+  .cli{display:flex;align-items:center;gap:.5rem;padding:.5rem .9rem;cursor:pointer;
+       border-left:3px solid transparent;font-size:13px}
+  .cli:hover{background:#F3F4F6}
+  .cli.sel{background:rgba(31,111,120,.09);border-left-color:var(--teal);font-weight:700}
+  .cli-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cli-dots{display:flex;gap:3px;flex-shrink:0}
+  .dot{width:7px;height:7px;border-radius:50%}
+  .dot.crit{background:var(--red)}.dot.warn{background:var(--amber)}
+  .dot.info{background:var(--navy)}.dot.ok{background:#D1D5DB}
+  .cli-n{font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums;flex-shrink:0}
+  .grp{padding:.5rem .9rem .25rem;font-size:9.5px;font-weight:700;text-transform:uppercase;
+       letter-spacing:.5px;color:var(--muted)}
+
+  /* Right pane */
+  .head{display:flex;align-items:baseline;gap:.7rem;flex-wrap:wrap;margin-bottom:.2rem}
+  .h-name{font-family:'Genos',sans-serif;font-size:1.65rem;font-weight:800;line-height:1}
+  .next{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--teal);
+        border-radius:8px;padding:.6rem .85rem;margin:.7rem 0 1rem}
+  .next-what{font-size:13.5px;font-weight:700}
+  .next-why{font-size:12px;color:#374151;margin-top:2px;line-height:1.5}
+
+  .sec{margin-bottom:1.15rem}
+  .sec-h{display:flex;align-items:center;gap:.5rem;margin-bottom:.45rem}
+  .sec-t{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--teal)}
+  .sec-c{font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+  .row{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--muted);
+       border-radius:8px;padding:.7rem .85rem;margin-bottom:.45rem}
+  .row.crit{border-left-color:var(--red)}.row.warn{border-left-color:var(--amber)}
+  .row.info{border-left-color:var(--navy)}
+  .row-h{display:flex;align-items:baseline;gap:.5rem;flex-wrap:wrap}
+  .row-t{font-size:13px;font-weight:700;flex:1;min-width:12rem}
+  .row-d{font-size:12px;color:#374151;line-height:1.5;margin-top:.25rem}
+  .kind{padding:1px 7px;border-radius:20px;font-size:9.5px;font-weight:700;text-transform:uppercase;
+        letter-spacing:.3px;background:#F3F4F6;color:var(--muted)}
+  .age{font-size:10.5px;color:var(--muted);white-space:nowrap}
+  .ev{display:flex;gap:1rem;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:.35rem}
+  .ev b{color:var(--navy-dark);font-weight:700;font-variant-numeric:tabular-nums}
+  .acts{display:flex;gap:.35rem;align-items:center;flex-wrap:wrap;margin-top:.5rem}
+  .btn{padding:5px 11px;border:1.5px solid var(--navy);background:var(--navy);color:#fff;
+       border-radius:6px;font:600 12px Inter,sans-serif;cursor:pointer}
+  .btn.ghost{background:#fff;color:var(--navy)}
+  .btn.ok{border-color:var(--green);background:var(--green)}
+  .btn.mut{border-color:var(--border);background:#fff;color:var(--muted)}
+  .btn:disabled{opacity:.5;cursor:default}
+  .why{flex:1;min-width:10rem;padding:5px 9px;border:1px solid var(--border);border-radius:6px;
+       font:500 12px Inter,sans-serif;display:none}
+  .row.asking .why{display:block}
+
+  .mail{background:#F9FAFB;border:1px solid var(--border);border-radius:6px;padding:.5rem .65rem;
+        margin-top:.4rem;font-size:12px;line-height:1.55;white-space:pre-wrap}
+  .mail-s{font-weight:700;margin-bottom:.2rem}
+  .pill{display:inline-block;padding:1px 7px;border-radius:20px;font-size:10px;font-weight:700;
+        background:#F3F4F6;color:var(--muted);margin-right:.3rem}
+  .empty{color:var(--muted);font-size:12.5px;padding:.5rem 0}
+  .none{text-align:center;padding:3rem 1rem;color:var(--muted)}
+  .none .big{font-family:'Genos',sans-serif;font-size:1.5rem;font-weight:800;color:var(--green);margin-bottom:.25rem}
+  .err{background:#FEE2E2;border:1px solid #FECACA;color:#991B1B;padding:.5rem .7rem;
+       border-radius:6px;font-size:12px;margin-bottom:.6rem}
+  .warnbox{background:#FEF3C7;border:1px solid #FDE68A;color:#92400E;padding:.5rem .7rem;
+       border-radius:6px;font-size:12px;margin-bottom:.6rem;line-height:1.5}
+  .load{text-align:center;padding:2.5rem;color:var(--muted);font-size:13px}
+  .bar{height:4px;background:#F3F4F6;border-radius:3px;overflow:hidden;margin-top:.3rem}
+  .bar i{display:block;height:100%;background:var(--teal)}
+  @media(max-width:900px){.shell{grid-template-columns:1fr}.rail{display:none}}
+</style>
+</head>
+<body>
+<script src="/nav.js" defer></script>
+
+<div class="shell">
+  <div class="rail">
+    <div class="rail-hd">
+      <div class="title">Console</div>
+      <div class="sub" id="sub">Everything, every client, one page.</div>
+      <div class="totals" id="totals"></div>
+    </div>
+    <div class="search"><input id="q" placeholder="Find a client…" autocomplete="off"></div>
+    <div class="clients" id="clients"><div class="load">Loading…</div></div>
+  </div>
+  <div class="main" id="main"><div class="load">Loading…</div></div>
+</div>
+
+<script>
+let DATA = null, SEL = null, ONLY_NEEDS = false;
+
+const esc = s => String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const sev = n => n>=80?'crit':n>=60?'warn':n>=40?'info':'';
+const age = h => h==null?'':h<1?'just now':h<24?h+'h ago':Math.round(h/24)+'d ago';
+const num = n => Number(n||0).toLocaleString();
+
+function showErr(m){
+  const el=document.getElementById('main');
+  el.insertAdjacentHTML('afterbegin','<div class="err">'+esc(m)+'</div>');
+  setTimeout(()=>{const e=el.querySelector('.err');if(e)e.remove();},6000);
+}
+
+// ── Left rail ──────────────────────────────────────────────────────────────
+function renderRail(){
+  const q = (document.getElementById('q').value||'').toLowerCase();
+  let list = DATA.clients.filter(c => !q || (c.workspace_name||'').toLowerCase().includes(q));
+  const busy  = list.filter(c => c.counts.queue + c.counts.drafts + c.counts.audiences > 0);
+  const quiet = list.filter(c => c.counts.queue + c.counts.drafts + c.counts.audiences === 0);
+
+  const row = c => {
+    const n = c.counts.queue + c.counts.drafts + c.counts.audiences;
+    const dots = [];
+    if (c.counts.queue)     dots.push('<i class="dot '+(sev(c.top_severity)||'info')+'"></i>');
+    if (c.counts.audiences) dots.push('<i class="dot info"></i>');
+    if (c.counts.drafts)    dots.push('<i class="dot warn"></i>');
+    if (!dots.length)       dots.push('<i class="dot ok"></i>');
+    return '<div class="cli'+(SEL===c.workspace_id?' sel':'')+'" onclick="pick(\''+c.workspace_id+'\')">'+
+      '<span class="cli-name">'+esc(c.workspace_name||c.workspace_id)+'</span>'+
+      '<span class="cli-dots">'+dots.join('')+'</span>'+
+      (n?'<span class="cli-n">'+n+'</span>':'')+
+    '</div>';
+  };
+
+  let html = '';
+  if (busy.length)  html += '<div class="grp">Needs you — '+busy.length+'</div>' + busy.map(row).join('');
+  // Quiet clients stay reachable. Hiding them is what made the old pages
+  // useless for "how is Acme doing?" when Acme was fine.
+  if (!ONLY_NEEDS && quiet.length) html += '<div class="grp">All clear — '+quiet.length+'</div>' + quiet.map(row).join('');
+  if (!html) html = '<div class="empty" style="padding:.9rem">No clients match.</div>';
+  document.getElementById('clients').innerHTML = html;
+
+  const t = DATA.totals;
+  document.getElementById('totals').innerHTML =
+    '<span class="chip'+(ONLY_NEEDS?' on':'')+'" onclick="toggleNeeds()">Needs you <b>'+t.needs_you+'</b></span>'+
+    '<span class="chip">Decisions <b>'+t.queue+'</b></span>'+
+    '<span class="chip">Copy <b>'+t.drafts+'</b></span>'+
+    '<span class="chip">Audiences <b>'+t.audiences+'</b></span>';
+  document.getElementById('sub').textContent = t.clients + (t.clients===1?' client':' clients') + ', one page.';
+}
+
+function toggleNeeds(){ ONLY_NEEDS = !ONLY_NEEDS; renderRail(); }
+function pick(id){ SEL = id; renderRail(); renderMain(); }
+
+// ── Right pane ─────────────────────────────────────────────────────────────
+function renderMain(){
+  const el = document.getElementById('main');
+  const c = DATA.clients.find(x => x.workspace_id === SEL);
+  if (!c) { el.innerHTML = '<div class="none"><div class="big">Pick a client</div>'+
+    '<div class="sub">Everything for them shows here — no page hopping.</div></div>'; return; }
+
+  let h = '<div class="head"><div class="h-name">'+esc(c.workspace_name||'—')+'</div>'+
+          '<span class="pill">Brief '+c.brief.pct+'%</span>'+
+          (c.brief.ready?'':'<span class="pill" style="background:#FEF3C7;color:#92400E">needs '+esc((c.brief.missing||[]).join(', '))+'</span>')+
+          '</div>';
+
+  h += '<div class="next"><div class="next-what">'+esc(c.next.what)+'</div>'+
+       '<div class="next-why">'+esc(c.next.why)+'</div></div>';
+
+  // 1. Decisions
+  h += '<div class="sec"><div class="sec-h"><span class="sec-t">Decisions</span>'+
+       '<span class="sec-c">'+c.queue.length+'</span></div>';
+  h += c.queue.length ? c.queue.map(r => {
+    const e = r.evidence || {}; const bits = [];
+    if (e.remaining != null)  bits.push(['Left', num(e.remaining)]);
+    if (e.runwayDays != null) bits.push(['Dry in', Number(e.runwayDays).toFixed(1)+'d']);
+    if (e.perDay)             bits.push(['Rate', Math.round(e.perDay)+'/day']);
+    return '<div class="row '+sev(r.severity)+'" id="qr-'+r.id+'">'+
+      '<div class="row-h"><span class="row-t">'+esc(r.headline)+'</span>'+
+      '<span class="kind">'+esc(String(r.kind).replace(/_/g,' '))+'</span>'+
+      '<span class="age">'+esc(age(r.age_hours))+'</span></div>'+
+      (r.detail?'<div class="row-d">'+esc(r.detail)+'</div>':'')+
+      (bits.length?'<div class="ev">'+bits.map(b=>esc(b[0])+' <b>'+esc(b[1])+'</b>').join('')+'</div>':'')+
+      '<div class="acts">'+
+        '<button class="btn ok" onclick="decideQ('+r.id+',\'approved\')">Done</button>'+
+        '<button class="btn mut" onclick="askQ('+r.id+')">Skip</button>'+
+        '<input class="why" id="qw-'+r.id+'" placeholder="Why skip it?" '+
+          'onkeydown="if(event.key===\'Enter\')decideQ('+r.id+',\'ignored\')">'+
+      '</div></div>';
+  }).join('') : '<div class="empty">Nothing waiting.</div>';
+  h += '</div>';
+
+  // 2. Audience — deliberately ABOVE copy. You cannot judge copy without
+  //    knowing who it is for, so the audience has to be settled first.
+  h += '<div class="sec"><div class="sec-h"><span class="sec-t">Audience</span>'+
+       '<span class="sec-c">'+c.audiences.length+'</span></div>';
+  h += c.audiences.length ? c.audiences.map(a =>
+    '<div class="row info" id="ar-'+a.id+'">'+
+      '<div class="row-h"><span class="row-t">'+esc(a.reason||'Proposed audience')+'</span>'+
+      '<span class="age">'+esc(age(Math.round((Date.now()-new Date(a.created_at+'Z').getTime())/36e5)))+'</span></div>'+
+      (a.rationale?'<div class="row-d">'+esc(a.rationale)+'</div>':'')+
+      '<div class="ev">Matches <b>'+num(a.matched)+'</b>Can email <b>'+num(a.sendable)+'</b></div>'+
+      '<div class="acts">'+
+        '<button class="btn ok" onclick="decideA('+a.id+',\'approved\')">Approve</button>'+
+        '<button class="btn mut" onclick="askA('+a.id+')">Reject</button>'+
+        '<input class="why" id="aw-'+a.id+'" placeholder="Why reject it?" '+
+          'onkeydown="if(event.key===\'Enter\')decideA('+a.id+',\'rejected\')">'+
+      '</div></div>').join('')
+    : '<div class="empty">No audience waiting.</div>';
+  h += '</div>';
+
+  // 3. Copy
+  h += '<div class="sec"><div class="sec-h"><span class="sec-t">Copy</span>'+
+       '<span class="sec-c">'+c.drafts.length+'</span></div>';
+  if (c.audiences.length && c.drafts.length) {
+    h += '<div class="warnbox">There is an audience still waiting above. '+
+         'Settle that first — this copy was written for those people.</div>';
+  }
+  h += c.drafts.length ? c.drafts.map(d =>
+    '<div class="row warn" id="dr-'+d.id+'">'+
+      '<div class="row-h"><span class="row-t">'+esc(d.campaign_name||'Copy draft')+'</span>'+
+      '<span class="age">'+esc(age(Math.round((Date.now()-new Date(d.created_at+'Z').getTime())/36e5)))+'</span></div>'+
+      (d.reason?'<div class="row-d">'+esc(d.reason)+'</div>':'')+
+      (d.sequence||[]).slice(0,3).map((s,i) =>
+        '<div class="mail"><div class="mail-s">'+(i+1)+'. '+esc(s.subject||'(no subject)')+'</div>'+
+        esc(s.body||'')+'</div>').join('')+
+      '<div class="acts">'+
+        '<button class="btn ok" onclick="decideD('+d.id+',\'approve\')">Approve &amp; send live</button>'+
+        '<button class="btn mut" onclick="askD('+d.id+')">Reject</button>'+
+        '<input class="why" id="dw-'+d.id+'" placeholder="What was wrong with it?" '+
+          'onkeydown="if(event.key===\'Enter\')decideD('+d.id+',\'reject\')">'+
+      '</div></div>').join('')
+    : '<div class="empty">No copy waiting.</div>';
+  h += '</div>';
+
+  // 4. Plan
+  h += '<div class="sec"><div class="sec-h"><span class="sec-t">Campaign plan</span>'+
+       '<span class="sec-c">'+(c.plan?c.plan.steps.length+' campaigns':'none')+'</span></div>';
+  if (c.plan) {
+    if (c.plan.summary) h += '<div class="row-d" style="margin-bottom:.5rem">'+esc(c.plan.summary)+'</div>';
+    h += c.plan.steps.map(s =>
+      '<div class="row'+(s.status==='planned'?' info':'')+'">'+
+        '<div class="row-h"><span class="row-t">'+s.position+'. '+esc(s.name)+'</span>'+
+        '<span class="kind">'+esc(s.status)+'</span></div>'+
+        (s.angle?'<div class="row-d">'+esc(s.angle)+'</div>':'')+
+        '<div class="ev">'+
+          (s.est_pool!=null?'Pool <b>'+num(s.est_pool)+'</b>':'')+
+          (s.sendable!=null?'Can email <b>'+num(s.sendable)+'</b>':'<span>not counted yet</span>')+
+        '</div></div>').join('');
+  } else {
+    h += '<div class="empty">No plan yet.</div>';
+  }
+  h += '</div>';
+
+  // 5. Market — one shared number, so it is context rather than its own page.
+  if (DATA.market) {
+    h += '<div class="sec"><div class="sec-h"><span class="sec-t">Market</span></div>'+
+         '<div class="row"><div class="ev">'+
+         'Total <b>'+num(DATA.market.total)+'</b>'+
+         'Usable <b>'+num(DATA.market.usable)+'</b>'+
+         'Emailed <b>'+num(DATA.market.emailed)+'</b>'+
+         'Untouched <b>'+num(DATA.market.untouched)+'</b></div></div></div>';
+  }
+
+  el.innerHTML = h;
+}
+
+// ── Decisions ──────────────────────────────────────────────────────────────
+function askQ(id){ const r=document.getElementById('qr-'+id); r.classList.add('asking'); document.getElementById('qw-'+id).focus(); }
+function askA(id){ const r=document.getElementById('ar-'+id); r.classList.add('asking'); document.getElementById('aw-'+id).focus(); }
+function askD(id){ const r=document.getElementById('dr-'+id); r.classList.add('asking'); document.getElementById('dw-'+id).focus(); }
+
+async function post(url, body){
+  const res = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body||{}) });
+  const j = await res.json().catch(()=>({}));
+  if (!res.ok) throw new Error(j.error || 'That did not save');
+  return j;
+}
+
+async function decideQ(id, decision){
+  const note = (document.getElementById('qw-'+id)||{}).value?.trim() || '';
+  if (decision==='ignored' && !note) { askQ(id); return; }
+  try { await post('/api/queue/'+id+'/decide', { decision, note }); await load(SEL); }
+  catch(e){ showErr(e.message); }
+}
+async function decideA(id, decision){
+  const note = (document.getElementById('aw-'+id)||{}).value?.trim() || '';
+  if (decision==='rejected' && !note) { askA(id); return; }
+  try { await post('/api/audience/'+id+'/decide', { decision, note }); await load(SEL); }
+  catch(e){ showErr(e.message); }
+}
+async function decideD(id, action){
+  const note = (document.getElementById('dw-'+id)||{}).value?.trim() || '';
+  if (action==='reject' && !note) { askD(id); return; }
+  try { await post('/api/copy/draft/'+id+'/'+action, { note, lesson: note }); await load(SEL); }
+  catch(e){ showErr(e.message); }
+}
+
+// ── Load ───────────────────────────────────────────────────────────────────
+async function load(keep){
+  try {
+    const res = await fetch('/api/console');
+    const j = await res.json();
+    if (!res.ok) throw new Error(j.error || 'Could not load');
+    DATA = j;
+    // Keep the selection across a refresh; fall back to whoever needs you most.
+    SEL = (keep && DATA.clients.some(c=>c.workspace_id===keep)) ? keep
+        : (DATA.clients.find(c=>c.counts.queue+c.counts.drafts+c.counts.audiences>0)?.workspace_id
+           || DATA.clients[0]?.workspace_id || null);
+    renderRail(); renderMain();
+  } catch (e) {
+    document.getElementById('main').innerHTML = '<div class="none">Could not load: '+esc(e.message)+'</div>';
+    document.getElementById('clients').innerHTML = '';
+  }
+}
+
+document.getElementById('q').addEventListener('input', renderRail);
+load();
+setInterval(() => load(SEL), 120000);
+</script>
+</body>
+</html>
