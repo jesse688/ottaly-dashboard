@@ -104,6 +104,19 @@
           color:var(--muted);margin-bottom:.3rem}
   .lane .row{margin-bottom:.4rem}
 
+.strip{display:flex;align-items:center;gap:.3rem;flex-wrap:wrap;margin-bottom:.8rem;
+         padding:.5rem .6rem;background:var(--card);border:1px solid var(--border);border-radius:8px}
+  .pip{width:26px;height:26px;border-radius:6px;border:1.5px solid var(--border);background:#fff;
+       font:700 12px Inter,sans-serif;color:var(--muted);cursor:pointer;flex-shrink:0}
+  .pip.todo{border-style:dashed}
+  .pip.counted{border-color:var(--navy);color:var(--navy)}
+  .pip.has-copy{border-color:var(--amber);color:var(--amber)}
+  .pip.loose{border-color:#D1D5DB;color:#9CA3AF}
+  .pip.on{background:var(--navy);border-color:var(--navy);color:#fff}
+  .pip.on.has-copy{background:var(--amber);border-color:var(--amber)}
+  .strip-n{margin-left:auto;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .nav-row{display:flex;gap:.4rem;justify-content:space-between;margin-top:.9rem}
+
   .mail{background:#F9FAFB;border:1px solid var(--border);border-radius:6px;padding:.7rem .85rem;
         margin-top:.5rem;font-size:13.5px;line-height:1.65}
   .mail-hd{font-size:11px;color:var(--muted);font-weight:700;margin-bottom:.35rem}
@@ -148,7 +161,7 @@
 </div>
 
 <script>
-let DATA = null, SEL = null, ONLY_NEEDS = false;
+let DATA = null, SEL = null, ONLY_NEEDS = false, POS = 0;
 const TOUCHED = new Set();
 
 // Mark a draft as edited. The edit rate is the honesty check on the whole
@@ -229,7 +242,18 @@ function renderRail(){
 }
 
 function toggleNeeds(){ ONLY_NEEDS = !ONLY_NEEDS; renderRail(); }
-function pick(id){ SEL = id; renderRail(); renderMain(); }
+function pick(id){ SEL = id; POS = 0; renderRail(); renderMain(); }
+function go(i){ POS = i; renderMain(); document.getElementById('main').scrollTop = 0; }
+
+// Left/right arrows move between campaigns, so a CM can work a client without
+// touching the mouse. Ignored while typing, or the arrows would fight the
+// cursor inside an email body.
+document.addEventListener('keydown', e => {
+  const t = e.target.tagName;
+  if (t === 'INPUT' || t === 'TEXTAREA') return;
+  if (e.key === 'ArrowRight') go(POS + 1);
+  if (e.key === 'ArrowLeft' && POS > 0) go(POS - 1);
+});
 
 // ── Right pane ─────────────────────────────────────────────────────────────
 function renderMain(){
@@ -280,73 +304,90 @@ function renderMainInner(el){
   }).join('') : '<div class="empty">Nothing waiting.</div>';
   h += '</div>';
 
-  // ── The plan IS the spine ────────────────────────────────────────────────
-  // Four flat lists could never say WHICH of five campaigns a draft belonged
-  // to. A campaign owns its audience and its copy, so they nest under it.
+  // ── One campaign at a time ───────────────────────────────────────────────
+  // Five campaigns stacked meant scrolling past four to reach the fifth, and
+  // losing your place every refresh. The work is sequential — count, then
+  // write, then approve — so the screen is too: one campaign, its audience and
+  // its copy, and a strip to move between them.
   const plan = c.plan;
-  h += '<div class="sec"><div class="sec-h"><span class="sec-t">Campaign plan</span>'+
-       '<span class="sec-c">'+(plan?plan.steps.length+' campaigns':'no plan yet')+'</span></div>';
-  if (plan && plan.summary) h += '<div class="row-d" style="margin-bottom:.7rem">'+esc(plan.summary)+'</div>';
+  const items = [];
+  if (plan) for (const s of plan.steps) items.push({ type: 'step', step: s });
+  for (const a of c.loose_audiences) items.push({ type: 'aud',   aud: a });
+  for (const d of c.loose_drafts)    items.push({ type: 'draft', draft: d });
 
-  if (plan && plan.steps.length) {
-    h += plan.steps.map(s => {
-      const a = s.audience, d = s.draft;
-      const counted = s.sendable != null;
-      let inner = '<div class="camp" id="st-'+s.id+'">'+
-        '<div class="camp-h"><span class="camp-n">'+s.position+'</span>'+
-        '<span class="camp-t">'+esc(s.name)+'</span>'+
-        '<span class="kind">'+esc(s.status)+'</span></div>';
-      if (s.angle) inner += '<div class="row-d">'+esc(s.angle)+'</div>';
-
-      // 1. Audience for THIS campaign.
-      inner += '<div class="lane"><div class="lane-t">Audience</div>';
-      if (a) {
-        inner += '<div class="row info" id="ar-'+a.id+'">'+
-          (a.rationale?'<div class="row-d">'+esc(a.rationale)+'</div>':'')+
-          '<div class="ev">Matches <b>'+num(a.matched)+'</b>Can email <b>'+num(a.sendable)+'</b></div>'+
-          '<div class="acts">'+
-            '<button class="btn ok" onclick="decideA('+a.id+',\'approved\')">Approve audience</button>'+
-            '<button class="btn mut" onclick="askA('+a.id+')">Reject</button>'+
-            '<input class="why" id="aw-'+a.id+'" placeholder="Why reject it?" '+
-              'onkeydown="if(event.key===\'Enter\')decideA('+a.id+',\'rejected\')">'+
-          '</div></div>';
-      } else if (counted) {
-        inner += '<div class="ev" style="margin:0 0 .2rem">Pool <b>'+num(s.est_pool)+'</b>'+
-                 'Can email <b>'+num(s.sendable)+'</b></div>';
-      } else {
-        inner += '<div class="empty">Not counted yet — nobody knows how many people this reaches.</div>'+
-                 '<div class="acts"><button class="btn ghost" onclick="countStep('+s.id+')">Count it</button></div>';
-      }
-      inner += '</div>';
-
-      // 2. Copy for THIS campaign — editable, and blocked while the audience
-      //    above is unsettled.
-      inner += '<div class="lane"><div class="lane-t">Copy</div>';
-      if (d) {
-        if (a) inner += '<div class="warnbox">The audience above is still waiting. '+
-                        'Settle that first — this copy was written for those people.</div>';
-        inner += drawDraft(d, !!a);
-      } else if (!counted) {
-        inner += '<div class="empty">Count the audience first, then write the copy.</div>';
-      } else {
-        inner += '<div class="empty">No copy yet.</div>'+
-                 '<div class="acts"><button class="btn ghost" onclick="writeCopy(\''+
-                 c.workspace_id+'\',\''+esc(s.name).replace(/'/g,"\\'")+'\')">Write the copy</button></div>';
-      }
-      inner += '</div>';
-      return inner + '</div>';
-    }).join('');
-  } else {
+  if (!items.length) {
     h += '<div class="empty">No plan yet. A plan decides which campaigns to run and in what order.</div>';
+    el.innerHTML = h + '</div>';
+    return;
   }
-  h += '</div>';
 
-  // Anything not attached to a campaign. Rare, but it must never vanish.
-  if (c.loose_audiences.length || c.loose_drafts.length) {
-    h += '<div class="sec"><div class="sec-h"><span class="sec-t">Not attached to a campaign</span></div>';
-    h += c.loose_audiences.map(a =>
-      '<div class="row info" id="ar-'+a.id+'">'+
-        '<div class="row-h"><span class="row-t">'+esc(a.reason||'Proposed audience')+'</span></div>'+
+  if (POS >= items.length) POS = items.length - 1;
+  if (POS < 0) POS = 0;
+  const it = items[POS];
+
+  // The strip: every campaign as a numbered pip, so you can see where you are
+  // and jump without scrolling. Colour says what it is waiting for.
+  h += '<div class="strip">';
+  h += items.map((x, i) => {
+    let cls = 'pip', label = i + 1;
+    if (x.type === 'step') {
+      if (x.step.draft) cls += ' has-copy';
+      else if (x.step.sendable != null) cls += ' counted';
+      else cls += ' todo';
+    } else { cls += ' loose'; label = '·'; }
+    if (i === POS) cls += ' on';
+    const t = x.type === 'step' ? x.step.name : 'Not attached to a campaign';
+    return '<button class="'+cls+'" title="'+esc(t)+'" onclick="go('+i+')">'+label+'</button>';
+  }).join('');
+  h += '<span class="strip-n">'+(POS+1)+' of '+items.length+'</span></div>';
+
+  if (it.type === 'step') {
+    const s = it.step, a = s.audience, d = s.draft;
+    const counted = s.sendable != null;
+    h += '<div class="camp">'+
+      '<div class="camp-h"><span class="camp-n">'+s.position+'</span>'+
+      '<span class="camp-t">'+esc(s.name)+'</span>'+
+      '<span class="kind">'+esc(s.status)+'</span></div>';
+    if (s.angle) h += '<div class="row-d">'+esc(s.angle)+'</div>';
+
+    h += '<div class="lane"><div class="lane-t">Audience</div>';
+    if (a) {
+      h += '<div class="row info" id="ar-'+a.id+'">'+
+        (a.rationale?'<div class="row-d">'+esc(a.rationale)+'</div>':'')+
+        '<div class="ev">Matches <b>'+num(a.matched)+'</b>Can email <b>'+num(a.sendable)+'</b></div>'+
+        '<div class="acts">'+
+          '<button class="btn ok" onclick="decideA('+a.id+',\'approved\')">Approve audience</button>'+
+          '<button class="btn mut" onclick="askA('+a.id+')">Reject</button>'+
+          '<input class="why" id="aw-'+a.id+'" placeholder="Why reject it?" '+
+            'onkeydown="if(event.key===\'Enter\')decideA('+a.id+',\'rejected\')">'+
+        '</div></div>';
+    } else if (counted) {
+      h += '<div class="ev" style="margin:0">Pool <b>'+num(s.est_pool)+'</b>'+
+           'Can email <b>'+num(s.sendable)+'</b></div>';
+    } else {
+      h += '<div class="empty">Not counted yet — nobody knows how many people this reaches.</div>'+
+           '<div class="acts"><button class="btn ghost" onclick="countStep('+s.id+',this)">Count it</button></div>';
+    }
+    h += '</div>';
+
+    h += '<div class="lane"><div class="lane-t">Copy</div>';
+    if (d) {
+      if (a) h += '<div class="warnbox">The audience above is still waiting. '+
+                  'Settle that first — this copy was written for those people.</div>';
+      h += drawDraft(d, !!a);
+    } else if (!counted) {
+      h += '<div class="empty">Count the audience first, then write the copy.</div>';
+    } else {
+      h += '<div class="empty">No copy yet.</div>'+
+           '<div class="acts"><button class="btn ghost" onclick="writeCopy('+s.id+',this)">Write the copy</button></div>';
+    }
+    h += '</div></div>';
+  } else if (it.type === 'aud') {
+    const a = it.aud;
+    h += '<div class="camp"><div class="camp-h"><span class="camp-t">'+
+         esc(a.reason||'Proposed audience')+'</span>'+
+         '<span class="kind">not attached</span></div>'+
+      '<div class="lane"><div class="row info" id="ar-'+a.id+'">'+
         (a.rationale?'<div class="row-d">'+esc(a.rationale)+'</div>':'')+
         '<div class="ev">Matches <b>'+num(a.matched)+'</b>Can email <b>'+num(a.sendable)+'</b></div>'+
         '<div class="acts">'+
@@ -354,20 +395,19 @@ function renderMainInner(el){
           '<button class="btn mut" onclick="askA('+a.id+')">Reject</button>'+
           '<input class="why" id="aw-'+a.id+'" placeholder="Why reject it?" '+
             'onkeydown="if(event.key===\'Enter\')decideA('+a.id+',\'rejected\')">'+
-        '</div></div>').join('');
-    h += c.loose_drafts.map(d => drawDraft(d, false)).join('');
-    h += '</div>';
+        '</div></div></div></div>';
+  } else {
+    const d = it.draft;
+    h += '<div class="camp"><div class="camp-h"><span class="camp-t">'+
+         esc(d.campaign_name||'Copy draft')+'</span>'+
+         '<span class="kind">not attached</span></div>'+
+         '<div class="lane"><div class="lane-t">Copy</div>'+drawDraft(d, false)+'</div></div>';
   }
 
-  // Market — one shared number, context rather than its own page.
-  if (DATA.market) {
-    h += '<div class="sec"><div class="sec-h"><span class="sec-t">Market</span></div>'+
-         '<div class="row"><div class="ev">'+
-         'Total <b>'+num(DATA.market.total)+'</b>'+
-         'Usable <b>'+num(DATA.market.usable)+'</b>'+
-         'Emailed <b>'+num(DATA.market.emailed)+'</b>'+
-         'Untouched <b>'+num(DATA.market.untouched)+'</b></div></div></div>';
-  }
+  h += '<div class="nav-row">'+
+    '<button class="btn ghost" onclick="go('+(POS-1)+')"'+(POS===0?' disabled':'')+'>← Previous</button>'+
+    '<button class="btn ghost" onclick="go('+(POS+1)+')"'+(POS>=items.length-1?' disabled':'')+'>Next →</button>'+
+    '</div>';
 
   el.innerHTML = h + '</div>';
 }
@@ -442,18 +482,28 @@ async function decideD(id, action){
   catch(e){ showErr(e.message); }
 }
 
-async function countStep(stepId){
+async function countStep(stepId, btn){
+  if (btn) { btn.disabled = true; btn.textContent = 'Counting…'; }
   try { await post('/api/plan/step/'+stepId+'/count', {}); await load(SEL); }
-  catch(e){ showErr(e.message); }
+  catch(e){
+    showErr(e.message);
+    if (btn) { btn.disabled = false; btn.textContent = 'Count it'; }
+  }
 }
 
-async function writeCopy(wsId, campaignName){
+// Write copy FOR A CAMPAIGN. /api/plan/step/:id/start is the route that links
+// the draft back to its step (draft_id + plan_step_id) and briefs the model
+// with the step's own angle. The generic /api/copy/draft does neither, so the
+// draft came back orphaned and landed under "not attached to a campaign".
+async function writeCopy(stepId, btn){
+  if (btn) { btn.disabled = true; btn.textContent = 'Writing…'; }
   try {
-    const j = await post('/api/copy/draft', { workspace_id: wsId, campaign_name: campaignName,
-                                              reason: 'Written from the console' });
-    if (j.warning) showErr(j.warning);
+    await post('/api/plan/step/'+stepId+'/start', {});
     await load(SEL);
-  } catch(e){ showErr(e.message); }
+  } catch(e){
+    showErr(e.message);
+    if (btn) { btn.disabled = false; btn.textContent = 'Write the copy'; }
+  }
 }
 
 // ── Load ───────────────────────────────────────────────────────────────────

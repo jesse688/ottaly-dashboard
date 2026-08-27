@@ -19097,6 +19097,67 @@ function copySpendThisMonth() {
   } catch { return 0; }
 }
 
+// Pull JSON out of a model reply that is nearly-but-not-quite JSON.
+//
+// "The model did not return usable JSON. Try again." was a dead end: it threw
+// away the reply, cost a full generation, and told a CM to reroll a dice. The
+// two ways this actually fails are both recoverable — a prose sentence wrapped
+// around the object, and a reply truncated mid-object when adaptive thinking
+// eats into max_tokens. So: take the outermost {...}, and if that will not
+// parse, close any strings/brackets left open and try once more.
+function parseModelJson(text, what = 'reply') {
+  const t = String(text || '').trim();
+  if (!t) throw new Error(`The model returned nothing for the ${what}. Try again.`);
+  try { return JSON.parse(t); } catch {}
+
+  const start = t.indexOf('{');
+  if (start === -1) throw new Error(`The model did not return JSON for the ${what}. Try again.`);
+  const body = t.slice(start);
+  try { return JSON.parse(body); } catch {}
+
+  // Prose AFTER the object, or a trailing fence: walk to the brace that closes
+  // the first one and cut there. Scanning back from the end breaks on "```".
+  {
+    let inS = false, esc = false, depth = 0;
+    for (let i = 0; i < body.length; i++) {
+      const ch = body[i];
+      if (esc) { esc = false; continue; }
+      if (ch === '\\' && inS) { esc = true; continue; }
+      if (ch === '"') { inS = !inS; continue; }
+      if (inS) continue;
+      if (ch === '{' || ch === '[') depth++;
+      else if (ch === '}' || ch === ']') {
+        depth--;
+        if (depth === 0) {
+          try { return JSON.parse(body.slice(0, i + 1)); } catch {}
+          break;
+        }
+      }
+    }
+  }
+
+  // Walk the text tracking depth, ignoring braces inside strings, so a
+  // truncated reply can be closed off at the right nesting level.
+  let inStr = false, escaped = false;
+  const stack = [];
+  for (const ch of body) {
+    if (escaped) { escaped = false; continue; }
+    if (ch === '\\' && inStr) { escaped = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === '{' || ch === '[') stack.push(ch === '{' ? '}' : ']');
+    else if (ch === '}' || ch === ']') stack.pop();
+  }
+  let repaired = body;
+  if (inStr) repaired += '"';
+  // Drop a dangling comma or half-written key before closing.
+  repaired = repaired.replace(/,\s*("(?:[^"\\]|\\.)*"?\s*:?\s*)?$/, '');
+  while (stack.length) repaired += stack.pop();
+  try { return JSON.parse(repaired); } catch {}
+
+  throw new Error(`The model did not return usable JSON for the ${what}. Try again.`);
+}
+
 async function generateCopyDraft({ workspaceId, workspaceName, campaignId, campaignName, reason, steps, variations }) {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error('ANTHROPIC_API_KEY is not set — cannot draft copy');
@@ -19162,8 +19223,7 @@ async function generateCopyDraft({ workspaceId, workspaceName, campaignId, campa
   // taking content[0] blindly would hand JSON.parse a reasoning summary.
   const text = ((j?.content || []).filter(b => b.type === 'text').map(b => b.text).join('') || '')
     .replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
-  let parsed;
-  try { parsed = JSON.parse(text); } catch { throw new Error('The model did not return usable JSON. Try again.'); }
+  const parsed = parseModelJson(text, 'copy');
   const bad = validateSequence(parsed);
   if (bad) throw new Error(`Draft rejected: ${bad}`);
 
@@ -19611,8 +19671,7 @@ async function generateCampaignPlan({ workspaceId, workspaceName, reason }) {
     (u.cache_read_input_tokens || 0) * OPUS_PRICE.cache_read) / 1_000_000;
   const text = ((j?.content || []).filter(b => b.type === 'text').map(b => b.text).join('') || '')
     .replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
-  let parsed;
-  try { parsed = JSON.parse(text); } catch { throw new Error('The model did not return usable JSON. Try again.'); }
+  const parsed = parseModelJson(text, 'plan');
   if (!Array.isArray(parsed.steps) || !parsed.steps.length) throw new Error('The plan came back with no campaigns in it.');
   return savePlan({ workspaceId, workspaceName, parsed, cost, author: 'ai' });
 }
@@ -20158,8 +20217,7 @@ async function generateAudienceProposal({ workspaceId, workspaceName, reason }) 
     (u.cache_read_input_tokens || 0) * OPUS_PRICE.cache_read) / 1_000_000;
   const text = ((j?.content || []).filter(b => b.type === 'text').map(b => b.text).join('') || '')
     .replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
-  let parsed;
-  try { parsed = JSON.parse(text); } catch { throw new Error('The model did not return usable JSON. Try again.'); }
+  const parsed = parseModelJson(text, 'audience');
   const filters = sanitiseAudienceFilters(parsed.filters);
   if (Object.keys(filters).length <= Object.keys(AUDIENCE_FORCED).length) {
     throw new Error('The proposal had no usable filters — the brief may be too vague about who to reach.');
