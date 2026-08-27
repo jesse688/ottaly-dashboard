@@ -19,26 +19,14 @@
       ]
     },
     {
-      label: 'Infra',
-      color: '#60A5FA',
-      icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
-      pages: [
-        { href: 'domains.html',   label: 'Domains' },
-        { href: 'mailboxes.html', label: 'Mailboxes' },
-        { href: 'warmup.html',    label: 'Warmup' },
-        { href: 'dmarc.html',     label: 'DMARC' },
-        { href: 'capacity.html',  label: 'Capacity' },
-      ]
-    },
-    {
-      label: 'Copy',
+      // Autopilot is what FILLS the queue: it enrols campaigns and measures
+      // them. It used to sit under "Copy", which made it read as an analytics
+      // page rather than the switch that makes the front door work at all.
+      label: 'Autopilot',
       color: '#A78BFA',
       icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>',
       pages: [
-        { href: 'campaigns.html',       label: 'Campaigns' },
         { href: 'autopilot.html',       label: 'Autopilot' },
-        { href: 'copy.html',            label: 'Copy Analytics' },
-        { href: 'leads-analysis.html',  label: 'Leads Analysis' },
       ]
     },
     {
@@ -49,27 +37,9 @@
         { href: 'contacts.html',        label: 'Contacts' },
         { href: 'engine-leads.html',    label: 'Engine Leads' },
         { href: 'companies-house.html', label: 'CH Pipeline' },
-        { href: 'enrichment.html',      label: 'Enrichment' },
         { href: 'database.html',        label: 'Database' },
         { href: 'apollo-prep.html',    label: 'Apollo Prep' },
-        { href: 'verify-split.html',   label: 'Verify Split' },
-        { href: 'combo-analysis.html', label: 'Combo Analysis' },
         { href: 'ads.html',            label: 'Ads Checker' },
-      ]
-    },
-    {
-      label: 'Stats',
-      color: '#FBBF24',
-      icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>',
-      pages: [
-        { href: 'actions.html',      label: 'Actions' },
-        { href: 'stats.html',        label: 'Stats' },
-        { href: 'metrics.html',      label: 'Metrics' },
-        { href: 'icp.html',          label: 'Audience' },
-        { href: 'diagnostics.html',   label: 'Diagnostics' },
-        { href: 'intelligence.html',  label: 'Intelligence' },
-        { href: 'gateway-analysis.html', label: 'Gateways' },
-        { href: 'bounce-analysis.html',  label: 'Bounces' },
       ]
     },
     {

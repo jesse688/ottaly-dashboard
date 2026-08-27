@@ -546,7 +546,7 @@
         <button class="btn btn-ghost btn-sm" onclick="loadScrapeJobs()">↻ Refresh</button>
       </div>
       <div class="panel-body">
-        <div id="scrapeJobsList"><div class="jobs-empty">No scrape jobs yet. Select companies above and hit “Scrape &amp; enrich”, or use the <a href="/enrichment.html" style="color:var(--accent)">Enrichment page</a> for a pasted list.</div></div>
+        <div id="scrapeJobsList"><div class="jobs-empty">No scrape jobs yet. Select companies above and hit “Scrape &amp; enrich”.</div></div>
       </div>
     </div>
 
@@ -1129,7 +1129,7 @@
       var cnt = document.getElementById('scrapeJobsCount');
       cnt.textContent = rows.length ? '· ' + rows.length : '';
       if (!rows.length) {
-        host.innerHTML = '<div class="jobs-empty">No scrape jobs yet. Select companies above and hit “Scrape &amp; enrich”, or use the <a href="/enrichment.html" style="color:var(--accent)">Enrichment page</a> for a pasted list.</div>';
+        host.innerHTML = '<div class="jobs-empty">No scrape jobs yet. Select companies above and hit “Scrape &amp; enrich”.</div>';
         stopJobsPolling();
         return;
       }

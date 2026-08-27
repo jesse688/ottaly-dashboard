@@ -9884,10 +9884,6 @@ app.post('/api/domains/:domain/expected-redirect', requireSession, async (req, r
   }
 });
 
-app.get('/domains', (req, res) => res.sendFile(path.join(__dirname, 'domains.html')));
-app.get('/domains.html', (req, res) => res.sendFile(path.join(__dirname, 'domains.html')));
-app.get('/enrichment',      (req, res) => res.sendFile(path.join(__dirname, 'enrichment.html')));
-app.get('/enrichment.html', (req, res) => res.sendFile(path.join(__dirname, 'enrichment.html')));
 
 // ─────────────────────────────────────────────────────────────────────
 // Gateway deliverability — reply/lead/bounce per inbound email gateway
@@ -10029,8 +10025,6 @@ app.get('/api/gateway-analysis', requireSession, async (req, res) => {
   }
 });
 
-app.get('/gateway-analysis',      (req, res) => res.sendFile(path.join(__dirname, 'gateway-analysis.html')));
-app.get('/gateway-analysis.html', (req, res) => res.sendFile(path.join(__dirname, 'gateway-analysis.html')));
 
 // Classify an MX host list into a gateway name (Mimecast/Proofpoint/Barracuda/…)
 // — same patterns as scripts/gateway-analysis.js, kept here so the API can
@@ -10343,8 +10337,6 @@ app.get('/api/bounce-analysis/explorer', requireSession, async (req, res) => {
   }
 });
 
-app.get('/bounce-analysis',      (req, res) => res.sendFile(path.join(__dirname, 'bounce-analysis.html')));
-app.get('/bounce-analysis.html', (req, res) => res.sendFile(path.join(__dirname, 'bounce-analysis.html')));
 
 // One-time (re-runnable) sweep: retire every address that has ALREADY hard-
 // bounced. The live webhook now auto-suppresses NEW hard bounces, but legacy
@@ -13291,8 +13283,6 @@ app.post('/api/mailboxes/enable-warmup', requireSession, async (req, res) => {
   }
 });
 
-app.get('/mailboxes',      (req, res) => res.sendFile(path.join(__dirname, 'mailboxes.html')));
-app.get('/mailboxes.html', (req, res) => res.sendFile(path.join(__dirname, 'mailboxes.html')));
 app.get('/mailbox-diff',      (req, res) => res.sendFile(path.join(__dirname, 'mailbox-diff.html')));
 app.get('/mailbox-diff.html', (req, res) => res.sendFile(path.join(__dirname, 'mailbox-diff.html')));
 
@@ -13428,8 +13418,6 @@ app.post('/api/warmup/refresh', requireSession, (req, res) => {
   res.json({ ok: true, warming: true });
 });
 
-app.get('/warmup',      (req, res) => res.sendFile(path.join(__dirname, 'warmup.html')));
-app.get('/warmup.html', (req, res) => res.sendFile(path.join(__dirname, 'warmup.html')));
 app.get('/health',         (req, res) => res.sendFile(path.join(__dirname, 'health.html')));
 app.get('/health.html',    (req, res) => res.sendFile(path.join(__dirname, 'health.html')));
 
