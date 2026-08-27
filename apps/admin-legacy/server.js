@@ -19172,23 +19172,99 @@ function parseModelJson(text, what = 'reply') {
 // overflows, which is the exact thing the per-provider floors exist to stop.
 const CAMPAIGN_SEED_PER_PROVIDER = 100;
 
-async function setUpCampaign({ workspaceId, workspaceName, campaignId, campaignName, filters, planStepId }) {
-  const out = { mailboxes: 0, seeded: {}, enrolled: false, warnings: [] };
+// The settings a cold campaign must have. Every value here was read off
+// Hawthorne's working campaigns and then confirmed to stick by writing it to a
+// real campaign and reading it back — a campaign PlusVibe creates gets ITS
+// defaults, which differ on six of these. The two that matter most are ESP
+// matching OFF and no per-domain cap: a new campaign would quietly send worse
+// than an established one and nothing would say why.
+//
+// The API takes 'yes'/'no' STRINGS for every boolean here, not 1/0. Numbers are
+// rejected with a validation error, so this shape is not cosmetic.
+const CAMPAIGN_DEFAULTS = Object.freeze({
+  is_esp_match:               'yes', // Google senders to Google recipients
+  stop_on_lead_replied:       'yes', // stop the sequence once someone answers
+  exclude_ooo:                'yes', // an out-of-office is not a reply, so keep going
+  ooo_nr_opt:                 'AI',  // read the return date out of the auto-reply
+  ooo_nr_ai_d:                5,     // and if it does not state one, wait 5 days
+  is_acc_based_sending:       'yes', // stop emailing a company once one person replies
+  is_emailopened_tracking:    'no',  // open tracking costs deliverability
+  is_unsubscribed_link:       'no',
+  send_as_txt:                'no',
+  send_risky_email:           'no',  // never send to addresses the verifier flagged
+  is_pause_on_bouncerate:     'yes',
+  bounce_rate_limit:          5,
+  is_max_lead_domain_per_day: 'yes',
+  max_lead_domain_per_day:    1,     // one person per company per day
+  var_sel_type:               'R_ROBIN',
+  send_priority:              0.5,
+});
 
-  // 1. Senders. Without these a campaign cannot send at all, however good the
-  //    copy is, and PlusVibe gives no warning — it just never sends.
+// UK business hours, weekdays. PlusVibe defaults to America/New_York 09:00,
+// which lands mid-afternoon UK — the worst slot of the day for cold email.
+const CAMPAIGN_TZ    = 'Europe/London';
+const CAMPAIGN_DAYS  = Object.freeze({ 1: true, 2: true, 3: true, 4: true, 5: true });
+const CAMPAIGN_HOURS = Object.freeze({ from: '07:00', to: '17:00' });
+
+// Daily send limit follows the client's REAL capacity: the sum of each
+// mailbox's own daily_limit, read live from PlusVibe.
+//
+// Multiplying mailboxes by a flat 20 looked simpler and is wrong. Hawthorne's
+// 170 mailboxes run at three different rates — 77 at 20/day, 42 at 22/day, and
+// 51 currently at 0 — and the inboxing.com sets deliberately send at 5/day,
+// not 20. A flat multiplier would set a ceiling far above what those mailboxes
+// will actually carry, and the campaign would sit throttled by the mailboxes
+// while claiming a limit it can never reach.
+//
+// Summing the real values also means a paused mailbox (limit 0) contributes
+// nothing, and the total tracks reality whenever someone changes a rate — no
+// tagging required, and nothing to keep in sync by hand.
+// Campaign capacity is the sum of what its mailboxes are allowed to send,
+// read live from PlusVibe. Nothing here ever WRITES a mailbox setting — those
+// are deliberate, and warmup owns them.
+//
+// A daily_limit of 0 means that mailbox is still warming up. It contributes
+// nothing today and must not be topped up to a guessed rate: doing that would
+// set a campaign ceiling the mailboxes cannot carry, and sending at 20 through
+// a warming inboxing.com box is how a domain gets burned. Capacity therefore
+// rises on its own as warmup finishes, with no action from anyone.
+
+async function setUpCampaign({ workspaceId, workspaceName, campaignId, campaignName, filters, planStepId }) {
+  const out = { mailboxes: 0, seeded: {}, enrolled: false, settings: false,
+                daily_limit: 0, capacity: 0, warming: 0, warnings: [] };
+
+  // 1. Senders FIRST — the daily limit is derived from how many there are, so
+  //    the count has to be real before the settings call can be right.
+  //    Without senders a campaign cannot send at all and PlusVibe gives no
+  //    warning; it just never sends.
   try {
     const accounts = await pvListAllAccounts(workspaceId);
     // ADDRESSES, not ids, and one call per account. Verified against the live
-    // API: POST /campaign/add/account requires {workspace_id, campaign_id,
-    // email}. Setting camp_emails through campaign/update looked plausible and
-    // would have silently attached nothing.
+    // API: POST /campaign/add/account takes {workspace_id, campaign_id, email}.
     const emails = accounts
       .map(a => a.email || a.from_email || a.username)
       .filter(e => typeof e === 'string' && e.includes('@'));
     if (!emails.length) {
       out.warnings.push('This client has no sender mailboxes in PlusVibe, so the campaign cannot send yet.');
     }
+    // A client can have 170 mailboxes. Per-address failures were being logged
+    // one by one, which buried the fact that actually mattered: a campaign
+    // ending up with 133 of 170 senders, or none, and still reporting success.
+    // Sum the real per-mailbox limits. A 0 is a mailbox still on warmup and
+    // counts as 0 — its capacity arrives when warmup does.
+    let warming = 0;
+    out.capacity = accounts.reduce((sum, a) => {
+      const n = Number((a.payload || {}).daily_limit);
+      if (!Number.isFinite(n) || n <= 0) { warming++; return sum; }
+      return sum + n;
+    }, 0);
+    out.warming = warming;
+    if (warming) {
+      out.warnings.push(
+        `${warming} of ${accounts.length} mailboxes are still warming up and send nothing yet. ` +
+        `The daily limit will rise on its own as they finish.`);
+    }
+    let failed = 0, firstError = null;
     for (const email of emails) {
       try {
         await pvApi('/campaign/add/account', {
@@ -19197,14 +19273,52 @@ async function setUpCampaign({ workspaceId, workspaceName, campaignId, campaignN
         });
         out.mailboxes++;
       } catch (e) {
-        out.warnings.push(`Could not attach ${email}: ${e.message}`);
+        failed++;
+        if (!firstError) firstError = e.message;
       }
+    }
+    if (failed) {
+      out.warnings.push(
+        `${out.mailboxes} of ${emails.length} mailboxes attached — ${failed} failed (${firstError}). ` +
+        `Use "Top up again" to retry the rest.`);
+    }
+    if (!out.mailboxes && emails.length) {
+      out.warnings.push('No mailboxes attached, so this campaign cannot send anything yet.');
     }
   } catch (e) {
     out.warnings.push(`Could not attach mailboxes: ${e.message}`);
   }
 
-  // 2. Seed contacts, one bounded batch per provider.
+  // 2. Settings, including the daily limit that follows from the sender count.
+  try {
+    // A campaign cannot send more than its senders allow, so the campaign cap
+    // is the senders' combined capacity. Never 0 — PlusVibe rejects that, and a
+    // client whose mailboxes are all paused needs the warning above, not a
+    // campaign that silently cannot be launched.
+    out.daily_limit = Math.max(1, Math.round(out.capacity || 0));
+    await pvApi('/campaign/update/campaign', {
+      method: 'PATCH', wsId: workspaceId,
+      body: {
+        workspace_id: workspaceId, campaign_id: campaignId,
+        ...CAMPAIGN_DEFAULTS,
+        // 'schedules' is an array and carries daily_limit and start_date.
+        // A bare 'schedule' object is rejected outright, and daily_limit is
+        // not accepted at the top level — both confirmed against the API.
+        schedules: [{
+          start_date: new Date().toISOString().slice(0, 10),
+          daily_limit: out.daily_limit,
+          timezone: CAMPAIGN_TZ,
+          days: { ...CAMPAIGN_DAYS },
+          timing: { ...CAMPAIGN_HOURS },
+        }],
+      },
+    });
+    out.settings = true;
+  } catch (e) {
+    out.warnings.push(`Could not apply the standard campaign settings: ${e.message}`);
+  }
+
+  // 3. Seed contacts, one bounded batch per provider.
   if (filters && Object.keys(filters).length) {
     for (const bucket of AP_BUCKETS) {
       try {
@@ -19243,7 +19357,7 @@ async function setUpCampaign({ workspaceId, workspaceName, campaignId, campaignN
     out.warnings.push('No audience filter on this campaign, so no contacts were added and Autopilot cannot top it up.');
   }
 
-  // 3. Arm Autopilot. It refuses to enable without a captured filter, which is
+  // 4. Arm Autopilot. It refuses to enable without a captured filter, which is
   //    the same rule enforced on the enrol route — honour it rather than
   //    writing a config that would silently never push.
   if (filters && Object.keys(filters).length) {
@@ -20113,6 +20227,8 @@ app.post('/api/plan/step/:id/autopilot', requireSession, async (req, res) => {
       ok: true, setup,
       note: `${setup.mailboxes} mailboxes attached, ${seeded} contacts queued ` +
             `(${CAMPAIGN_SEED_PER_PROVIDER} per provider to start), ` +
+            `settings ${setup.settings ? 'applied' : 'NOT APPLIED'}, ` +
+            `daily limit ${setup.daily_limit} (what ${setup.mailboxes} mailboxes actually allow), ` +
             `auto top-up ${setup.enrolled ? 'ON' : 'OFF'}. ` +
             `Still a DRAFT — nothing sends until you launch it in PlusVibe.`,
     });
