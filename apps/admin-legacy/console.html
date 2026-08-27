@@ -382,7 +382,7 @@ function renderMainInner(el){
     if (d) {
       if (a) h += '<div class="warnbox">The audience above is still waiting. '+
                   'Settle that first — this copy was written for those people.</div>';
-      h += drawDraft(d, !!a);
+      h += drawDraft(d, !!a, s);
     } else if (!counted) {
       h += '<div class="empty">Count the audience first, then write the copy.</div>';
     } else {
@@ -420,9 +420,25 @@ function renderMainInner(el){
   el.innerHTML = h + '</div>';
 }
 
+// The Autopilot button. Deliberately a SECOND action, not part of Approve:
+// approving says "these words are right", this says "start putting real people
+// into it". It only appears once the campaign exists in PlusVibe, because
+// there is nothing to stock before that.
+function apButton(step){
+  if (!step) return '';
+  if (!step.campaign_id) {
+    return '<button class="btn ghost" disabled title="Approve the copy first — that is what creates the campaign in PlusVibe">Put on Autopilot</button>';
+  }
+  if (step.autopilot && step.autopilot.enabled) {
+    return '<span class="pill" style="background:#DCFCE7;color:#166534">On Autopilot</span>'+
+           '<button class="btn ghost" onclick="putOnAutopilot('+step.id+',this)">Top up again</button>';
+  }
+  return '<button class="btn ghost" onclick="putOnAutopilot('+step.id+',this)">Put on Autopilot</button>';
+}
+
 // One draft, with every subject and body editable in place. Edits are held in
 // EDITS until Approve, so a half-finished change is never sent.
-function drawDraft(d, blocked){
+function drawDraft(d, blocked, step){
   const steps = (d.sequence && d.sequence.steps) || [];
   return '<div class="row warn" id="dr-'+d.id+'">'+
     (d.reason?'<div class="row-d">'+esc(d.reason)+'</div>':'')+
@@ -446,6 +462,7 @@ function drawDraft(d, blocked){
       '<button class="btn ok" id="dap-'+d.id+'" onclick="decideD('+d.id+',\'approve\')"'+
         (blocked?' disabled title="Approve the audience above first"':'')+'>Approve &amp; save to PlusVibe</button>'+
       '<button class="btn mut" onclick="askD('+d.id+')">Reject</button>'+
+      apButton(step)+
       '<span class="edited" id="ded-'+d.id+'"></span>'+
       '<input class="why" id="dw-'+d.id+'" placeholder="What was wrong with it?" '+
         'onkeydown="if(event.key===\'Enter\')decideD('+d.id+',\'reject\')">'+
@@ -500,6 +517,19 @@ async function decideD(id, action){
     }
   }
   catch(e){ showErr(e.message); }
+}
+
+async function putOnAutopilot(stepId, btn){
+  if (btn) { btn.disabled = true; btn.textContent = 'Setting up…'; }
+  try {
+    const j = await post('/api/plan/step/'+stepId+'/autopilot', {});
+    await load(SEL);
+    if (j && j.note) showOk(j.note);
+    if (j && j.setup && j.setup.warnings && j.setup.warnings.length) showErr(j.setup.warnings.join(' '));
+  } catch(e){
+    showErr(e.message);
+    if (btn) { btn.disabled = false; btn.textContent = 'Put on Autopilot'; }
+  }
 }
 
 async function countStep(stepId, btn){

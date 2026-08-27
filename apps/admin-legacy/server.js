@@ -20001,6 +20001,7 @@ app.get('/api/console', requireSession, (req, res) => {
     // campaign a draft belongs to.
     const planFor = new Map();
     for (const p of plans) if (!planFor.has(p.workspace_id)) planFor.set(p.workspace_id, p);
+    const apCfgs = (() => { try { return autopilotCampaigns(); } catch { return {}; } })();
     const audByStep   = new Map(); for (const a of auds)   if (a.plan_step_id) audByStep.set(a.plan_step_id, a);
     const draftById   = new Map(); for (const d of drafts) draftById.set(d.id, d);
 
@@ -20024,6 +20025,11 @@ app.get('/api/console', requireSession, (req, res) => {
         filters: (() => { try { return JSON.parse(s.filters || '{}'); } catch { return {}; } })(),
         audience: audByStep.get(s.id) || null,
         draft: s.draft_id ? (draftById.get(s.draft_id) || null) : null,
+        // Whether this campaign is already stocked and being topped up, so the
+        // button can say what it will DO rather than offering the same action
+        // twice and letting a CM wonder whether the first click worked.
+        autopilot: s.campaign_id && apCfgs[s.campaign_id]
+          ? { enabled: !!apCfgs[s.campaign_id].enabled } : null,
       })) : [];
       const stepDraftIds = new Set(steps.map(s => s.draft_id).filter(Boolean));
       const stepAudIds   = new Set(steps.map(s => s.audience && s.audience.id).filter(Boolean));
@@ -20074,6 +20080,41 @@ app.get('/api/console', requireSession, (req, res) => {
         queue: queueRows.length, drafts: drafts.length, audiences: auds.length,
       },
       clients: out,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Stock a campaign and hand it to Autopilot. Separate from approving the copy
+// on purpose: approving says "these words are right", this says "start putting
+// real people into it and keep it topped up". Different decisions with very
+// different consequences, so a CM makes them one at a time.
+app.post('/api/plan/step/:id/autopilot', requireSession, async (req, res) => {
+  try {
+    const st = db.prepare(`SELECT s.*, p.workspace_id, p.workspace_name FROM campaign_plan_steps s
+      JOIN campaign_plans p ON p.id = s.plan_id WHERE s.id = ?`).get(Number(req.params.id));
+    if (!st) return res.status(404).json({ error: 'No such campaign' });
+    if (!st.campaign_id) {
+      return res.status(400).json({
+        error: 'This campaign is not in PlusVibe yet — approve the copy first, which is what creates it.' });
+    }
+    let filters = null;
+    try { filters = JSON.parse(st.filters || 'null'); } catch { filters = null; }
+    if (!filters || !Object.keys(filters).length) {
+      return res.status(400).json({
+        error: 'This campaign has no audience filter, so there is nothing to push and Autopilot could not top it up.' });
+    }
+    const setup = await setUpCampaign({
+      workspaceId: st.workspace_id, workspaceName: st.workspace_name,
+      campaignId: st.campaign_id, campaignName: st.name,
+      filters, planStepId: st.id,
+    });
+    const seeded = Object.values(setup.seeded).reduce((a, b) => a + b, 0);
+    res.json({
+      ok: true, setup,
+      note: `${setup.mailboxes} mailboxes attached, ${seeded} contacts queued ` +
+            `(${CAMPAIGN_SEED_PER_PROVIDER} per provider to start), ` +
+            `auto top-up ${setup.enrolled ? 'ON' : 'OFF'}. ` +
+            `Still a DRAFT — nothing sends until you launch it in PlusVibe.`,
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -20660,35 +20701,15 @@ app.post('/api/copy/draft/:id/approve', requireSession, async (req, res) => {
       // leaves an empty shell: no senders, no contacts, no top-up. Only for a
       // campaign we just created — an existing one already has its own senders
       // and audience, and rewriting those would undo an operator's choices.
-      let setup = null;
-      if (createdCampaign) {
-        let stepFilters = null;
-        if (row.plan_step_id) {
-          const st = db.prepare('SELECT filters FROM campaign_plan_steps WHERE id = ?').get(row.plan_step_id);
-          try { stepFilters = JSON.parse(st?.filters || 'null'); } catch { stepFilters = null; }
-        }
-        try {
-          setup = await setUpCampaign({
-            workspaceId: row.workspace_id, workspaceName: row.workspace_name,
-            campaignId, campaignName: row.campaign_name || `Ottaly — draft ${id}`,
-            filters: stepFilters, planStepId: row.plan_step_id || null,
-          });
-        } catch (e) {
-          // The copy IS saved by this point. Setting up is a separate concern
-          // and must not roll that back or report the approval as failed.
-          setup = { mailboxes: 0, seeded: {}, enrolled: false, warnings: [e.message] };
-        }
-      }
-
-      const seeded = setup ? Object.values(setup.seeded).reduce((a, b) => a + b, 0) : 0;
+      // Approve saves the copy and stops there. Stocking the campaign —
+      // senders, contacts, auto top-up — is a separate decision with different
+      // consequences, so it gets its own button rather than riding along on a
+      // click that says "approve".
       const note = createdCampaign
-        ? `Saved to a new DRAFT campaign in PlusVibe. ${setup?.mailboxes || 0} mailboxes attached, ` +
-          `${seeded} contacts queued (${CAMPAIGN_SEED_PER_PROVIDER} per provider to start), ` +
-          `auto top-up ${setup?.enrolled ? 'on' : 'OFF'}. Nothing sends until you launch it in PlusVibe.`
+        ? 'Copy saved to a new DRAFT campaign in PlusVibe. It has no senders or contacts yet — use "Put on Autopilot" to stock it. Nothing sends until you launch it in PlusVibe.'
         : 'Written to the existing campaign in PlusVibe. Its status, senders and audience are unchanged.';
       res.json({ ok: true, edited: !!wasEdited, lessonSaved: !!lesson,
-                 campaign_id: campaignId, created_campaign: createdCampaign,
-                 setup, note });
+                 campaign_id: campaignId, created_campaign: createdCampaign, note });
     } catch (e) {
       // Put it back so the CM can retry rather than losing the draft.
       db.prepare(`UPDATE copy_drafts SET status = 'draft', decided_by = NULL, decided_at = NULL WHERE id = ?`).run(id);
