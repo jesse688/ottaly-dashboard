@@ -19789,7 +19789,7 @@ app.get('/api/console', requireSession, (req, res) => {
     })));
 
     const auds = ids.length ? db.prepare(
-      `SELECT id, workspace_id, reason, rationale, filters, matched, sendable, created_at
+      `SELECT id, workspace_id, reason, rationale, filters, matched, sendable, created_at, plan_step_id
          FROM audience_proposals WHERE status='draft' AND workspace_id IN (${inHolder})
         ORDER BY created_at DESC`).all(...ids) : [];
     const byAud = group(auds.map(a => ({
@@ -19805,10 +19805,14 @@ app.get('/api/console', requireSession, (req, res) => {
       `SELECT id, plan_id, position, name, status, sendable, est_pool, angle, rationale,
               filters, campaign_id, draft_id
          FROM campaign_plan_steps WHERE plan_id=? ORDER BY position`);
-    // Newest plan per client only. An archived-but-not-deleted history is
-    // useful on the plan page; on a console it is noise.
+    // Newest plan per client. The plan is the spine — a campaign owns its
+    // audience and its copy — so the console hangs everything off the step
+    // rather than showing four disconnected lists that never say WHICH
+    // campaign a draft belongs to.
     const planFor = new Map();
     for (const p of plans) if (!planFor.has(p.workspace_id)) planFor.set(p.workspace_id, p);
+    const audByStep   = new Map(); for (const a of auds)   if (a.plan_step_id) audByStep.set(a.plan_step_id, a);
+    const draftById   = new Map(); for (const d of drafts) draftById.set(d.id, d);
 
     const briefs = ids.length ? db.prepare(
       `SELECT * FROM client_memory WHERE workspace_id IN (${inHolder})`).all(...ids) : [];
@@ -19822,9 +19826,17 @@ app.get('/api/console', requireSession, (req, res) => {
       const brief = briefBy.get(c.workspace_id) || { workspace_id: c.workspace_id };
       const comp  = memoryCompleteness(brief);
       const next  = nextActionFor(c.workspace_id, c.workspace_name);
+      // Each step carries its own audience and its own copy, so the UI never
+      // has to guess which campaign a draft belongs to. sendable/est_pool on
+      // the step IS the audience count once it has been counted.
       const steps = plan ? stepStmt.all(plan.id).map(s => ({
-        ...s, filters: (() => { try { return JSON.parse(s.filters || '{}'); } catch { return {}; } })(),
+        ...s,
+        filters: (() => { try { return JSON.parse(s.filters || '{}'); } catch { return {}; } })(),
+        audience: audByStep.get(s.id) || null,
+        draft: s.draft_id ? (draftById.get(s.draft_id) || null) : null,
       })) : [];
+      const stepDraftIds = new Set(steps.map(s => s.draft_id).filter(Boolean));
+      const stepAudIds   = new Set(steps.map(s => s.audience && s.audience.id).filter(Boolean));
       return {
         workspace_id: c.workspace_id,
         workspace_name: c.workspace_name,
@@ -19839,7 +19851,12 @@ app.get('/api/console', requireSession, (req, res) => {
         },
         top_severity: q.length ? Math.max(...q.map(r => r.severity)) : 0,
         brief: { pct: comp.pct, ready: comp.ready, missing: comp.missing },
-        queue: q, drafts: draft, audiences: aud,
+        queue: q,
+        // Anything not attached to a campaign still has to be visible, or it
+        // silently disappears the moment the plan becomes the spine.
+        loose_drafts: draft.filter(d => !stepDraftIds.has(d.id)),
+        loose_audiences: aud.filter(a => !stepAudIds.has(a.id)),
+        drafts: draft, audiences: aud,
         plan: plan ? { ...plan, steps } : null,
       };
     });

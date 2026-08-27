@@ -19,7 +19,11 @@
      separate pages could not do. */
   .shell{display:grid;grid-template-columns:340px 1fr;height:100vh}
   .rail{border-right:1px solid var(--border);background:var(--card);display:flex;flex-direction:column;min-height:0}
-  .main{overflow-y:auto;min-height:0;padding:1.1rem 1.3rem 4rem}
+  /* Cap the reading column. Without this the email bodies run the full width
+     of a wide monitor, which makes 13px text look half its size and is
+     unreadable well before it looks small. */
+  .main{overflow-y:auto;min-height:0;padding:1.4rem 1.6rem 5rem}
+  .wrap{max-width:920px}
 
   .rail-hd{padding:.85rem .9rem .6rem;border-bottom:1px solid var(--border);flex-shrink:0}
   .title{font-family:'Genos',sans-serif;font-size:1.3rem;font-weight:800;line-height:1}
@@ -36,8 +40,8 @@
   .search input:focus{border-color:var(--teal)}
 
   .clients{flex:1;overflow-y:auto;min-height:0;padding-bottom:1rem}
-  .cli{display:flex;align-items:center;gap:.5rem;padding:.5rem .9rem;cursor:pointer;
-       border-left:3px solid transparent;font-size:13px}
+  .cli{display:flex;align-items:center;gap:.5rem;padding:.55rem .9rem;cursor:pointer;
+       border-left:3px solid transparent;font-size:13.5px}
   .cli:hover{background:#F3F4F6}
   .cli.sel{background:rgba(31,111,120,.09);border-left-color:var(--teal);font-weight:700}
   .cli-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -51,32 +55,32 @@
 
   /* Right pane */
   .head{display:flex;align-items:baseline;gap:.7rem;flex-wrap:wrap;margin-bottom:.2rem}
-  .h-name{font-family:'Genos',sans-serif;font-size:1.65rem;font-weight:800;line-height:1}
+  .h-name{font-family:'Genos',sans-serif;font-size:2rem;font-weight:800;line-height:1}
   .next{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--teal);
         border-radius:8px;padding:.6rem .85rem;margin:.7rem 0 1rem}
-  .next-what{font-size:13.5px;font-weight:700}
-  .next-why{font-size:12px;color:#374151;margin-top:2px;line-height:1.5}
+  .next-what{font-size:15px;font-weight:700}
+  .next-why{font-size:13.5px;color:#374151;margin-top:2px;line-height:1.5}
 
   .sec{margin-bottom:1.15rem}
   .sec-h{display:flex;align-items:center;gap:.5rem;margin-bottom:.45rem}
-  .sec-t{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--teal)}
+  .sec-t{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--teal)}
   .sec-c{font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums}
 
   .row{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--muted);
-       border-radius:8px;padding:.7rem .85rem;margin-bottom:.45rem}
+       border-radius:8px;padding:.85rem 1rem;margin-bottom:.55rem}
   .row.crit{border-left-color:var(--red)}.row.warn{border-left-color:var(--amber)}
   .row.info{border-left-color:var(--navy)}
   .row-h{display:flex;align-items:baseline;gap:.5rem;flex-wrap:wrap}
-  .row-t{font-size:13px;font-weight:700;flex:1;min-width:12rem}
-  .row-d{font-size:12px;color:#374151;line-height:1.5;margin-top:.25rem}
+  .row-t{font-size:15px;font-weight:700;flex:1;min-width:12rem}
+  .row-d{font-size:13.5px;color:#374151;line-height:1.5;margin-top:.25rem}
   .kind{padding:1px 7px;border-radius:20px;font-size:9.5px;font-weight:700;text-transform:uppercase;
         letter-spacing:.3px;background:#F3F4F6;color:var(--muted)}
   .age{font-size:10.5px;color:var(--muted);white-space:nowrap}
-  .ev{display:flex;gap:1rem;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:.35rem}
+  .ev{display:flex;gap:1.2rem;flex-wrap:wrap;font-size:12.5px;color:var(--muted);margin-top:.35rem}
   .ev b{color:var(--navy-dark);font-weight:700;font-variant-numeric:tabular-nums}
   .acts{display:flex;gap:.35rem;align-items:center;flex-wrap:wrap;margin-top:.5rem}
-  .btn{padding:5px 11px;border:1.5px solid var(--navy);background:var(--navy);color:#fff;
-       border-radius:6px;font:600 12px Inter,sans-serif;cursor:pointer}
+  .btn{padding:7px 13px;border:1.5px solid var(--navy);background:var(--navy);color:#fff;
+       border-radius:6px;font:600 13px Inter,sans-serif;cursor:pointer}
   .btn.ghost{background:#fff;color:var(--navy)}
   .btn.ok{border-color:var(--green);background:var(--green)}
   .btn.mut{border-color:var(--border);background:#fff;color:var(--muted)}
@@ -85,8 +89,32 @@
        font:500 12px Inter,sans-serif;display:none}
   .row.asking .why{display:block}
 
-  .mail{background:#F9FAFB;border:1px solid var(--border);border-radius:6px;padding:.5rem .65rem;
-        margin-top:.4rem;font-size:12px;line-height:1.55;white-space:pre-wrap}
+  /* A campaign and everything that belongs to it. The plan is the spine, so
+     the audience and the copy sit INSIDE the campaign rather than in their own
+     lists where you could not tell which of five they belonged to. */
+  .camp{background:var(--card);border:1px solid var(--border);border-radius:10px;
+        padding:.9rem 1rem;margin-bottom:.7rem}
+  .camp-h{display:flex;align-items:baseline;gap:.55rem;flex-wrap:wrap}
+  .camp-n{width:22px;height:22px;border-radius:50%;background:var(--navy);color:#fff;
+          font:700 12px Inter,sans-serif;display:inline-flex;align-items:center;
+          justify-content:center;flex-shrink:0}
+  .camp-t{font-size:15.5px;font-weight:700;flex:1;min-width:12rem}
+  .lane{margin-top:.7rem;padding-left:.75rem;border-left:2px solid #EEF0F4}
+  .lane-t{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;
+          color:var(--muted);margin-bottom:.3rem}
+  .lane .row{margin-bottom:.4rem}
+
+  .mail{background:#F9FAFB;border:1px solid var(--border);border-radius:6px;padding:.7rem .85rem;
+        margin-top:.5rem;font-size:13.5px;line-height:1.65}
+  .mail-hd{font-size:11px;color:var(--muted);font-weight:700;margin-bottom:.35rem}
+  .ed-s,.ed-b{width:100%;border:1px solid transparent;border-radius:5px;background:transparent;
+              font-family:'Inter',sans-serif;color:var(--navy-dark);padding:5px 7px;outline:none;
+              transition:border-color .12s,background .12s}
+  .ed-s{font-size:13.5px;font-weight:700;margin-bottom:.25rem}
+  .ed-b{font-size:13.5px;line-height:1.65;resize:vertical}
+  .ed-s:hover,.ed-b:hover{border-color:var(--border);background:#fff}
+  .ed-s:focus,.ed-b:focus{border-color:var(--teal);background:#fff}
+  .edited{font-size:11px;color:var(--amber);font-weight:700}
   .mail-s{font-weight:700;margin-bottom:.2rem}
   .pill{display:inline-block;padding:1px 7px;border-radius:20px;font-size:10px;font-weight:700;
         background:#F3F4F6;color:var(--muted);margin-right:.3rem}
@@ -95,8 +123,8 @@
   .none .big{font-family:'Genos',sans-serif;font-size:1.5rem;font-weight:800;color:var(--green);margin-bottom:.25rem}
   .err{background:#FEE2E2;border:1px solid #FECACA;color:#991B1B;padding:.5rem .7rem;
        border-radius:6px;font-size:12px;margin-bottom:.6rem}
-  .warnbox{background:#FEF3C7;border:1px solid #FDE68A;color:#92400E;padding:.5rem .7rem;
-       border-radius:6px;font-size:12px;margin-bottom:.6rem;line-height:1.5}
+  .warnbox{background:#FEF3C7;border:1px solid #FDE68A;color:#92400E;padding:.65rem .85rem;
+       border-radius:6px;font-size:13px;margin-bottom:.6rem;line-height:1.5}
   .load{text-align:center;padding:2.5rem;color:var(--muted);font-size:13px}
   .bar{height:4px;background:#F3F4F6;border-radius:3px;overflow:hidden;margin-top:.3rem}
   .bar i{display:block;height:100%;background:var(--teal)}
@@ -121,6 +149,35 @@
 
 <script>
 let DATA = null, SEL = null, ONLY_NEEDS = false;
+const TOUCHED = new Set();
+
+// Mark a draft as edited. The edit rate is the honesty check on the whole
+// approval step — if everything is approved untouched the gate is decorative —
+// so it has to be recorded truthfully rather than guessed at afterwards.
+function touch(id){
+  TOUCHED.add(id);
+  const el = document.getElementById('ded-'+id);
+  if (el) el.textContent = 'edited';
+}
+
+// Read the edited sequence back out of the inputs: clone what the server sent,
+// then overwrite only the fields a person actually changed.
+function collect(id){
+  const c = DATA.clients.find(x => x.workspace_id === SEL);
+  if (!c) return null;
+  let d = (c.loose_drafts || []).find(x => x.id === id);
+  if (!d && c.plan) for (const s of c.plan.steps) if (s.draft && s.draft.id === id) d = s.draft;
+  if (!d || !d.sequence) return null;
+  const seq = JSON.parse(JSON.stringify(d.sequence));
+  document.querySelectorAll('[data-k^="'+id+'|"]').forEach(inp => {
+    const parts = inp.dataset.k.split('|');
+    const st = (seq.steps || []).find(s => String(s.step) === parts[1]);
+    if (!st) return;
+    const v = (st.variations || []).find(x => String(x.variation) === parts[2]) || (st.variations||[])[0];
+    if (v) v[inp.dataset.f] = inp.value;
+  });
+  return seq;
+}
 
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const sev = n => n>=80?'crit':n>=60?'warn':n>=40?'info':'';
@@ -192,7 +249,7 @@ function renderMainInner(el){
   if (!c) { el.innerHTML = '<div class="none"><div class="big">Pick a client</div>'+
     '<div class="sub">Everything for them shows here — no page hopping.</div></div>'; return; }
 
-  let h = '<div class="head"><div class="h-name">'+esc(c.workspace_name||'—')+'</div>'+
+  let h = '<div class="wrap"><div class="head"><div class="h-name">'+esc(c.workspace_name||'—')+'</div>'+
           '<span class="pill">Brief '+c.brief.pct+'%</span>'+
           (c.brief.ready?'':'<span class="pill" style="background:#FEF3C7;color:#92400E">needs '+esc((c.brief.missing||[]).join(', '))+'</span>')+
           '</div>';
@@ -223,78 +280,86 @@ function renderMainInner(el){
   }).join('') : '<div class="empty">Nothing waiting.</div>';
   h += '</div>';
 
-  // 2. Audience — deliberately ABOVE copy. You cannot judge copy without
-  //    knowing who it is for, so the audience has to be settled first.
-  h += '<div class="sec"><div class="sec-h"><span class="sec-t">Audience</span>'+
-       '<span class="sec-c">'+c.audiences.length+'</span></div>';
-  h += c.audiences.length ? c.audiences.map(a =>
-    '<div class="row info" id="ar-'+a.id+'">'+
-      '<div class="row-h"><span class="row-t">'+esc(a.reason||'Proposed audience')+'</span>'+
-      '<span class="age">'+esc(age(Math.round((Date.now()-new Date(a.created_at+'Z').getTime())/36e5)))+'</span></div>'+
-      (a.rationale?'<div class="row-d">'+esc(a.rationale)+'</div>':'')+
-      '<div class="ev">Matches <b>'+num(a.matched)+'</b>Can email <b>'+num(a.sendable)+'</b></div>'+
-      '<div class="acts">'+
-        '<button class="btn ok" onclick="decideA('+a.id+',\'approved\')">Approve</button>'+
-        '<button class="btn mut" onclick="askA('+a.id+')">Reject</button>'+
-        '<input class="why" id="aw-'+a.id+'" placeholder="Why reject it?" '+
-          'onkeydown="if(event.key===\'Enter\')decideA('+a.id+',\'rejected\')">'+
-      '</div></div>').join('')
-    : '<div class="empty">No audience waiting.</div>';
-  h += '</div>';
-
-  // 3. Copy
-  h += '<div class="sec"><div class="sec-h"><span class="sec-t">Copy</span>'+
-       '<span class="sec-c">'+c.drafts.length+'</span></div>';
-  if (c.audiences.length && c.drafts.length) {
-    h += '<div class="warnbox">There is an audience still waiting above. '+
-         'Settle that first — this copy was written for those people.</div>';
-  }
-  h += c.drafts.length ? c.drafts.map(d =>
-    '<div class="row warn" id="dr-'+d.id+'">'+
-      '<div class="row-h"><span class="row-t">'+esc(d.campaign_name||'Copy draft')+'</span>'+
-      '<span class="age">'+esc(age(Math.round((Date.now()-new Date(d.created_at+'Z').getTime())/36e5)))+'</span></div>'+
-      (d.reason?'<div class="row-d">'+esc(d.reason)+'</div>':'')+
-      // A sequence is { steps: [ { step, wait_time, variations: [ {subject, body} ] } ] }.
-      // Show the first variation of each step — that is the email that actually
-      // goes out, and the rest belong on the full Copy Drafts page.
-      ((d.sequence && d.sequence.steps) || []).map(st => {
-        const v = (st.variations || [])[0] || {};
-        const more = (st.variations || []).length - 1;
-        return '<div class="mail">'+
-          '<div class="mail-s">'+esc(st.step)+'. '+esc(v.subject||'(no subject)')+
-          (st.wait_time?' <span class="pill">wait '+esc(st.wait_time)+'d</span>':'')+
-          (more>0?' <span class="pill">+'+more+' variation'+(more>1?'s':'')+'</span>':'')+
-          '</div>'+esc(v.body||'')+'</div>';
-      }).join('')+
-      '<div class="acts">'+
-        '<button class="btn ok" onclick="decideD('+d.id+',\'approve\')">Approve &amp; send live</button>'+
-        '<button class="btn mut" onclick="askD('+d.id+')">Reject</button>'+
-        '<input class="why" id="dw-'+d.id+'" placeholder="What was wrong with it?" '+
-          'onkeydown="if(event.key===\'Enter\')decideD('+d.id+',\'reject\')">'+
-      '</div></div>').join('')
-    : '<div class="empty">No copy waiting.</div>';
-  h += '</div>';
-
-  // 4. Plan
+  // ── The plan IS the spine ────────────────────────────────────────────────
+  // Four flat lists could never say WHICH of five campaigns a draft belonged
+  // to. A campaign owns its audience and its copy, so they nest under it.
+  const plan = c.plan;
   h += '<div class="sec"><div class="sec-h"><span class="sec-t">Campaign plan</span>'+
-       '<span class="sec-c">'+(c.plan?c.plan.steps.length+' campaigns':'none')+'</span></div>';
-  if (c.plan) {
-    if (c.plan.summary) h += '<div class="row-d" style="margin-bottom:.5rem">'+esc(c.plan.summary)+'</div>';
-    h += c.plan.steps.map(s =>
-      '<div class="row'+(s.status==='planned'?' info':'')+'">'+
-        '<div class="row-h"><span class="row-t">'+s.position+'. '+esc(s.name)+'</span>'+
-        '<span class="kind">'+esc(s.status)+'</span></div>'+
-        (s.angle?'<div class="row-d">'+esc(s.angle)+'</div>':'')+
-        '<div class="ev">'+
-          (s.est_pool!=null?'Pool <b>'+num(s.est_pool)+'</b>':'')+
-          (s.sendable!=null?'Can email <b>'+num(s.sendable)+'</b>':'<span>not counted yet</span>')+
-        '</div></div>').join('');
+       '<span class="sec-c">'+(plan?plan.steps.length+' campaigns':'no plan yet')+'</span></div>';
+  if (plan && plan.summary) h += '<div class="row-d" style="margin-bottom:.7rem">'+esc(plan.summary)+'</div>';
+
+  if (plan && plan.steps.length) {
+    h += plan.steps.map(s => {
+      const a = s.audience, d = s.draft;
+      const counted = s.sendable != null;
+      let inner = '<div class="camp" id="st-'+s.id+'">'+
+        '<div class="camp-h"><span class="camp-n">'+s.position+'</span>'+
+        '<span class="camp-t">'+esc(s.name)+'</span>'+
+        '<span class="kind">'+esc(s.status)+'</span></div>';
+      if (s.angle) inner += '<div class="row-d">'+esc(s.angle)+'</div>';
+
+      // 1. Audience for THIS campaign.
+      inner += '<div class="lane"><div class="lane-t">Audience</div>';
+      if (a) {
+        inner += '<div class="row info" id="ar-'+a.id+'">'+
+          (a.rationale?'<div class="row-d">'+esc(a.rationale)+'</div>':'')+
+          '<div class="ev">Matches <b>'+num(a.matched)+'</b>Can email <b>'+num(a.sendable)+'</b></div>'+
+          '<div class="acts">'+
+            '<button class="btn ok" onclick="decideA('+a.id+',\'approved\')">Approve audience</button>'+
+            '<button class="btn mut" onclick="askA('+a.id+')">Reject</button>'+
+            '<input class="why" id="aw-'+a.id+'" placeholder="Why reject it?" '+
+              'onkeydown="if(event.key===\'Enter\')decideA('+a.id+',\'rejected\')">'+
+          '</div></div>';
+      } else if (counted) {
+        inner += '<div class="ev" style="margin:0 0 .2rem">Pool <b>'+num(s.est_pool)+'</b>'+
+                 'Can email <b>'+num(s.sendable)+'</b></div>';
+      } else {
+        inner += '<div class="empty">Not counted yet — nobody knows how many people this reaches.</div>'+
+                 '<div class="acts"><button class="btn ghost" onclick="countStep('+s.id+')">Count it</button></div>';
+      }
+      inner += '</div>';
+
+      // 2. Copy for THIS campaign — editable, and blocked while the audience
+      //    above is unsettled.
+      inner += '<div class="lane"><div class="lane-t">Copy</div>';
+      if (d) {
+        if (a) inner += '<div class="warnbox">The audience above is still waiting. '+
+                        'Settle that first — this copy was written for those people.</div>';
+        inner += drawDraft(d, !!a);
+      } else if (!counted) {
+        inner += '<div class="empty">Count the audience first, then write the copy.</div>';
+      } else {
+        inner += '<div class="empty">No copy yet.</div>'+
+                 '<div class="acts"><button class="btn ghost" onclick="writeCopy(\''+
+                 c.workspace_id+'\',\''+esc(s.name).replace(/'/g,"\\'")+'\')">Write the copy</button></div>';
+      }
+      inner += '</div>';
+      return inner + '</div>';
+    }).join('');
   } else {
-    h += '<div class="empty">No plan yet.</div>';
+    h += '<div class="empty">No plan yet. A plan decides which campaigns to run and in what order.</div>';
   }
   h += '</div>';
 
-  // 5. Market — one shared number, so it is context rather than its own page.
+  // Anything not attached to a campaign. Rare, but it must never vanish.
+  if (c.loose_audiences.length || c.loose_drafts.length) {
+    h += '<div class="sec"><div class="sec-h"><span class="sec-t">Not attached to a campaign</span></div>';
+    h += c.loose_audiences.map(a =>
+      '<div class="row info" id="ar-'+a.id+'">'+
+        '<div class="row-h"><span class="row-t">'+esc(a.reason||'Proposed audience')+'</span></div>'+
+        (a.rationale?'<div class="row-d">'+esc(a.rationale)+'</div>':'')+
+        '<div class="ev">Matches <b>'+num(a.matched)+'</b>Can email <b>'+num(a.sendable)+'</b></div>'+
+        '<div class="acts">'+
+          '<button class="btn ok" onclick="decideA('+a.id+',\'approved\')">Approve</button>'+
+          '<button class="btn mut" onclick="askA('+a.id+')">Reject</button>'+
+          '<input class="why" id="aw-'+a.id+'" placeholder="Why reject it?" '+
+            'onkeydown="if(event.key===\'Enter\')decideA('+a.id+',\'rejected\')">'+
+        '</div></div>').join('');
+    h += c.loose_drafts.map(d => drawDraft(d, false)).join('');
+    h += '</div>';
+  }
+
+  // Market — one shared number, context rather than its own page.
   if (DATA.market) {
     h += '<div class="sec"><div class="sec-h"><span class="sec-t">Market</span></div>'+
          '<div class="row"><div class="ev">'+
@@ -304,7 +369,39 @@ function renderMainInner(el){
          'Untouched <b>'+num(DATA.market.untouched)+'</b></div></div></div>';
   }
 
-  el.innerHTML = h;
+  el.innerHTML = h + '</div>';
+}
+
+// One draft, with every subject and body editable in place. Edits are held in
+// EDITS until Approve, so a half-finished change is never sent.
+function drawDraft(d, blocked){
+  const steps = (d.sequence && d.sequence.steps) || [];
+  return '<div class="row warn" id="dr-'+d.id+'">'+
+    (d.reason?'<div class="row-d">'+esc(d.reason)+'</div>':'')+
+    steps.map(st => {
+      const v = (st.variations || [])[0] || {};
+      const more = (st.variations || []).length - 1;
+      const key = d.id+'|'+st.step+'|'+(v.variation!=null?v.variation:1);
+      return '<div class="mail">'+
+        '<div class="mail-hd">'+esc(st.step)+'.'+
+          (st.wait_time?' <span class="pill">wait '+esc(st.wait_time)+'d</span>':'')+
+          (more>0?' <span class="pill">+'+more+' variation'+(more>1?'s':'')+'</span>':'')+
+        '</div>'+
+        '<input class="ed-s" data-k="'+key+'" data-f="subject" value="'+esc(v.subject||'')+'" '+
+          'placeholder="Subject" oninput="touch('+d.id+')">'+
+        '<textarea class="ed-b" data-k="'+key+'" data-f="body" rows="'+
+          Math.max(4, String(v.body||'').split('\n').length+1)+'" '+
+          'placeholder="Body" oninput="touch('+d.id+')">'+esc(v.body||'')+'</textarea>'+
+      '</div>';
+    }).join('')+
+    '<div class="acts">'+
+      '<button class="btn ok" id="dap-'+d.id+'" onclick="decideD('+d.id+',\'approve\')"'+
+        (blocked?' disabled title="Approve the audience above first"':'')+'>Approve &amp; send live</button>'+
+      '<button class="btn mut" onclick="askD('+d.id+')">Reject</button>'+
+      '<span class="edited" id="ded-'+d.id+'"></span>'+
+      '<input class="why" id="dw-'+d.id+'" placeholder="What was wrong with it?" '+
+        'onkeydown="if(event.key===\'Enter\')decideD('+d.id+',\'reject\')">'+
+    '</div></div>';
 }
 
 // ── Decisions ──────────────────────────────────────────────────────────────
@@ -334,8 +431,29 @@ async function decideA(id, decision){
 async function decideD(id, action){
   const note = (document.getElementById('dw-'+id)||{}).value?.trim() || '';
   if (action==='reject' && !note) { askD(id); return; }
-  try { await post('/api/copy/draft/'+id+'/'+action, { note, lesson: note }); await load(SEL); }
+  const body = { note, lesson: note };
+  // Send the edited sequence only when it was actually touched. The approve
+  // route validates it and records whether it differed from what was written.
+  if (action==='approve' && TOUCHED.has(id)) {
+    const seq = collect(id);
+    if (seq) { body.sequence = seq; body.edited = true; }
+  }
+  try { await post('/api/copy/draft/'+id+'/'+action, body); TOUCHED.delete(id); await load(SEL); }
   catch(e){ showErr(e.message); }
+}
+
+async function countStep(stepId){
+  try { await post('/api/plan/step/'+stepId+'/count', {}); await load(SEL); }
+  catch(e){ showErr(e.message); }
+}
+
+async function writeCopy(wsId, campaignName){
+  try {
+    const j = await post('/api/copy/draft', { workspace_id: wsId, campaign_name: campaignName,
+                                              reason: 'Written from the console' });
+    if (j.warning) showErr(j.warning);
+    await load(SEL);
+  } catch(e){ showErr(e.message); }
 }
 
 // ── Load ───────────────────────────────────────────────────────────────────
