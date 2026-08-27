@@ -19842,19 +19842,27 @@ app.get('/api/console', requireSession, (req, res) => {
               COALESCE(edited, generated) AS sequence
          FROM copy_drafts WHERE status='draft' AND workspace_id IN (${inHolder})
         ORDER BY created_at DESC`).all(...ids) : [];
-    const byDraft = group(drafts.map(d => ({
-      ...d,
-      sequence: (() => { try { return JSON.parse(d.sequence); } catch { return []; } })(),
-    })));
+    // Parse IN PLACE. This used to build a parsed COPY and leave `drafts`
+    // holding raw JSON strings; draftById was then built from the originals, so
+    // a draft attached to a campaign arrived with sequence still a string,
+    // d.sequence.steps was undefined, and the campaign showed a Copy box with
+    // no emails in it. One array, parsed once, no second version to drift from.
+    for (const d of drafts) {
+      try { d.sequence = JSON.parse(d.sequence); } catch { d.sequence = { steps: [] }; }
+    }
+    const byDraft = group(drafts);
 
     const auds = ids.length ? db.prepare(
       `SELECT id, workspace_id, reason, rationale, filters, matched, sendable, created_at, plan_step_id
          FROM audience_proposals WHERE status='draft' AND workspace_id IN (${inHolder})
         ORDER BY created_at DESC`).all(...ids) : [];
-    const byAud = group(auds.map(a => ({
-      ...a,
-      filters: (() => { try { return JSON.parse(a.filters || '{}'); } catch { return {}; } })(),
-    })));
+    // Same in-place rule as drafts above: audByStep is built from this array,
+    // so a copy would hand campaign-attached audiences an unparsed filters
+    // string.
+    for (const a of auds) {
+      try { a.filters = JSON.parse(a.filters || '{}'); } catch { a.filters = {}; }
+    }
+    const byAud = group(auds);
 
     const plans = ids.length ? db.prepare(
       `SELECT id, workspace_id, summary, status, created_at FROM campaign_plans
