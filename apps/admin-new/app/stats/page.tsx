@@ -420,11 +420,27 @@ export default function StatsPage() {
     const id = ++reqId.current
     setStatus('loading')
     setErrMsg('')
+    // The provider split is a secondary column, and its endpoint is an all-time
+    // aggregate that can take ~15s on a cold cache. It used to share a Promise.all
+    // with the summary, which meant the entire page sat on "Loading stats..." for
+    // as long as the SLOWER of the two — so every load waited on a column nobody
+    // is blocked on reading. It now runs on its own and fills in when it lands.
+    void (async () => {
+      try {
+        const provRes = await fetch('/api/stats/providers')
+        if (id !== reqId.current || !provRes.ok) return
+        const pj: ProvidersResponse = await provRes.json()
+        if (id !== reqId.current) return
+        if (!pj.error && pj.providers) {
+          setProviders(Object.fromEntries(pj.providers.map(p => [p.workspace_id, p])))
+        }
+      } catch {
+        /* secondary column: the page is still correct without it */
+      }
+    })()
+
     try {
-      const [sumRes, provRes] = await Promise.all([
-        fetch(`/api/stats/summary?start=${range.start}&end=${range.end}`),
-        fetch('/api/stats/providers'),
-      ])
+      const sumRes = await fetch(`/api/stats/summary?start=${range.start}&end=${range.end}`)
       if (id !== reqId.current) return
       if (!sumRes.ok) throw new Error(`Stats server returned ${sumRes.status}`)
       const data: SummaryResponse = await sumRes.json()
@@ -432,13 +448,6 @@ export default function StatsPage() {
       setUpdatedAt(data.updatedAt)
       setFailedNames(data.partial ? (data.failedNames ?? []) : [])
       setSpansBison(Boolean(data.spansBison))
-
-      if (provRes.ok) {
-        const pj: ProvidersResponse = await provRes.json()
-        if (!pj.error && pj.providers) {
-          setProviders(Object.fromEntries(pj.providers.map(p => [p.workspace_id, p])))
-        }
-      }
 
       const ws = data.workspaces || []
       if (!ws.length) {
