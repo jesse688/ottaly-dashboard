@@ -19158,6 +19158,118 @@ function parseModelJson(text, what = 'reply') {
   throw new Error(`The model did not return usable JSON for the ${what}. Try again.`);
 }
 
+// Make an approved campaign ready to launch: senders on it, a SEED batch of
+// contacts in it, and Autopilot armed to keep it stocked.
+//
+// Deliberately a seed, not the whole audience. A 3,000-contact pool dumped in
+// on day one is 3,000 contacts committed to copy nobody has seen perform, and
+// it takes the decision away from Autopilot, whose entire job is topping up
+// against a measured runway. So: a small batch per provider, then Autopilot
+// owns it from there.
+//
+// Per provider, because ESP matching means Google senders need Google
+// recipients — a single mixed batch would leave one bucket dry while another
+// overflows, which is the exact thing the per-provider floors exist to stop.
+const CAMPAIGN_SEED_PER_PROVIDER = 100;
+
+async function setUpCampaign({ workspaceId, workspaceName, campaignId, campaignName, filters, planStepId }) {
+  const out = { mailboxes: 0, seeded: {}, enrolled: false, warnings: [] };
+
+  // 1. Senders. Without these a campaign cannot send at all, however good the
+  //    copy is, and PlusVibe gives no warning — it just never sends.
+  try {
+    const accounts = await pvListAllAccounts(workspaceId);
+    // ADDRESSES, not ids, and one call per account. Verified against the live
+    // API: POST /campaign/add/account requires {workspace_id, campaign_id,
+    // email}. Setting camp_emails through campaign/update looked plausible and
+    // would have silently attached nothing.
+    const emails = accounts
+      .map(a => a.email || a.from_email || a.username)
+      .filter(e => typeof e === 'string' && e.includes('@'));
+    if (!emails.length) {
+      out.warnings.push('This client has no sender mailboxes in PlusVibe, so the campaign cannot send yet.');
+    }
+    for (const email of emails) {
+      try {
+        await pvApi('/campaign/add/account', {
+          method: 'POST', wsId: workspaceId,
+          body: { workspace_id: workspaceId, campaign_id: campaignId, email },
+        });
+        out.mailboxes++;
+      } catch (e) {
+        out.warnings.push(`Could not attach ${email}: ${e.message}`);
+      }
+    }
+  } catch (e) {
+    out.warnings.push(`Could not attach mailboxes: ${e.message}`);
+  }
+
+  // 2. Seed contacts, one bounded batch per provider.
+  if (filters && Object.keys(filters).length) {
+    for (const bucket of AP_BUCKETS) {
+      try {
+        const sr = await fetch(`http://127.0.0.1:${PORT}/api/contacts/sendability`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'x-admin-key': ADMIN_KEY },
+          body: JSON.stringify({
+            filters: { ...filters, emailProviders: AP_BUCKET_TO_FILTER[bucket] },
+            workspace_id: workspaceId, workspace_name: workspaceName,
+            campaign_id: campaignId, campaign_name: campaignName,
+            return_ids: true, sample: CAMPAIGN_SEED_PER_PROVIDER, loose: true,
+          }),
+        });
+        if (!sr.ok) { out.warnings.push(`${bucket}: could not pick contacts (HTTP ${sr.status})`); continue; }
+        const sj = await sr.json();
+        const ids = (Array.isArray(sj.ids) ? sj.ids : []).slice(0, CAMPAIGN_SEED_PER_PROVIDER);
+        if (!ids.length) { out.seeded[bucket] = 0; continue; }
+        // verify-and-push, not a raw push: it verifies mid-push and applies
+        // every send guard (cross-client cooldown, DNC, same-vertical lockout).
+        const pr = await fetch(`http://127.0.0.1:${PORT}/api/contacts/verify-and-push`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'x-admin-key': ADMIN_KEY },
+          body: JSON.stringify({
+            contact_ids: ids, workspace_id: workspaceId, workspace_name: workspaceName,
+            campaign_id: campaignId, campaign_name: campaignName,
+            emailProviders: AP_BUCKET_TO_FILTER[bucket], loose: true,
+          }),
+        });
+        // A queued push is not a sent one — the job runs in the background, so
+        // this count is "handed over", never "delivered".
+        out.seeded[bucket] = pr.ok ? ids.length : 0;
+        if (!pr.ok) out.warnings.push(`${bucket}: push refused (HTTP ${pr.status})`);
+      } catch (e) {
+        out.warnings.push(`${bucket}: ${e.message}`);
+      }
+    }
+  } else {
+    out.warnings.push('No audience filter on this campaign, so no contacts were added and Autopilot cannot top it up.');
+  }
+
+  // 3. Arm Autopilot. It refuses to enable without a captured filter, which is
+  //    the same rule enforced on the enrol route — honour it rather than
+  //    writing a config that would silently never push.
+  if (filters && Object.keys(filters).length) {
+    try {
+      const all = autopilotCampaigns();
+      const prev = all[campaignId] || {};
+      all[campaignId] = {
+        ...prev,
+        workspace_id: workspaceId,
+        workspace_name: workspaceName || prev.workspace_name || workspaceId,
+        campaign_name: campaignName || prev.campaign_name || campaignId,
+        enabled: true,
+        floors: prev.floors || { google: 200, microsoft: 200, other: 100 },
+        filter: filters,
+        filter_captured_at: new Date().toISOString(),
+        plan_step_id: planStepId || prev.plan_step_id || null,
+      };
+      saveAutopilotCampaigns(all);
+      out.enrolled = true;
+    } catch (e) {
+      out.warnings.push(`Could not switch on auto top-up: ${e.message}`);
+    }
+  }
+  return out;
+}
+
 async function generateCopyDraft({ workspaceId, workspaceName, campaignId, campaignName, reason, steps, variations }) {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error('ANTHROPIC_API_KEY is not set — cannot draft copy');
@@ -20544,11 +20656,39 @@ app.post('/api/copy/draft/:id/approve', requireSession, async (req, res) => {
           .run(row.workspace_id, lesson, req.body?.lesson_source === 'ai' ? 'edit-ai' : 'edit',
                id, s?.name || 'unknown');
       }
+      // Set the campaign up so it is genuinely ready to launch. Copy alone
+      // leaves an empty shell: no senders, no contacts, no top-up. Only for a
+      // campaign we just created — an existing one already has its own senders
+      // and audience, and rewriting those would undo an operator's choices.
+      let setup = null;
+      if (createdCampaign) {
+        let stepFilters = null;
+        if (row.plan_step_id) {
+          const st = db.prepare('SELECT filters FROM campaign_plan_steps WHERE id = ?').get(row.plan_step_id);
+          try { stepFilters = JSON.parse(st?.filters || 'null'); } catch { stepFilters = null; }
+        }
+        try {
+          setup = await setUpCampaign({
+            workspaceId: row.workspace_id, workspaceName: row.workspace_name,
+            campaignId, campaignName: row.campaign_name || `Ottaly — draft ${id}`,
+            filters: stepFilters, planStepId: row.plan_step_id || null,
+          });
+        } catch (e) {
+          // The copy IS saved by this point. Setting up is a separate concern
+          // and must not roll that back or report the approval as failed.
+          setup = { mailboxes: 0, seeded: {}, enrolled: false, warnings: [e.message] };
+        }
+      }
+
+      const seeded = setup ? Object.values(setup.seeded).reduce((a, b) => a + b, 0) : 0;
+      const note = createdCampaign
+        ? `Saved to a new DRAFT campaign in PlusVibe. ${setup?.mailboxes || 0} mailboxes attached, ` +
+          `${seeded} contacts queued (${CAMPAIGN_SEED_PER_PROVIDER} per provider to start), ` +
+          `auto top-up ${setup?.enrolled ? 'on' : 'OFF'}. Nothing sends until you launch it in PlusVibe.`
+        : 'Written to the existing campaign in PlusVibe. Its status, senders and audience are unchanged.';
       res.json({ ok: true, edited: !!wasEdited, lessonSaved: !!lesson,
                  campaign_id: campaignId, created_campaign: createdCampaign,
-                 note: createdCampaign
-                   ? 'Saved to a new DRAFT campaign in PlusVibe. Nothing sends until you launch it there.'
-                   : 'Written to the existing campaign in PlusVibe. Its status is unchanged.' });
+                 setup, note });
     } catch (e) {
       // Put it back so the CM can retry rather than losing the draft.
       db.prepare(`UPDATE copy_drafts SET status = 'draft', decided_by = NULL, decided_at = NULL WHERE id = ?`).run(id);

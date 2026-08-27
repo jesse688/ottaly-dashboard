@@ -493,6 +493,11 @@ async function decideD(id, action){
     // Say plainly that nothing has been sent. "Approved" on its own reads as
     // "it has gone out", which is the one thing that has NOT happened.
     if (j && j.note) showOk(j.note);
+    // Warnings are the difference between "ready to launch" and "looks ready
+    // but cannot send" — a campaign with no mailboxes is silently dead in PV.
+    if (j && j.setup && j.setup.warnings && j.setup.warnings.length) {
+      showErr(j.setup.warnings.join(' '));
+    }
   }
   catch(e){ showErr(e.message); }
 }
