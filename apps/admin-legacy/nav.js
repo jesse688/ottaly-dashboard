@@ -7,7 +7,7 @@
       // The front door. Deliberately first and deliberately alone: a CM should
       // start here every morning and only go elsewhere when they want detail.
       label: 'Queue',
-      color: '#34D399',
+      color: '#059669',
       icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>',
       pages: [
         { href: 'queue.html',        label: 'Today' },
@@ -23,7 +23,7 @@
       // them. It used to sit under "Copy", which made it read as an analytics
       // page rather than the switch that makes the front door work at all.
       label: 'Autopilot',
-      color: '#A78BFA',
+      color: '#7C3AED',
       icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>',
       pages: [
         { href: 'autopilot.html',       label: 'Autopilot' },
@@ -31,7 +31,7 @@
     },
     {
       label: 'Data',
-      color: '#22D3EE',
+      color: '#0891B2',
       icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>',
       pages: [
         { href: 'contacts.html',        label: 'Contacts' },
@@ -44,7 +44,7 @@
     },
     {
       label: 'Finance',
-      color: '#4ADE80',
+      color: '#16A34A',
       icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>',
       admin: true,
       pages: [
@@ -54,7 +54,7 @@
     },
     {
       label: 'Clients',
-      color: '#FB923C',
+      color: '#EA580C',
       icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>',
       pages: [
         { href: 'clients.html', label: 'Clients', manager: true },
@@ -62,7 +62,7 @@
     },
     {
       label: 'Admin',
-      color: '#F87171',
+      color: '#DC2626',
       icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 4.93l1.41 1.41M4.93 19.07l1.41-1.41M19.07 19.07l-1.41-1.41M12 2v2M12 20v2M2 12h2M20 12h2"/></svg>',
       pages: [
         { href: 'admin.html',        label: 'Admin Settings', admin: true },
@@ -116,10 +116,10 @@
       '#ottaly-sidebar {' +
       '  position: fixed; top: 0; left: 0; bottom: 0;' +
       '  width: ' + SIDEBAR_W + 'px;' +
-      '  background: #050C29;' +
+      '  background: #fff;' +
       '  display: flex; flex-direction: column;' +
       '  z-index: 10000;' +
-      '  border-right: 1px solid rgba(255,255,255,0.07);' +
+      '  border-right: 1px solid #E5E7EB;' +
       '  overflow: visible;' +
       '}\n' +
       '#ottaly-sidebar::before {' +
@@ -127,8 +127,7 @@
       '  position: absolute;' +
       '  inset: 0;' +
       '  background: url("/favicon.svg") center/160% no-repeat;' +
-      '  filter: invert(1);' +
-      '  opacity: 0.04;' +
+      '  opacity: 0.035;' +
       '  pointer-events: none;' +
       '  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 25%, black 75%, transparent 100%);' +
       '  mask-image: linear-gradient(to bottom, transparent 0%, black 25%, black 75%, transparent 100%);' +
@@ -137,7 +136,7 @@
       // Logo
       '.o-sb-logo {' +
       '  padding: 12px 0 10px;' +
-      '  border-bottom: 1px solid rgba(255,255,255,0.07);' +
+      '  border-bottom: 1px solid #E5E7EB;' +
       '  flex-shrink: 0;' +
       '  display: flex; align-items: center; justify-content: center;' +
       '}\n' +
@@ -160,22 +159,25 @@
       '  gap: 4px;' +
       '  padding: 10px 4px;' +
       '  background: none; border: none; cursor: pointer;' +
-      '  --section-color: rgba(255,255,255,0.5);' +
+      '  --section-color: #6B7280;' +
       '  transition: background .15s;' +
       '  border-left: 3px solid transparent;' +
       '}\n' +
+      // On white, the section colour has to be DARKENED to stay legible — the
+      // old rules mixed it toward transparent and white, which was right on
+      // #050C29 and washes out to nothing here.
       '.o-sb-btn-icon {' +
       '  display: flex; align-items: center; justify-content: center;' +
-      '  color: color-mix(in srgb, var(--section-color) 55%, transparent);' +
+      '  color: color-mix(in srgb, var(--section-color) 78%, #4B5563);' +
       '  transition: color .15s;' +
       '}\n' +
-      '.o-sb-btn-label { transition: color .15s; color: color-mix(in srgb, var(--section-color) 40%, transparent); }\n' +
-      '.o-sb-btn:hover { background: color-mix(in srgb, var(--section-color) 10%, transparent); }\n' +
-      '.o-sb-btn:hover .o-sb-btn-icon { color: var(--section-color); }\n' +
-      '.o-sb-btn:hover .o-sb-btn-label { color: color-mix(in srgb, var(--section-color) 80%, white); }\n' +
-      '.o-sb-btn.active { border-left-color: var(--section-color); background: color-mix(in srgb, var(--section-color) 15%, transparent); }\n' +
-      '.o-sb-btn.active .o-sb-btn-icon { color: #fff; }\n' +
-      '.o-sb-btn.active .o-sb-btn-label { color: var(--section-color); font-weight: 800; }\n' +
+      '.o-sb-btn-label { transition: color .15s; color: color-mix(in srgb, var(--section-color) 60%, #4B5563); }\n' +
+      '.o-sb-btn:hover { background: color-mix(in srgb, var(--section-color) 12%, #fff); }\n' +
+      '.o-sb-btn:hover .o-sb-btn-icon { color: color-mix(in srgb, var(--section-color) 85%, #111827); }\n' +
+      '.o-sb-btn:hover .o-sb-btn-label { color: color-mix(in srgb, var(--section-color) 85%, #111827); }\n' +
+      '.o-sb-btn.active { border-left-color: var(--section-color); background: color-mix(in srgb, var(--section-color) 15%, #fff); }\n' +
+      '.o-sb-btn.active .o-sb-btn-icon { color: color-mix(in srgb, var(--section-color) 90%, #111827); }\n' +
+      '.o-sb-btn.active .o-sb-btn-label { color: color-mix(in srgb, var(--section-color) 90%, #111827); font-weight: 800; }\n' +
       '.o-sb-btn-label {' +
       '  font: 700 9px/1 "Inter",sans-serif;' +
       '  text-transform: uppercase;' +
@@ -189,13 +191,13 @@
       '  position: fixed;' +
       '  left: ' + SIDEBAR_W + 'px;' +
       '  min-width: ' + FLYOUT_W + 'px;' +
-      '  background: #0d1b3e;' +
-      '  border: 1px solid rgba(255,255,255,0.1);' +
+      '  background: #fff;' +
+      '  border: 1px solid #E5E7EB;' +
       '  border-left: 3px solid #1F6F78;' +
       '  border-radius: 0 8px 8px 0;' +
       '  padding: 6px 0;' +
       '  z-index: 10001;' +
-      '  box-shadow: 4px 4px 20px rgba(0,0,0,0.4);' +
+      '  box-shadow: 4px 4px 20px rgba(5,12,41,0.13);' +
       '}\n' +
       '.o-sb-wrap:hover .o-sb-flyout { display: block; }\n' +
       '.o-sb-flyout-title {' +
@@ -203,21 +205,21 @@
       '  font: 700 10px/1 "Inter",sans-serif;' +
       '  text-transform: uppercase;' +
       '  letter-spacing: 0.6px;' +
-      '  color: rgba(255,255,255,0.35);' +
-      '  border-bottom: 1px solid rgba(255,255,255,0.07);' +
+      '  color: #9CA3AF;' +
+      '  border-bottom: 1px solid #E5E7EB;' +
       '  margin-bottom: 4px;' +
       '}\n' +
       '.o-sb-flyout a {' +
       '  display: block;' +
       '  padding: 8px 16px;' +
       '  font: 500 13px/1 "Inter",sans-serif;' +
-      '  color: rgba(255,255,255,0.6);' +
+      '  color: #374151;' +
       '  text-decoration: none;' +
       '  transition: color .1s, background .1s;' +
       '  white-space: nowrap;' +
       '}\n' +
-      '.o-sb-flyout a:hover { color: #fff; background: rgba(255,255,255,0.07); }\n' +
-      '.o-sb-flyout a.active { color: #fff; background: rgba(31,111,120,0.25); padding-left: 13px; border-left: 3px solid #1F6F78; }\n' +
+      '.o-sb-flyout a:hover { color: #050C29; background: #F3F4F6; }\n' +
+      '.o-sb-flyout a.active { color: #050C29; font-weight: 700; background: rgba(31,111,120,0.10); padding-left: 13px; border-left: 3px solid #1F6F78; }\n' +
 
       // Mobile overlay
       '#ottaly-sb-overlay { display: none; position: fixed; inset: 0; z-index: 9990; background: rgba(0,0,0,0.4); }\n' +
@@ -227,10 +229,10 @@
       '#ottaly-hamburger {' +
       '  position: fixed; top: 10px; left: 10px;' +
       '  z-index: 10001; display: none;' +
-      '  background: #050C29; border: none; cursor: pointer;' +
+      '  background: #fff; border: 1px solid #E5E7EB; cursor: pointer;' +
       '  padding: 8px; border-radius: 7px;' +
-      '  color: rgba(255,255,255,0.8);' +
-      '  box-shadow: 0 2px 8px rgba(0,0,0,0.3);' +
+      '  color: #374151;' +
+      '  box-shadow: 0 2px 8px rgba(5,12,41,0.15);' +
       '}\n' +
 
       '@media (max-width: 900px) {\n' +
@@ -263,8 +265,8 @@
       '#ottaly-chat-send{background:#1F6F78;border:none;border-radius:8px;padding:9px 14px;cursor:pointer;color:#fff;font:600 13px Inter,sans-serif;transition:background .15s;flex-shrink:0;}\n' +
       '#ottaly-chat-send:hover{background:#17585e;}\n' +
       '#ottaly-chat-send:disabled{opacity:0.45;cursor:not-allowed;}\n' +
-      '.o-chat-toggle{width:100%;display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 4px;background:none;border:none;cursor:pointer;color:rgba(255,255,255,0.35);transition:color .15s,background .15s;border-left:3px solid transparent;}\n' +
-      '.o-chat-toggle:hover{color:rgba(255,255,255,0.8);background:rgba(255,255,255,0.06);}\n' +
+      '.o-chat-toggle{width:100%;display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 4px;background:none;border:none;cursor:pointer;color:#6B7280;transition:color .15s,background .15s;border-left:3px solid transparent;}\n' +
+      '.o-chat-toggle:hover{color:#050C29;background:#F3F4F6;}\n' +
       '.o-chat-toggle span{font:700 8px/1 Inter,sans-serif;text-transform:uppercase;letter-spacing:0.5px;}\n' +
       '.o-chat-icon-btn{background:none;border:none;cursor:pointer;color:rgba(255,255,255,0.4);font-size:16px;line-height:1;padding:3px 6px;border-radius:5px;transition:color .15s,background .15s;}\n' +
       '.o-chat-icon-btn:hover{color:#fff;background:rgba(255,255,255,0.08);}\n' +
