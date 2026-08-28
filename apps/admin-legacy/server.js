@@ -22739,7 +22739,11 @@ function autoResumePushJobs() {
 // exactly where they stopped (verified_count/pushed_count are already written
 // periodically; this guarantees the row + status are paused before we exit).
 function pausePushJobsForShutdown(sq) {
-  const live = [...pushJobs.values()].filter(j => j.status === 'verifying' || j.status === 'pushing' || j.status === 'running');
+  // 'n2b_verifying' and 'pausing' were missing here: a job in the No2Bounce
+  // phase (or mid-pause) when a deploy landed was never flagged for resume and
+  // simply vanished, losing its progress.
+  const live = [...pushJobs.values()].filter(j =>
+    ['verifying', 'pushing', 'running', 'n2b_verifying', 'pausing'].includes(j.status));
   if (!live.length) return;
   console.log(`[push] SIGTERM — pausing ${live.length} in-flight job(s) for resume after deploy`);
   for (const job of live) {
@@ -22774,7 +22778,10 @@ app.get('/api/reacher-pool', requireSession, async (req, res) => {
 // list. Reacher answering at all is not enough: it can be up and still time
 // out on most calls, which lands every contact in 'unknown' and silently
 // halves a push's yield. So health = live probe + today's failure ratio.
-const VERIFIER_HEALTH_TTL_MS = 60 * 60 * 1000;   // re-test at most hourly
+// Was hourly, which meant the widget could be up to 60 minutes stale — during
+// the 2026-08-28 outage it kept showing a pre-outage reading. The probe is cheap
+// (one verification); 2 minutes keeps it honest without meaningful cost.
+const VERIFIER_HEALTH_TTL_MS = 2 * 60 * 1000;
 let _verifierHealth = null;                       // last computed report
 
 // A timeout ratio this high means most contacts come back 'unknown'.
@@ -22805,6 +22812,11 @@ async function computeVerifierHealth() {
     report.lastError    = m.lastError || '';
     const attempts = report.usageToday + report.failureCount;
     report.failureRatio = attempts ? report.failureCount / attempts : 0;
+    // Live capacity + stalled jobs. The cumulative ratio above dilutes a total
+    // outage across a whole day of earlier successes and is cached for an hour,
+    // so it cannot answer "is it broken right now" — these can.
+    report.slots = d.slots || null;
+    report.runningJobs = d.runningJobs || [];
   } catch (e) {
     report.reasons.push(`Could not read verifier pool counters: ${e.message}`);
   }
@@ -22836,6 +22848,22 @@ async function computeVerifierHealth() {
   } else {
     report.status = 'ok';
   }
+
+  // Live signals, independent of the daily ratio. A stalled job or a saturated
+  // slot queue is a problem happening NOW — on 2026-08-28 both were true while
+  // the ratio stayed under threshold and the widget read merely "degraded".
+  const stalled = (report.runningJobs || []).filter(j => j.stalledMs > 120000);
+  if (stalled.length) {
+    report.status = 'down';
+    report.reasons.push(`${stalled.length} verification job(s) stalled with no progress for over 2 minutes. `
+      + `They hold verifier capacity until stopped.`);
+  }
+  if (report.slots && report.slots.queued > 0 && report.slots.active >= report.slots.cap) {
+    if (report.status === 'ok') report.status = 'degraded';
+    report.reasons.push(`Verifier at capacity: ${report.slots.active}/${report.slots.cap} slots in use, `
+      + `${report.slots.queued} request(s) queued. Checks are waiting rather than running.`);
+  }
+
   if (report.lastError && report.status !== 'ok') {
     report.reasons.push(`Most recent verifier error: ${report.lastError}`);
   }
@@ -23820,7 +23848,10 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
             }
           }
           verifyResults[c.id] = status;
-          batchUpdates.push({ id: c.id, email_status: status, email_verified_at: new Date().toISOString(), mx_provider: mxProvider, email: c.email });
+          // Persist WHY, not just the verdict. Only for non-safe results — a
+          // clean pass writes null so a stale reason can't outlive its cause.
+          batchUpdates.push({ id: c.id, email_status: status, email_verified_at: new Date().toISOString(), mx_provider: mxProvider, email: c.email,
+                              email_verify_reason: status === 'safe' ? null : (reason || null) });
         } catch (err) {
           // Network/timeout reaching the finder itself = a real outage signal
           // (distinct from an SMTP-level "unknown" the finder returns normally).
@@ -23921,7 +23952,12 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
             .catch(err => console.warn('[verify] background DB write failed:', err.message));
         }
 
-        // Push passing contacts from this batch right now
+        // Push passing contacts from this batch right now.
+        // Re-check cancellation immediately before sending: verifying a batch can
+        // take minutes, and a cancel during that window used to still push the
+        // whole batch to PlusVibe. Sending is irreversible, so it gets its own
+        // check rather than relying on the loop boundary above.
+        if (job.cancelled || job.paused) break;
         const passing = chunk.filter(passesFilter);
         if (passing.length) {
           job.status = 'pushing';
@@ -24302,7 +24338,10 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
             : /outlook|microsoft|protection\.outlook|mail\.microsoft/.test(mxHost) ? 'email_outlook'
             : mxHost ? 'email_other' : null;
           verifyResults[c.id] = status;
-          batchUpdates.push({ id: c.id, email_status: status, email_verified_at: new Date().toISOString(), mx_provider: mxProvider, email: c.email });
+          // Persist WHY, not just the verdict. Only for non-safe results — a
+          // clean pass writes null so a stale reason can't outlive its cause.
+          batchUpdates.push({ id: c.id, email_status: status, email_verified_at: new Date().toISOString(), mx_provider: mxProvider, email: c.email,
+                              email_verify_reason: status === 'safe' ? null : (reason || null) });
         } catch (err) {
           // Network/timeout reaching the finder itself = a real outage signal
           // (distinct from an SMTP-level "unknown" the finder returns normally).
@@ -24446,6 +24485,12 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
       job.status = 'failed';
       job.error = err.message;
       console.error('[Verify+Push resume]', err.message);
+      // Clean up the row and record history, matching the main worker. Without
+      // the DELETE a failed resume left an orphan that the next boot restored as
+      // a phantom 'paused' job; without the history call, resumed jobs were
+      // absent from push history entirely.
+      if (sq) { try { sq.prepare(`DELETE FROM paused_push_jobs WHERE id = ?`).run(job.id); } catch {} }
+      recordPushHistory(sq, job);
     }
   })();
 });

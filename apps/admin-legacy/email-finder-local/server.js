@@ -78,17 +78,66 @@ const OWN_SENDING_DOMAINS = new Set([
 // semaphore ensures we never have more than PRIMARY_REACHER_CONCURRENCY
 // active Reacher requests at once, keeping us inside the proxy's hard cap.
 const PRIMARY_REACHER_CONCURRENCY = Math.max(1, parseInt(process.env.PRIMARY_REACHER_CONCURRENCY || '5', 10));
+// How long a caller may wait for a slot before giving up. Without this the wait
+// is unbounded: on 2026-08-28 every worker parked here forever behind hung calls,
+// the job sat at 0 rows with status 'running', and cancel could not reach them
+// because the wait sits BETWEEN throwIfCancelled checkpoints. A bounded wait turns
+// "hangs silently until someone kills the process" into a real, reported error.
+const PRIMARY_WAIT_TIMEOUT_MS = Math.max(1000, parseInt(process.env.PRIMARY_WAIT_TIMEOUT_MS || '45000', 10));
 let _primaryActive = 0;
-const _primaryQueue = [];
-function _acquirePrimary() {
-  return new Promise(resolve => {
-    if (_primaryActive < PRIMARY_REACHER_CONCURRENCY) { _primaryActive++; resolve(); }
-    else _primaryQueue.push(resolve);
+const _primaryQueue = [];   // [{ resolve, reject, job, timer }]
+
+// Waiters are woken in FIFO order. Each carries its own timer and the job it
+// belongs to, so a queued waiter can be timed out or cancelled while it waits —
+// neither was possible before.
+function _acquirePrimary(job = null) {
+  return new Promise((resolve, reject) => {
+    if (_primaryActive < PRIMARY_REACHER_CONCURRENCY) { _primaryActive++; resolve(); return; }
+    const waiter = { resolve, reject, job, timer: null };
+    waiter.timer = setTimeout(() => {
+      const i = _primaryQueue.indexOf(waiter);
+      if (i !== -1) _primaryQueue.splice(i, 1);
+      reject(new Error(`Timed out after ${PRIMARY_WAIT_TIMEOUT_MS}ms waiting for a Reacher slot `
+        + `(${_primaryActive}/${PRIMARY_REACHER_CONCURRENCY} in use, ${_primaryQueue.length} queued)`));
+    }, PRIMARY_WAIT_TIMEOUT_MS);
+    _primaryQueue.push(waiter);
   });
 }
+
 function _releasePrimary() {
-  if (_primaryQueue.length) _primaryQueue.shift()();
-  else _primaryActive--;
+  // Skip waiters whose job was cancelled while they queued, so a cancelled job
+  // cannot consume a slot it will only throw away.
+  while (_primaryQueue.length) {
+    const waiter = _primaryQueue.shift();
+    clearTimeout(waiter.timer);
+    if (waiter.job?.cancelRequested) { waiter.reject(new JobCancelledError()); continue; }
+    waiter.resolve();   // ownership transfers; _primaryActive stays as-is
+    return;
+  }
+  _primaryActive--;
+}
+
+// Evict every queued waiter belonging to a cancelled job. Called by cancel so
+// workers parked in the queue fail fast instead of waiting out their timeout.
+function _dropQueuedWaitersForJob(job) {
+  if (!job) return 0;
+  let dropped = 0;
+  for (let i = _primaryQueue.length - 1; i >= 0; i--) {
+    if (_primaryQueue[i].job === job) {
+      const [w] = _primaryQueue.splice(i, 1);
+      clearTimeout(w.timer);
+      w.reject(new JobCancelledError());
+      dropped++;
+    }
+  }
+  return dropped;
+}
+
+// Live gauge for diagnostics. The old health check inferred trouble from a daily
+// cumulative failure ratio; these are the numbers that actually described the
+// 2026-08-28 outage and were invisible at the time.
+function reacherSlotStats() {
+  return { active: _primaryActive, queued: _primaryQueue.length, cap: PRIMARY_REACHER_CONCURRENCY };
 }
 
 // Per-minute rate limiter. Even at concurrency=5, fast checks can exceed
@@ -99,20 +148,35 @@ const REACHER_PER_MIN = Math.max(1, parseInt(process.env.REACHER_PER_MIN || '50'
 const _reacherCallTimes = []; // timestamps of calls dispatched in last 60s
 let _reacherBlockedUntil = 0; // ms; set when a 429 is received
 
-async function _acquireReacherSlot() {
+async function _acquireReacherSlot(job = null) {
+  // Bounded, cancellable wait. Previously this was `while (true)` with no cancel
+  // check and no ceiling, so a 429 storm or a saturated window parked callers
+  // indefinitely with no way out.
+  const deadline = Date.now() + PRIMARY_WAIT_TIMEOUT_MS;
   while (true) {
+    throwIfCancelled(job);
     const now = Date.now();
+    if (now > deadline) {
+      throw new Error(`Timed out after ${PRIMARY_WAIT_TIMEOUT_MS}ms waiting on the Reacher rate limiter `
+        + `(${_reacherCallTimes.length}/${REACHER_PER_MIN} this minute`
+        + `${_reacherBlockedUntil > now ? ', 429 backoff active' : ''})`);
+    }
     if (_reacherBlockedUntil > now) {
-      await delay(_reacherBlockedUntil - now);
+      // Wake at most once a second so cancellation is noticed promptly rather
+      // than after a full 62s backoff.
+      await delay(Math.min(1000, _reacherBlockedUntil - now));
       continue;
     }
     while (_reacherCallTimes.length && now - _reacherCallTimes[0] >= 60000) _reacherCallTimes.shift();
     if (_reacherCallTimes.length < REACHER_PER_MIN) break;
     const waitMs = 60000 - (Date.now() - _reacherCallTimes[0]) + 50;
-    await delay(Math.max(waitMs, 100));
+    await delay(Math.min(1000, Math.max(waitMs, 100)));
   }
+  // Acquire the slot BEFORE stamping the rate-limit window. Stamping first meant
+  // a call that queued for minutes was counted in the minute it entered the queue
+  // rather than the minute it actually hit Reacher, skewing the limiter under load.
+  await _acquirePrimary(job);
   _reacherCallTimes.push(Date.now());
-  await _acquirePrimary();
 }
 
 function _reacher429Backoff() {
@@ -968,13 +1032,18 @@ function isAbortError(err) {
   return err?.name === 'AbortError' || /aborted|abort/i.test(err?.message || '');
 }
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = REACHER_TIMEOUT_MS) {
+async function fetchWithTimeout(url, options = {}, timeoutMs = REACHER_TIMEOUT_MS, job = null) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // Register with the job so cancel can abort this request mid-flight. Without
+  // it a cancelled job kept every in-flight verification running to completion,
+  // holding scarce proxy slots for work whose result is discarded.
+  if (job?.activeAborters) job.activeAborters.add(controller);
   try {
     return await fetch(url, { ...options, signal: controller.signal });
   } finally {
     clearTimeout(timer);
+    if (job?.activeAborters) job.activeAborters.delete(controller);
   }
 }
 
@@ -988,7 +1057,13 @@ function summarizeReacher(result) {
     result.smtp.is_disabled === true ? 'disabled=yes' : '',
     result.smtp.has_full_inbox === true ? 'full_inbox=yes' : '',
   ].filter(Boolean).join(' ') : '';
-  return [reachable, mx, smtp].filter(Boolean).join(' · ');
+  // Include the upstream SMTP error text. Without it an 'unknown' verdict read
+  // "unknown · mx=yes · smtp_connect=no" — the boolean shadow of an error whose
+  // actual message ("Concurrency limit reached for this account") was sitting in
+  // smtp.error.message and thrown away. That omission is why 2026-08-28 took
+  // hours to diagnose instead of minutes.
+  const errText = smtpErrorText(result);
+  return [reachable, mx, smtp, errText ? `err=${errText.slice(0, 200)}` : ''].filter(Boolean).join(' · ');
 }
 
 function isCatchAllResult(result) {
@@ -1070,12 +1145,26 @@ async function fetchEv2Proxy() {
   return d.proxy || null;
 }
 
-async function callReacherOnce(email) {
+async function callReacherOnce(email, job = null) {
   const m = _reacherMember;
 
-  await _acquireReacherSlot();
+  // Resolve the endpoint BEFORE taking a slot. Discovery does up to N sequential
+  // 3s probes; doing it while holding one of only 5 SMTP slots wasted scarce
+  // capacity on work that needs none.
+  const base = await resolveReacherBaseFor(m);
+
+  // Slot acquisition can now fail (timeout or cancellation) instead of hanging
+  // forever. It sits outside the try because no slot is held when it throws —
+  // releasing here would corrupt the count.
   try {
-    const base = await resolveReacherBaseFor(m);
+    await _acquireReacherSlot(job);
+  } catch (err) {
+    if (err instanceof JobCancelledError) throw err;
+    const reason = `Reacher slot unavailable: ${err.message}`;
+    _recordReacherFailure(reason);
+    return [{ email, status: 'unknown', confidence: 'low', reason }, m];
+  }
+  try {
     const body = { to_email: email };
     if (REACHER_FROM_EMAIL) body.from_email = REACHER_FROM_EMAIL;
     if (REACHER_HELLO_NAME) body.hello_name = REACHER_HELLO_NAME;
@@ -1101,7 +1190,7 @@ async function callReacherOnce(email) {
     const buildEndpoint = () => (/\/v[01]\/check_email$/.test(base) ? base : `${base}/${m.version}/check_email`);
     let versionFlipped = false;
     try {
-      let response = await fetchWithTimeout(buildEndpoint(), { method: 'POST', headers, body: JSON.stringify(body) }, REACHER_TIMEOUT_MS);
+      let response = await fetchWithTimeout(buildEndpoint(), { method: 'POST', headers, body: JSON.stringify(body) }, REACHER_TIMEOUT_MS, job);
 
       // 404 on a bare base (no suffix on the configured URL) means the version
       // we built is wrong for this Reacher build. Flip v0<->v1, pin it so later
@@ -1111,7 +1200,7 @@ async function callReacherOnce(email) {
         console.warn(`[Reacher] 404 on ${m.version}/check_email — flipping to ${flipped} and retrying`);
         m.version = flipped;
         versionFlipped = true;
-        response = await fetchWithTimeout(buildEndpoint(), { method: 'POST', headers, body: JSON.stringify(body) }, REACHER_TIMEOUT_MS);
+        response = await fetchWithTimeout(buildEndpoint(), { method: 'POST', headers, body: JSON.stringify(body) }, REACHER_TIMEOUT_MS, job);
       }
 
       const text = await response.text();
@@ -1176,7 +1265,7 @@ async function checkWithReacher(email, job = null) {
   for (let attempt = 0; attempt <= REACHER_RETRIES; attempt += 1) {
     throwIfCancelled(job);
     if (attempt > 0) await delay(REACHER_RETRY_DELAY_MS * Math.pow(2, attempt - 1));
-    [lastResult] = await callReacherOnce(email);
+    [lastResult] = await callReacherOnce(email, job);
     if (!shouldRetryReacherResult(lastResult)) return lastResult;
   }
   return lastResult || { email, status: 'unknown', confidence: 'low', reason: 'No Reacher response' };
@@ -1740,6 +1829,12 @@ function publicJob(job) {
     createdAt: job.createdAt,
     startedAt: job.startedAt,
     completedAt: job.completedAt,
+    // Staleness, so a caller can tell "0% for 2 seconds" from "0% for 6 minutes".
+    // Nothing exposed this before, which is why a stalled job looked identical
+    // to a starting one in both the UI and the API.
+    lastProgressAt: job.lastProgressAt || null,
+    stalledMs: job.status === 'running' && job.lastProgressAt ? Date.now() - job.lastProgressAt : 0,
+    slots: reacherSlotStats(),
     downloadUrl: job.status === 'completed' ? `/api/jobs/${job.id}/download` : null,
     safeDownloadUrl: job.status === 'completed' ? `/api/jobs/${job.id}/download/safe` : null,
     catchAllDownloadUrl: job.status === 'completed' ? `/api/jobs/${job.id}/download/catch-all` : null,
@@ -1765,7 +1860,61 @@ function startQueueWorker() {
   setTimeout(processQueue, 0);
 }
 
+// ── Stall watchdog ────────────────────────────────────────────────────────
+// A job that stops making progress used to sit at status 'running' forever, with
+// no alarm and no way to tell it apart from one that had just started. On
+// 2026-08-28 that state lasted 6+ minutes, held every proxy slot, and locked out
+// all other verification until the process was killed by hand.
+//
+// This cancels a job that has made no progress for JOB_STALL_TIMEOUT_MS, which
+// releases its slots and unblocks the queue. Set to 0 to disable.
+const JOB_STALL_TIMEOUT_MS = Math.max(0, parseInt(process.env.JOB_STALL_TIMEOUT_MS || '180000', 10));
+const JOB_STALL_CHECK_MS = 30000;
+
+function checkStalledJobs() {
+  if (!JOB_STALL_TIMEOUT_MS) return;
+  const now = Date.now();
+  for (const job of jobs.values()) {
+    if (job.status !== 'running' || job.cancelRequested) continue;
+    const idleMs = now - (job.lastProgressAt || now);
+    if (idleMs < JOB_STALL_TIMEOUT_MS) continue;
+
+    const slots = reacherSlotStats();
+    const msg = `Stalled — no progress for ${Math.round(idleMs / 1000)}s at row `
+      + `${job.processedRows}/${job.rowCount || '?'} (slots ${slots.active}/${slots.cap}, `
+      + `${slots.queued} queued). Stopping so it cannot hold verifier capacity.`;
+    console.error(`[watchdog] job ${job.id}: ${msg}`);
+    addJobLog(job, msg);
+
+    // Same three-way stop as a manual cancel.
+    job.cancelRequested = true;
+    job.error = job.error || 'Stalled — no progress, stopped automatically';
+    if (job.activeSockets) {
+      for (const s of job.activeSockets) { try { s.destroy(new Error('Job stalled')); } catch {} }
+      job.activeSockets.clear();
+    }
+    if (job.activeAborters) {
+      for (const c of job.activeAborters) { try { c.abort(); } catch {} }
+      job.activeAborters.clear();
+    }
+    _dropQueuedWaitersForJob(job);
+  }
+}
+setInterval(checkStalledJobs, JOB_STALL_CHECK_MS).unref();
+
 async function processQueue() {
+  // The whole loop is wrapped so workerActive ALWAYS clears. If anything threw
+  // outside the per-job try below, the flag stayed true and startQueueWorker()
+  // returned early forever — every future job would queue and never run, with
+  // no error anywhere.
+  try {
+    await runQueueLoop();
+  } finally {
+    workerActive = false;
+  }
+}
+
+async function runQueueLoop() {
   while (jobQueue.length) {
     const jobId = jobQueue.shift();
     const job = jobs.get(jobId);
@@ -1782,7 +1931,9 @@ async function processQueue() {
         job.catchAllCount = progress.catchAllCount;
         job.reviewCount = progress.reviewCount;
         job.preview = progress.preview;
+        job.lastProgressAt = Date.now();   // heartbeat for the stall watchdog
       };
+      job.lastProgressAt = Date.now();     // reset at start, not job creation
       const result = job.verifier === 'permutation'
         ? await generatePermutationCsvText(job.csvText, onProgress, message => addJobLog(job, message), job)
         : job.verifier === 'verify_emails'
@@ -1817,7 +1968,6 @@ async function processQueue() {
       addJobLog(job, job.status === 'cancelled' ? 'Cancelled by user' : `Failed: ${job.error}`);
     }
   }
-  workerActive = false;
 }
 
 async function handleFind(req, res) {
@@ -1918,10 +2068,19 @@ async function handleCreateJob(req, res) {
       logs: [],
       cancelRequested: false,
       activeSockets: new Set(),
+      // In-flight fetch aborters for Reacher calls. activeSockets only ever held
+      // the built-in SMTP verifier's sockets, so for Reacher jobs — i.e. all
+      // production traffic — cancel had nothing to destroy and could not stop a
+      // running job. These give cancel a real handle on the work.
+      activeAborters: new Set(),
       error: '',
       createdAt: new Date().toISOString(),
       startedAt: '',
       completedAt: '',
+      // Heartbeat for stall detection. On 2026-08-28 a job sat at 0 rows for
+      // 6+ minutes and nothing noticed, because nothing recorded when progress
+      // last moved.
+      lastProgressAt: Date.now(),
     };
     addJobLog(job, 'Job queued');
     jobs.set(id, job);
@@ -1948,10 +2107,25 @@ function handleCancelJob(req, res, jobId) {
 
   job.cancelRequested = true;
   addJobLog(job, 'Stop requested');
+
+  // Stop the work three ways. Previously only the first applied, and it is inert
+  // for Reacher jobs (activeSockets is populated solely by the built-in SMTP
+  // verifier), so cancelling a running Reacher job did nothing at all.
   if (job.activeSockets) {
     for (const socket of job.activeSockets) socket.destroy(new Error('Job cancelled'));
     job.activeSockets.clear();
   }
+  // 2: abort in-flight Reacher HTTP calls.
+  let aborted = 0;
+  if (job.activeAborters) {
+    for (const ctrl of job.activeAborters) { try { ctrl.abort(); aborted++; } catch {} }
+    job.activeAborters.clear();
+  }
+  // 3: evict workers parked in the concurrency queue, which is where they were
+  // stuck on 2026-08-28 — below the last cancellation checkpoint, waiting on a
+  // slot that never came.
+  const dropped = _dropQueuedWaitersForJob(job);
+  if (aborted || dropped) addJobLog(job, `Stopped ${aborted} in-flight check(s), dropped ${dropped} queued`);
 
   if (job.status === 'queued') {
     job.status = 'cancelled';
@@ -2147,6 +2321,18 @@ const server = http.createServer((req, res) => {
         cooldownUntil: 0,
         cooldownMsLeft: 0,
       }],
+      // Live capacity, alongside the daily cumulative counters above. The
+      // cumulative failure ratio could not represent "right now" — during the
+      // 2026-08-28 outage it stayed under the alert threshold because Reacher
+      // was returning HTTP 200 with an 'unknown' verdict, which is not counted
+      // as a failure at all. These three numbers described the outage exactly.
+      slots: reacherSlotStats(),
+      runningJobs: [...jobs.values()].filter(j => j.status === 'running').map(j => ({
+        id: j.id,
+        processedRows: j.processedRows,
+        rowCount: j.rowCount,
+        stalledMs: j.lastProgressAt ? Date.now() - j.lastProgressAt : 0,
+      })),
     });
   }
   const poolTestMatch = pathname.match(/^\/api\/reacher-pool-test\/([^/]+)$/);
@@ -2168,6 +2354,53 @@ const server = http.createServer((req, res) => {
       } catch (err) {
         sendJson(res, 200, { ok: false, error: err.message, endpoint: _reacherMember.url });
       }
+    })();
+    return;
+  }
+  // A single-email probe against a mailbox Reacher already knows the answer
+  // for cannot show what a real push looks like: it skips the semaphore's
+  // queueing/backpressure entirely and only ever exercises one connection.
+  // This burst probe sends real concurrent traffic through the exact same
+  // checkWithReacher() path production pushes use — same semaphore, same
+  // per-minute limiter, same retry logic — against a spread of known-live
+  // mailboxes at major providers, so "Concurrency limit reached" and other
+  // proxy-side rejections show up here instead of only being visible mid-push.
+  // ?n= controls how many are fired at once (default = the live concurrency
+  // cap, so the default run reproduces exactly what one full batch of slots
+  // looks like); pass a different n to test above/below the current cap.
+  if (req.method === 'GET' && pathname === '/api/reacher-burst-test') {
+    (async () => {
+      const reqUrl = new URL(req.url, `http://localhost:${PORT}`);
+      const n = Math.max(1, Math.min(50, parseInt(reqUrl.searchParams.get('n'), 10) || PRIMARY_REACHER_CONCURRENCY));
+      const domains = ['gmail.com', 'outlook.com', 'yahoo.com', 'icloud.com', 'hotmail.com', 'bbc.co.uk', 'microsoft.com', 'amazon.co.uk', 'apple.com', 'nhs.uk'];
+      const probeEmails = Array.from({ length: n }, (_, i) => `test.probe.${i}.${Date.now()}@${domains[i % domains.length]}`);
+      const startedAt = Date.now();
+      const results = await Promise.all(probeEmails.map(async (email) => {
+        const t0 = Date.now();
+        try {
+          const result = await checkWithReacher(email);
+          return { email, ms: Date.now() - t0, status: result.status, reason: result.reason || '' };
+        } catch (err) {
+          return { email, ms: Date.now() - t0, status: 'error', reason: err.message };
+        }
+      }));
+      const counts = {};
+      let concurrencyLimitHits = 0;
+      for (const r of results) {
+        counts[r.status] = (counts[r.status] || 0) + 1;
+        if (/concurrency limit/i.test(r.reason)) concurrencyLimitHits += 1;
+      }
+      const unknownRate = results.length ? (counts.unknown || 0) / results.length : 0;
+      sendJson(res, 200, {
+        ok: concurrencyLimitHits === 0 && unknownRate < 0.4,
+        ms: Date.now() - startedAt,
+        sent: results.length,
+        counts,
+        concurrencyLimitHits,
+        unknownRate,
+        primaryConcurrencyCap: PRIMARY_REACHER_CONCURRENCY,
+        results,
+      });
     })();
     return;
   }

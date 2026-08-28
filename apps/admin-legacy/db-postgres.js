@@ -276,6 +276,11 @@ class PostgresDatabase {
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMP`,
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS email_status TEXT`,
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS mx_provider TEXT`,
+      // Why the verifier returned this status. A bare 'unknown' is unactionable:
+      // on 2026-08-28 thousands of good contacts were marked unknown because the
+      // proxy was rejecting connections, and nothing recorded that — the verdict
+      // and the cause were indistinguishable from a genuinely unreachable mailbox.
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS email_verify_reason TEXT`,
       // Solar CCOD ownership sweep (Land Registry). Kept SEPARATE from the
       // reply-derived owns_building signal above so the two never collide.
       // ccod_owns_building: yes|no|unclear|no_postcode. ccod_site_count: the
@@ -3020,9 +3025,10 @@ class PostgresDatabase {
         const slice = sorted.slice(i, i + BATCH);
         const vals = [];
         const placeholders = slice.map((u, j) => {
-          const base = j * 4;
-          vals.push(u.id, u.email_status, u.email_verified_at || now, u.mx_provider || null);
-          return `($${base + 1}::uuid, $${base + 2}, $${base + 3}, $${base + 4})`;
+          const base = j * 5;
+          vals.push(u.id, u.email_status, u.email_verified_at || now, u.mx_provider || null,
+                    u.email_verify_reason ? String(u.email_verify_reason).slice(0, 500) : null);
+          return `($${base + 1}::uuid, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`;
         });
         await this.query(`
           UPDATE contacts SET
@@ -3044,8 +3050,11 @@ class PostgresDatabase {
                   v.mx_provider)
               ELSE tags
             END,
+            -- Why this verdict. Cleared on a clean pass so a stale failure reason
+            -- never outlives the failure that caused it.
+            email_verify_reason = v.verify_reason,
             updated_at        = CURRENT_TIMESTAMP
-          FROM (VALUES ${placeholders.join(',')}) AS v(id, status, verified_at, mx_provider)
+          FROM (VALUES ${placeholders.join(',')}) AS v(id, status, verified_at, mx_provider, verify_reason)
           WHERE contacts.id = v.id::uuid
         `, vals);
       }
