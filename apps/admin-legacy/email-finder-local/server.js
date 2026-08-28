@@ -50,6 +50,21 @@ const REACHER_FALLBACK_BASES = [
 let _reacherBase = null; // resolved at first use
 const REACHER_API_KEY = process.env.REACHER_API_KEY || '';
 
+// ── Secondary verifier: Reacher's hosted SaaS ─────────────────────────────
+// The self-hosted instance goes through proxy4smtp, which hard-rejects past 5
+// simultaneous SMTP sessions — that cap is the ceiling on how fast a CM's push
+// finishes. The hosted API runs on Reacher's own infrastructure and IPs, so it
+// does NOT consume a proxy4smtp slot. Overflow sent here is genuinely extra
+// capacity rather than the same queue under another name.
+//
+// Used only as overflow: the primary is preferred (it is already paid for, and
+// its behaviour is what our thresholds were tuned against). Requests fall to the
+// SaaS when every local slot is busy AND the daily allowance has room.
+const REACHER_URL_2 = (process.env.REACHER_URL_2 || '').replace(/\/$/, '');
+const REACHER_API_KEY_2 = process.env.REACHER_API_KEY_2 || '';
+const REACHER_URL_2_DAILY_LIMIT = Math.max(0, parseInt(process.env.REACHER_URL_2_DAILY_LIMIT || '10000', 10));
+const SECONDARY_ENABLED = !!(REACHER_URL_2 && REACHER_API_KEY_2 && REACHER_URL_2_DAILY_LIMIT > 0);
+
 // Our own sending domains — never run Reacher checks on these.
 // They are internal mailboxes, not lead emails, so verifying them
 // wastes Reacher slots and triggers unnecessary SMTP probes.
@@ -239,6 +254,76 @@ const _reacherMember = (() => {
   };
 })();
 
+// Secondary member (hosted SaaS). Its daily count persists next to the primary's
+// so a restart cannot silently reset the allowance and overrun the plan.
+const SECONDARY_COUNTER_FILE = path.join(__dirname, 'reacher-counter-2.json');
+function _loadSecondaryCounter() {
+  try {
+    const d = JSON.parse(fs.readFileSync(SECONDARY_COUNTER_FILE, 'utf8'));
+    const today = new Date().toISOString().slice(0, 10);
+    return d.usageDate === today ? { usageDate: d.usageDate, usageCount: d.usageCount || 0 } : { usageDate: today, usageCount: 0 };
+  } catch { return { usageDate: '', usageCount: 0 }; }
+}
+let _secondaryCounterWriteTimer = null;
+function _saveSecondaryCounter() {
+  clearTimeout(_secondaryCounterWriteTimer);
+  _secondaryCounterWriteTimer = setTimeout(() => {
+    try { fs.writeFileSync(SECONDARY_COUNTER_FILE, JSON.stringify({ usageDate: _secondaryMember.usageDate, usageCount: _secondaryMember.usageCount })); } catch { /* ignore */ }
+  }, 500);
+}
+
+const _secondaryMember = (() => {
+  const saved = _loadSecondaryCounter();
+  return {
+    label: 'secondary',
+    url: REACHER_URL_2,
+    key: REACHER_API_KEY_2,
+    dailyLimit: REACHER_URL_2_DAILY_LIMIT,
+    usageDate: saved.usageDate,
+    usageCount: saved.usageCount,
+    failureCount: 0,
+    consecutiveFailures: 0,
+    lastError: '',
+    lastErrorAt: 0,
+    // Set when the SaaS returns 402/429 or repeatedly errors, so we stop trying
+    // for a while rather than burning latency on every overflow request.
+    cooldownUntil: 0,
+  };
+})();
+
+// Is the secondary usable right now? Checks the kill switch, the daily
+// allowance (reset at UTC midnight to match the primary) and any cooldown.
+function _secondaryAvailable() {
+  if (!SECONDARY_ENABLED) return false;
+  const m = _secondaryMember;
+  if (m.cooldownUntil > Date.now()) return false;
+  const today = _reacherTodayUtc();
+  if (m.usageDate !== today) { m.usageDate = today; m.usageCount = 0; }
+  return m.usageCount < m.dailyLimit;
+}
+
+function _secondaryCooldown(reason, ms = 10 * 60 * 1000) {
+  const m = _secondaryMember;
+  m.cooldownUntil = Date.now() + ms;
+  m.lastError = String(reason || '').slice(0, 240);
+  m.lastErrorAt = Date.now();
+  console.warn(`[Reacher2] cooling off ${Math.round(ms / 60000)}m — ${m.lastError}`);
+}
+
+function secondaryStats() {
+  const m = _secondaryMember;
+  const today = _reacherTodayUtc();
+  return {
+    enabled: SECONDARY_ENABLED,
+    usageToday: m.usageDate === today ? m.usageCount : 0,
+    dailyLimit: m.dailyLimit,
+    failureCount: m.failureCount,
+    lastError: m.lastError,
+    cooldownMsLeft: Math.max(0, m.cooldownUntil - Date.now()),
+    available: _secondaryAvailable(),
+  };
+}
+
 // Matt at proxy4smtp puts the normal unknown rate at 5-10% depending on data
 // quality; healthy hours here measured 10-12%. A sustained 40%+ over a
 // meaningful sample means the verifier is broken, not that the list is bad.
@@ -276,7 +361,11 @@ function _recordReacherOutcome(status) {
 function _reacherTodayUtc() { return new Date().toISOString().slice(0, 10); }
 const REACHER_FROM_EMAIL = process.env.REACHER_FROM_EMAIL || SMTP_SENDER || '';
 const REACHER_HELLO_NAME = process.env.REACHER_HELLO_NAME || '';
-const REACHER_TIMEOUT_MS = Math.max(10000, parseInt(process.env.REACHER_TIMEOUT_MS || '60000', 10));
+// Floor was 10s, which silently ignored any lower setting — REACHER_TIMEOUT_MS=8000
+// was clamped back to 10000 with no warning. Measured duration data: median 2.85s,
+// p95 7.17s, so 8s keeps 97.5% of checks while releasing the slot sooner on the
+// genuinely dead ones. Floor of 3s still guards against a typo starving every check.
+const REACHER_TIMEOUT_MS = Math.max(3000, parseInt(process.env.REACHER_TIMEOUT_MS || '12000', 10));
 const REACHER_DIAGNOSTIC_TIMEOUT_MS = Math.max(3000, parseInt(process.env.REACHER_DIAGNOSTIC_TIMEOUT_MS || '10000', 10));
 const REACHER_STOP_ON_TIMEOUT = process.env.REACHER_STOP_ON_TIMEOUT !== 'false';
 const REACHER_RETRIES = Math.min(5, Math.max(0, parseInt(process.env.REACHER_RETRIES || '3', 10)));
@@ -1247,6 +1336,60 @@ async function callReacherOnce(email, job = null) {
   }
 }
 
+// Call the hosted SaaS. Deliberately does NOT touch the primary semaphore: the
+// whole point is that this path does not consume a proxy4smtp slot. Responses
+// go through the same mapReacherResult, so a verdict from here is indistinguishable
+// downstream from a local one.
+async function callSecondaryOnce(email, job = null) {
+  const m = _secondaryMember;
+  throwIfCancelled(job);
+  const t0 = Date.now();
+  try {
+    const headers = { 'Content-Type': 'application/json', Authorization: m.key };
+    const response = await fetchWithTimeout(
+      m.url, { method: 'POST', headers, body: JSON.stringify({ to_email: email }) },
+      REACHER_TIMEOUT_MS, job
+    );
+    const text = await response.text();
+
+    if (!response.ok) {
+      // 402/429 mean the plan is exhausted or throttled — back off for a while
+      // rather than retrying every overflow request and adding latency.
+      if (response.status === 402 || response.status === 429) {
+        _secondaryCooldown(`HTTP ${response.status} — quota/rate limited`, 30 * 60 * 1000);
+      } else if (response.status === 401 || response.status === 403) {
+        _secondaryCooldown(`HTTP ${response.status} — key rejected`, 60 * 60 * 1000);
+      } else {
+        m.failureCount++;
+      }
+      return null;   // null = caller falls back to the primary
+    }
+
+    let data;
+    try { data = JSON.parse(text); } catch { m.failureCount++; return null; }
+
+    const today = _reacherTodayUtc();
+    if (m.usageDate !== today) { m.usageDate = today; m.usageCount = 0; }
+    m.usageCount++;
+    m.consecutiveFailures = 0;
+    _saveSecondaryCounter();
+
+    const mapped = mapReacherResult(email, data);
+    console.log(`[Reacher2] ${email} -> ${mapped.status} in ${Date.now() - t0}ms (${m.usageCount}/${m.dailyLimit} today)`);
+    return mapped;
+  } catch (err) {
+    if (err instanceof JobCancelledError) throw err;
+    m.failureCount++;
+    m.consecutiveFailures++;
+    m.lastError = String(err.message || '').slice(0, 240);
+    m.lastErrorAt = Date.now();
+    // Repeated hard failures usually mean the endpoint is unreachable; stop
+    // paying the timeout on every request.
+    if (m.consecutiveFailures >= 3) _secondaryCooldown(`${m.consecutiveFailures} consecutive errors: ${m.lastError}`);
+    return null;   // fall back to the primary
+  }
+}
+
 function _recordReacherFailure(reason) {
   const m = _reacherMember;
   m.failureCount = (m.failureCount || 0) + 1;
@@ -1256,11 +1399,31 @@ function _recordReacherFailure(reason) {
   console.warn(`[Reacher] FAIL #${m.failureCount} (consecutive ${m.consecutiveFailures}): ${m.lastError}`);
 }
 
+// Send to the hosted SaaS only when the local path is genuinely saturated:
+// every proxy4smtp slot busy AND requests already waiting. Below that the
+// primary is faster and free, so overflow would just add latency and burn the
+// daily allowance. This is what turns the SaaS into extra capacity during a CM's
+// push rather than a second queue for the same work.
+function _shouldUseSecondary() {
+  if (!_secondaryAvailable()) return false;
+  const s = reacherSlotStats();
+  return s.active >= s.cap && s.queued > 0;
+}
+
 async function checkWithReacher(email, job = null) {
   const domain = (email.split('@')[1] || '').toLowerCase();
   if (OWN_SENDING_DOMAINS.has(domain)) {
     return { email, status: 'safe', confidence: 'high', reason: 'own sending domain — skipped' };
   }
+
+  // Overflow to the SaaS while the local slots are full. A null return means it
+  // could not answer (quota, cooldown, error), in which case we simply queue for
+  // the primary as before — the secondary can never make things worse.
+  if (_shouldUseSecondary()) {
+    const viaSaas = await callSecondaryOnce(email, job);
+    if (viaSaas) return viaSaas;
+  }
+
   let lastResult = null;
   for (let attempt = 0; attempt <= REACHER_RETRIES; attempt += 1) {
     throwIfCancelled(job);
@@ -2327,6 +2490,7 @@ const server = http.createServer((req, res) => {
       // was returning HTTP 200 with an 'unknown' verdict, which is not counted
       // as a failure at all. These three numbers described the outage exactly.
       slots: reacherSlotStats(),
+      secondary: secondaryStats(),
       runningJobs: [...jobs.values()].filter(j => j.status === 'running').map(j => ({
         id: j.id,
         processedRows: j.processedRows,

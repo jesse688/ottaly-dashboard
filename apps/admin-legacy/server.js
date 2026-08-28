@@ -22817,11 +22817,16 @@ function autoResumePushJobs() {
 // exactly where they stopped (verified_count/pushed_count are already written
 // periodically; this guarantees the row + status are paused before we exit).
 function pausePushJobsForShutdown(sq) {
-  // 'n2b_verifying' and 'pausing' were missing here: a job in the No2Bounce
-  // phase (or mid-pause) when a deploy landed was never flagged for resume and
+  // Every state that represents unfinished work must be flagged for resume.
+  // 'n2b_verifying' and 'pausing' were missing originally: a job in the
+  // No2Bounce phase (or mid-pause) when a deploy landed was never flagged and
   // simply vanished, losing its progress.
+  // 'queued' was missed when the run-slot gate was added — a job waiting for a
+  // slot is live work, but SIGTERM did not recognise it, so a deploy stranded
+  // every queued job as paused-with-resume_on_boot=0. With a cap of 5 and 20
+  // jobs, that is most of them.
   const live = [...pushJobs.values()].filter(j =>
-    ['verifying', 'pushing', 'running', 'n2b_verifying', 'pausing'].includes(j.status));
+    ['queued', 'verifying', 'pushing', 'running', 'n2b_verifying', 'pausing'].includes(j.status));
   if (!live.length) return;
   console.log(`[push] SIGTERM — pausing ${live.length} in-flight job(s) for resume after deploy`);
   for (const job of live) {
