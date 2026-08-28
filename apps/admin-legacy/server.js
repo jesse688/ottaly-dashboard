@@ -22730,6 +22730,55 @@ function restorePausedJobs(sq) {
 // re-sent. Fires the existing resume route internally (x-admin-key auth) so we
 // reuse the proven worker rather than duplicating it. Set PUSH_AUTORESUME=0 to
 // disable. Staggered so N restored jobs don't all hammer Reacher at once.
+// ── Push job run-slot gate ────────────────────────────────────────────────
+// Caps how many push jobs VERIFY at once. The verifier itself is capped at
+// PRIMARY_REACHER_CONCURRENCY (5 — proxy4smtp's hard limit), so extra jobs add
+// queue depth, never speed. Running a few at a time means those few FINISH,
+// instead of twenty jobs sitting at 20% while their contacts interleave.
+//
+// Sizing: each running job issues up to PUSH_VERIFY_CONCURRENCY (5) requests,
+// so 3 jobs ≈ 15 queued against 5 slots — a ~7s wait, comfortably inside the
+// 300s slot timeout. Raising this does not increase throughput; it only makes
+// the queue deeper and pushes the wait toward that timeout.
+const MAX_CONCURRENT_PUSH_JOBS = Math.max(1, parseInt(process.env.MAX_CONCURRENT_PUSH_JOBS || '3', 10));
+let _pushSlotsActive = 0;
+const _pushSlotQueue = [];   // [{ resolve, job }]
+
+function acquirePushSlot(job) {
+  return new Promise(resolve => {
+    if (_pushSlotsActive < MAX_CONCURRENT_PUSH_JOBS) {
+      _pushSlotsActive++;
+      job._holdsPushSlot = true;
+      resolve();
+      return;
+    }
+    job.status = 'queued';
+    job.queuedAt = Date.now();
+    console.log(`[push] job ${job.id} queued — ${_pushSlotsActive}/${MAX_CONCURRENT_PUSH_JOBS} running, ${_pushSlotQueue.length + 1} waiting`);
+    _pushSlotQueue.push({ resolve, job });
+  });
+}
+
+function releasePushSlot(job) {
+  // Idempotent: a job must never release a slot it does not hold, or release
+  // twice on overlapping exit paths, or the cap silently inflates.
+  if (!job || !job._holdsPushSlot) return;
+  job._holdsPushSlot = false;
+  while (_pushSlotQueue.length) {
+    const next = _pushSlotQueue.shift();
+    if (next.job.cancelled || next.job.paused) continue;   // don't wake a dead job
+    next.job._holdsPushSlot = true;
+    console.log(`[push] job ${next.job.id} starting — waited ${Math.round((Date.now() - (next.job.queuedAt || Date.now())) / 1000)}s`);
+    next.resolve();
+    return;   // ownership transfers; _pushSlotsActive unchanged
+  }
+  _pushSlotsActive--;
+}
+
+function pushSlotStats() {
+  return { active: _pushSlotsActive, queued: _pushSlotQueue.length, cap: MAX_CONCURRENT_PUSH_JOBS };
+}
+
 function autoResumePushJobs() {
   if (process.env.PUSH_AUTORESUME === '0') { console.log('[push] auto-resume disabled (PUSH_AUTORESUME=0)'); return; }
   // ONLY resume jobs that were actively running when the deploy stopped us
@@ -23302,7 +23351,10 @@ app.get('/api/contacts/push-jobs', requireSession, (req, res) => {
   // successfully or was cancelled is removed from view — only unsuccessful ones
   // stick around so they can be seen/retried. (verify-only CSV jobs are kept
   // while their download is still available so the ⬇ CSV button works.)
-  const KEEP = new Set(['verifying','pushing','n2b_verifying','pausing','paused','failed','error']);
+  // 'queued' must be here: a job waiting for a run slot is live work, and
+  // omitting it would make a queued job vanish from the UI as if it had been
+  // dropped.
+  const KEEP = new Set(['queued','verifying','pushing','n2b_verifying','pausing','paused','failed','error']);
   const jobs = [...pushJobs.values()]
     .filter(j => {
       if (KEEP.has(j.status)) return true;
@@ -23312,7 +23364,12 @@ app.get('/api/contacts/push-jobs', requireSession, (req, res) => {
     })
     .sort((a, b) => b.created_at - a.created_at)
     .slice(0, 20);
-  res.json({ jobs });
+  // Tell a queued job how many are ahead of it, so the UI can say "2 ahead"
+  // instead of leaving it looking stuck.
+  const waiting = jobs.filter(j => j.status === 'queued')
+    .sort((a, b) => (a.queuedAt || 0) - (b.queuedAt || 0));
+  waiting.forEach((j, i) => { j.queuePosition = i + 1; });
+  res.json({ jobs, pushSlots: pushSlotStats() });
 });
 
 // Push HISTORY — every finished job, newest first. The queue above deliberately
@@ -23526,6 +23583,16 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
 
   // Run async in background — db already validated above
   (async () => {
+    // Wait for a run slot before touching the verifier. Every push used to start
+    // the moment it was created, so 20 jobs each fired PUSH_VERIFY_CONCURRENCY
+    // requests at a verifier that can only ever run PRIMARY_REACHER_CONCURRENCY
+    // (5, proxy4smtp's hard cap). That does not go faster — it just interleaves
+    // every job's contacts behind a queue hundreds deep, so all 20 crawl at ~20%
+    // and none finish. Limiting how many jobs RUN at once keeps identical total
+    // throughput while letting jobs complete in sequence, which is what actually
+    // gets campaigns out the door.
+    await acquirePushSlot(job);
+    if (job.cancelled) { job.status = 'cancelled'; releasePushSlot(job); return; }
     try {
       const contacts = await db.getContactsById(contact_ids);
       if (!contacts.length) { job.status = 'failed'; job.error = 'No contacts found'; return; }
@@ -24099,6 +24166,12 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       console.error('[Verify+Push]', err.message);
       if (sq) { try { sq.prepare(`DELETE FROM paused_push_jobs WHERE id = ?`).run(job.id); } catch {} }
       recordPushHistory(sq, job);
+    } finally {
+      // ALWAYS hand the run slot on — completed, failed, paused or cancelled.
+      // A slot leaked here would shrink the effective cap until nothing could
+      // start, which is precisely the failure mode that took the verifier down
+      // this morning. releasePushSlot is idempotent and safe to call unheld.
+      releasePushSlot(job);
     }
   })();
 });
@@ -24182,6 +24255,11 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
   // Re-run the worker — isFreshVerdict inside will skip already-verified contacts,
   // so only contacts that were not yet verified (or got 'unknown') will be re-sent to Reacher.
   ;(async () => {
+    // Resume goes through the same gate as a new push. Without this, resuming N
+    // paused jobs starts all N at once and walks straight past the cap — which
+    // is exactly how 20 jobs ended up sharing 5 verifier slots.
+    await acquirePushSlot(job);
+    if (job.cancelled) { job.status = 'cancelled'; releasePushSlot(job); return; }
     try {
       const contacts = await db.getContactsById(contact_ids);
       if (!contacts.length) { job.status = 'failed'; job.error = 'No contacts found'; return; }
@@ -24551,6 +24629,8 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
       // absent from push history entirely.
       if (sq) { try { sq.prepare(`DELETE FROM paused_push_jobs WHERE id = ?`).run(job.id); } catch {} }
       recordPushHistory(sq, job);
+    } finally {
+      releasePushSlot(job);
     }
   })();
 });

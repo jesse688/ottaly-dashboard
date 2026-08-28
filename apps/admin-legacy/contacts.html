@@ -5329,7 +5329,7 @@
       const b = BADGE[st] || [st.toUpperCase() || 'UNKNOWN', '#e5e7eb', '#374151'];
       const badge = `<span style="margin-left:6px;font-size:10px;background:${b[1]};color:${b[2]};padding:2px 6px;border-radius:999px;font-weight:700;">${b[0]}</span>`;
       // Only genuinely in-flight work gets the highlight tint.
-      const active = ['verifying','pushing','n2b_verifying','pausing'].includes(st);
+      const active = ['queued','verifying','pushing','n2b_verifying','pausing'].includes(st);
 
       // Verification buckets — the push gate only lets safe/safe_catchall
       // through, so this is usually where the losses actually are.
@@ -5428,12 +5428,12 @@
         }
 
         panel.style.display = '';
-        const hasRunning = jobs.some(j => ['verifying','pushing','n2b_verifying','pausing'].includes(j.status));
+        const hasRunning = jobs.some(j => ['queued','verifying','pushing','n2b_verifying','pausing'].includes(j.status));
         if (!hasRunning) { clearInterval(pushQueueTimer); pushQueueTimer = null; }
 
         list.innerHTML = jobs.map(j => {
           const pct = j.progress || 0;
-          const active = ['verifying','pushing','n2b_verifying','pausing'].includes(j.status);
+          const active = ['queued','verifying','pushing','n2b_verifying','pausing'].includes(j.status);
           const paused = j.status === 'paused';
           const statusColor = j.status === 'completed' ? '#22c55e'
                             : j.status === 'failed' ? '#ef4444'
@@ -5459,6 +5459,13 @@
             statusLabel = `⏸ Pausing after current batch…`;
           } else if (j.status === 'paused') {
             statusLabel = `⏸ Paused — ${j.verified||0} verified, ${j.pushed||0} pushed so far`;
+          } else if (j.status === 'queued') {
+            // Waiting for a verifier run slot. Without this case it fell through
+            // to the error branch below and a healthy queued job rendered as
+            // "❌ Failed".
+            statusLabel = j.queuePosition
+              ? `⏳ Queued — ${j.queuePosition} ahead, starts when a slot frees`
+              : `⏳ Queued — waiting for a verifier slot`;
           } else {
             statusLabel = `❌ ${j.error||'Failed'}`;
           }
