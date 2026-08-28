@@ -22744,13 +22744,15 @@ function restorePausedJobs(sq) {
 // reuse the proven worker rather than duplicating it. Set PUSH_AUTORESUME=0 to
 // disable. Staggered so N restored jobs don't all hammer Reacher at once.
 // ── Push job run-slot gate ────────────────────────────────────────────────
-// Caps how many push jobs VERIFY at once. The verifier itself is capped at
-// PRIMARY_REACHER_CONCURRENCY (5 — proxy4smtp's hard limit), so extra jobs add
-// queue depth, never speed. Running a few at a time means those few FINISH,
-// instead of twenty jobs sitting at 20% while their contacts interleave.
+// Caps how many push jobs VERIFY at once. The verifier is capped at
+// PRIMARY_REACHER_CONCURRENCY — now 10, being two Reacher containers each
+// pinned to its own proxy4smtp account (5 simultaneous SMTP sessions apiece).
+// Extra jobs beyond that add queue depth, never speed. Running a few at a time
+// means those few FINISH, instead of twenty jobs sitting at 20% while their
+// contacts interleave.
 //
 // Sizing: each running job issues up to PUSH_VERIFY_CONCURRENCY (5) requests,
-// so 3 jobs ≈ 15 queued against 5 slots — a ~7s wait, comfortably inside the
+// so 5 jobs ≈ 25 queued against 10 slots — a short wait, comfortably inside the
 // 300s slot timeout. Raising this does not increase throughput; it only makes
 // the queue deeper and pushes the wait toward that timeout.
 const MAX_CONCURRENT_PUSH_JOBS = Math.max(1, parseInt(process.env.MAX_CONCURRENT_PUSH_JOBS || '3', 10));
@@ -22798,8 +22800,19 @@ function autoResumePushJobs() {
   // (flagged resume_on_boot=1 by the SIGTERM handler). Jobs the user paused
   // manually, or that were already idle, must stay paused — auto-resuming those
   // is what caused "it started all of them".
-  const paused = [...pushJobs.values()].filter(j => j.status === 'paused' && j.resumeOnBoot);
-  if (!paused.length) return;
+  const all = [...pushJobs.values()];
+  const paused = all.filter(j => j.status === 'paused' && j.resumeOnBoot);
+  if (!paused.length) {
+    // Was a bare `return`, so a boot where nothing matched produced NO log line
+    // at all — indistinguishable from the function never running. That silence
+    // cost three deploys of guessing on 2026-08-28. Always say why.
+    const byStatus = all.reduce((a, j) => { a[j.status] = (a[j.status] || 0) + 1; return a; }, {});
+    const flagged = all.filter(j => j.resumeOnBoot).length;
+    console.log(`[push] auto-resume: nothing to do — ${all.length} job(s) in memory `
+      + `(${JSON.stringify(byStatus)}), ${flagged} flagged resumeOnBoot. `
+      + `Need status='paused' AND resumeOnBoot=true.`);
+    return;
+  }
   console.log(`[push] auto-resuming ${paused.length} job(s) after restart…`);
   paused.forEach((job, i) => {
     setTimeout(async () => {
