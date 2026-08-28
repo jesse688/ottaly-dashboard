@@ -38,14 +38,13 @@ const REACHER_URL = (process.env.REACHER_URL || 'http://127.0.0.1:8080').replace
 // Each container is pinned to its own proxy4smtp account (5 simultaneous SMTP
 // sessions each), so N containers give N*5 real concurrency. With one entry this
 // is a no-op and the original single-instance path is used unchanged.
+// Container selection is done by the semaphore (_acquirePrimary), which picks the
+// least-loaded pool with capacity. A standalone round-robin was tried first and
+// was wrong: it balances the ORDER requests are assigned, not how many are in
+// flight per container, so the slower container silently accumulated past its
+// account's 5-session cap.
 const REACHER_URLS = (process.env.REACHER_URLS || '')
   .split(',').map(s => s.trim().replace(/\/$/, '')).filter(Boolean);
-let _rrIndex = 0;
-function _nextReacherBase() {
-  const base = REACHER_URLS[_rrIndex % REACHER_URLS.length];
-  _rrIndex = (_rrIndex + 1) % REACHER_URLS.length;
-  return base;
-}
 // Auto-discovery: if REACHER_URL is unreachable, we try these in order.
 // Covers every EasyPanel / Docker Compose naming pattern we've ever seen.
 const REACHER_FALLBACK_BASES = [
@@ -112,50 +111,107 @@ const PRIMARY_REACHER_CONCURRENCY = Math.max(1, parseInt(process.env.PRIMARY_REA
 // because the wait sits BETWEEN throwIfCancelled checkpoints. A bounded wait turns
 // "hangs silently until someone kills the process" into a real, reported error.
 const PRIMARY_WAIT_TIMEOUT_MS = Math.max(1000, parseInt(process.env.PRIMARY_WAIT_TIMEOUT_MS || '45000', 10));
-let _primaryActive = 0;
-const _primaryQueue = [];   // [{ resolve, reject, job, timer }]
 
-// Waiters are woken in FIFO order. Each carries its own timer and the job it
-// belongs to, so a queued waiter can be timed out or cancelled while it waits —
-// neither was possible before.
+// ── One pool PER Reacher container ────────────────────────────────────────
+// Each container is pinned to its own proxy4smtp account, and each account
+// hard-rejects past 5 simultaneous SMTP sessions. A single shared pool of N*5
+// does NOT bound per-account usage: round-robin fixes the order requests are
+// ASSIGNED, not how many are concurrently IN FLIGHT, and slot-holding time varies
+// hugely (a fast MX answers in 400ms, a hostile one holds until the timeout). So
+// the slow container accumulates. Simulated with one shared pool of 10:
+//     equal speed        -> peak 5 / 5   ok
+//     one 2x slower      -> peak 5 / 7   over the account cap
+//     one 4x slower      -> peak 5 / 9   over
+//     one 12x slower     -> peak 5 / 10  every slot on one account
+// That is exactly the "Concurrency limit reached" error of 2026-08-28.
+//
+// Per-container pools make the invariant structural: a caller acquires a slot ON
+// a specific container and is told which, so the slot and the URL cannot diverge.
+// Choosing the least-loaded container also self-balances — when one degrades,
+// work shifts to the healthy one instead of queueing behind the sick one
+// (simulated: 365/35 split when one container is 12x slower).
+const _pools = new Map();   // baseUrl -> { active, queue: [{resolve,reject,job,timer}] }
+
+function _poolFor(base) {
+  let p = _pools.get(base);
+  if (!p) { p = { active: 0, queue: [] }; _pools.set(base, p); }
+  return p;
+}
+
+// Per-container cap. With REACHER_URLS set, PRIMARY_REACHER_CONCURRENCY is the
+// TOTAL across containers, so divide it; a single instance keeps the full value.
+function _perPoolCap() {
+  const n = REACHER_URLS.length || 1;
+  return Math.max(1, Math.floor(PRIMARY_REACHER_CONCURRENCY / n));
+}
+
+// Acquire a slot on the least-loaded container with capacity. Resolves with the
+// base URL that was reserved — callers MUST use it, so the reservation and the
+// request always refer to the same container.
 function _acquirePrimary(job = null) {
+  const bases = REACHER_URLS.length ? REACHER_URLS : [null];
+  const cap = _perPoolCap();
   return new Promise((resolve, reject) => {
-    if (_primaryActive < PRIMARY_REACHER_CONCURRENCY) { _primaryActive++; resolve(); return; }
-    const waiter = { resolve, reject, job, timer: null };
+    // Least-loaded container that still has room. `found` is tracked separately
+    // from `best` because a valid base can itself be null (single-instance mode),
+    // so `best !== null` is not a usable "did we find one" test.
+    let best = null, bestActive = Infinity, found = false;
+    for (const b of bases) {
+      const p = _poolFor(b);
+      if (p.active < cap && p.active < bestActive) { best = b; bestActive = p.active; found = true; }
+    }
+    if (found) {
+      _poolFor(best).active++;
+      resolve(best);
+      return;
+    }
+    // Everything busy: queue on the SHORTEST queue so waiters spread too.
+    let target = bases[0], shortest = Infinity;
+    for (const b of bases) {
+      const q = _poolFor(b).queue.length;
+      if (q < shortest) { shortest = q; target = b; }
+    }
+    const pool = _poolFor(target);
+    const waiter = { resolve, reject, job, timer: null, base: target };
     waiter.timer = setTimeout(() => {
-      const i = _primaryQueue.indexOf(waiter);
-      if (i !== -1) _primaryQueue.splice(i, 1);
+      const i = pool.queue.indexOf(waiter);
+      if (i !== -1) pool.queue.splice(i, 1);
+      const s = reacherSlotStats();
       reject(new Error(`Timed out after ${PRIMARY_WAIT_TIMEOUT_MS}ms waiting for a Reacher slot `
-        + `(${_primaryActive}/${PRIMARY_REACHER_CONCURRENCY} in use, ${_primaryQueue.length} queued)`));
+        + `(${s.active}/${s.cap} in use, ${s.queued} queued)`));
     }, PRIMARY_WAIT_TIMEOUT_MS);
-    _primaryQueue.push(waiter);
+    pool.queue.push(waiter);
   });
 }
 
-function _releasePrimary() {
+// Release a slot on the container it was taken from. `base` is required —
+// releasing the wrong pool would let one account drift over its cap.
+function _releasePrimary(base = null) {
+  const pool = _poolFor(base);
   // Skip waiters whose job was cancelled while they queued, so a cancelled job
   // cannot consume a slot it will only throw away.
-  while (_primaryQueue.length) {
-    const waiter = _primaryQueue.shift();
+  while (pool.queue.length) {
+    const waiter = pool.queue.shift();
     clearTimeout(waiter.timer);
     if (waiter.job?.cancelRequested) { waiter.reject(new JobCancelledError()); continue; }
-    waiter.resolve();   // ownership transfers; _primaryActive stays as-is
+    waiter.resolve(base);   // ownership transfers; pool.active stays as-is
     return;
   }
-  _primaryActive--;
+  pool.active--;
 }
 
-// Evict every queued waiter belonging to a cancelled job. Called by cancel so
-// workers parked in the queue fail fast instead of waiting out their timeout.
+// Evict every queued waiter belonging to a cancelled job, across all pools.
 function _dropQueuedWaitersForJob(job) {
   if (!job) return 0;
   let dropped = 0;
-  for (let i = _primaryQueue.length - 1; i >= 0; i--) {
-    if (_primaryQueue[i].job === job) {
-      const [w] = _primaryQueue.splice(i, 1);
-      clearTimeout(w.timer);
-      w.reject(new JobCancelledError());
-      dropped++;
+  for (const pool of _pools.values()) {
+    for (let i = pool.queue.length - 1; i >= 0; i--) {
+      if (pool.queue[i].job === job) {
+        const [w] = pool.queue.splice(i, 1);
+        clearTimeout(w.timer);
+        w.reject(new JobCancelledError());
+        dropped++;
+      }
     }
   }
   return dropped;
@@ -163,9 +219,19 @@ function _dropQueuedWaitersForJob(job) {
 
 // Live gauge for diagnostics. The old health check inferred trouble from a daily
 // cumulative failure ratio; these are the numbers that actually described the
-// 2026-08-28 outage and were invisible at the time.
+// 2026-08-28 outage and were invisible at the time. `perContainer` exposes the
+// imbalance a single total would hide.
 function reacherSlotStats() {
-  return { active: _primaryActive, queued: _primaryQueue.length, cap: PRIMARY_REACHER_CONCURRENCY };
+  const bases = REACHER_URLS.length ? REACHER_URLS : [null];
+  const cap = _perPoolCap();
+  let active = 0, queued = 0;
+  const perContainer = {};
+  for (const b of bases) {
+    const p = _poolFor(b);
+    active += p.active; queued += p.queue.length;
+    perContainer[b || 'primary'] = { active: p.active, queued: p.queue.length, cap };
+  }
+  return { active, queued, cap: cap * bases.length, perContainerCap: cap, perContainer };
 }
 
 // Per-minute rate limiter. Even at concurrency=5, fast checks can exceed
@@ -203,8 +269,11 @@ async function _acquireReacherSlot(job = null) {
   // Acquire the slot BEFORE stamping the rate-limit window. Stamping first meant
   // a call that queued for minutes was counted in the minute it entered the queue
   // rather than the minute it actually hit Reacher, skewing the limiter under load.
-  await _acquirePrimary(job);
+  // Returns the container the slot was reserved on — the caller must send to that
+  // one and release the same one.
+  const base = await _acquirePrimary(job);
   _reacherCallTimes.push(Date.now());
+  return base;
 }
 
 function _reacher429Backoff() {
@@ -1250,31 +1319,31 @@ async function fetchEv2Proxy() {
 async function callReacherOnce(email, job = null) {
   const m = _reacherMember;
 
-  // Resolve the endpoint BEFORE taking a slot. Discovery does up to N sequential
-  // 3s probes; doing it while holding one of only 5 SMTP slots wasted scarce
-  // capacity on work that needs none.
+  // The SEMAPHORE chooses the container, not a separate round-robin. Picking the
+  // base independently of the slot is what let all 10 slots land on one account:
+  // round-robin fixes assignment order, not how many are concurrently in flight,
+  // so the slower container accumulated until its proxy4smtp account started
+  // rejecting. Here the reservation and the URL are the same decision, so the
+  // per-account cap is structurally guaranteed.
   //
-  // Round-robin across the Reacher instances. Each container is pinned to its
-  // OWN proxy4smtp account, and each account has its own hard cap of 5
-  // simultaneous SMTP sessions — so two containers give a real 10.
-  //
-  // Round-robin rather than Reacher's native per-provider routing: that routing
-  // is static (Google always to one account), so a Google-heavy batch saturates
-  // one account while the other sits idle. Alternating per call balances
-  // whatever the provider mix happens to be.
-  const base = REACHER_URLS.length > 1 ? _nextReacherBase() : await resolveReacherBaseFor(m);
-
-  // Slot acquisition can now fail (timeout or cancellation) instead of hanging
+  // Slot acquisition can fail (timeout or cancellation) instead of hanging
   // forever. It sits outside the try because no slot is held when it throws —
   // releasing here would corrupt the count.
+  let slotBase = null;
   try {
-    await _acquireReacherSlot(job);
+    slotBase = await _acquireReacherSlot(job);
   } catch (err) {
     if (err instanceof JobCancelledError) throw err;
     const reason = `Reacher slot unavailable: ${err.message}`;
     _recordReacherFailure(reason);
     return [{ email, status: 'unknown', confidence: 'low', reason }, m];
   }
+
+  // Single-instance mode reserves the null pool and still needs discovery to find
+  // the URL. Discovery runs AFTER the slot here, which is a small regression on
+  // the "don't hold a slot during discovery" note — but it only runs once, since
+  // resolveReacherBaseFor caches on the member.
+  const base = slotBase !== null ? slotBase : await resolveReacherBaseFor(m);
   try {
     const body = { to_email: email };
     if (REACHER_FROM_EMAIL) body.from_email = REACHER_FROM_EMAIL;
@@ -1366,7 +1435,9 @@ async function callReacherOnce(email, job = null) {
       return [{ email, status: 'unknown', confidence: 'low', reason }, m];
     }
   } finally {
-    _releasePrimary();
+    // Release the SAME pool the slot came from. Releasing a different one would
+    // let that account drift over its cap while the other under-runs.
+    _releasePrimary(slotBase);
   }
 }
 
@@ -1441,7 +1512,13 @@ function _recordReacherFailure(reason) {
 function _shouldUseSecondary() {
   if (!_secondaryAvailable()) return false;
   const s = reacherSlotStats();
-  return s.active >= s.cap && s.queued > 0;
+  // Overflow when EVERY container is full and work is waiting. Testing the global
+  // total instead would miss the case that matters most: one container saturated
+  // and rejecting while another idles reads as (say) 7/10 — not "full" — so
+  // overflow never engaged during exactly the imbalance it exists to absorb.
+  const all = Object.values(s.perContainer || {});
+  const everyPoolFull = all.length > 0 && all.every(p => p.active >= p.cap);
+  return everyPoolFull && s.queued > 0;
 }
 
 async function checkWithReacher(email, job = null) {
