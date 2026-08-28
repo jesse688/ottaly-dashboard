@@ -22620,6 +22620,14 @@ function initPausedJobsTable(sq) {
   // allowed_statuses: JSON array of verification buckets the user chose to push,
   // so a resumed job keeps the selection.
   try { sq.exec(`ALTER TABLE paused_push_jobs ADD COLUMN allowed_statuses TEXT`); } catch {}
+  // The three below were NOT persisted, so after a restart they came back
+  // undefined and their gates silently stopped applying — a resumed job could
+  // push to Microsoft addresses, or providers, the operator had excluded.
+  // excludeMicrosoft especially must survive: undefined is falsy, i.e. the guard
+  // defaulted OFF on exactly the path where nobody was watching.
+  try { sq.exec(`ALTER TABLE paused_push_jobs ADD COLUMN exclude_microsoft INTEGER DEFAULT 0`); } catch {}
+  try { sq.exec(`ALTER TABLE paused_push_jobs ADD COLUMN allowed_providers TEXT`); } catch {}
+  try { sq.exec(`ALTER TABLE paused_push_jobs ADD COLUMN use_n2b INTEGER DEFAULT 1`); } catch {}
 }
 
 // Write one permanent row per finished push. Best-effort and fully guarded:
@@ -22681,6 +22689,14 @@ function restorePausedJobs(sq) {
         workspace_name: row.workspace_name || row.workspace_id,
         campaign_name: row.campaign_name || row.campaign_id,
         allowedStatuses,
+        // Restore the exclusion settings too. These used to come back undefined,
+        // which silently disabled their gates on the resumed run — excludeMicrosoft
+        // defaulting to falsy meant a deploy could turn a Microsoft-excluded push
+        // into one that sends to Microsoft. Older rows predate these columns, so
+        // exclude_microsoft defaults ON when the column is NULL (fail safe).
+        excludeMicrosoft: row.exclude_microsoft == null ? true : row.exclude_microsoft === 1,
+        allowedProviders: (() => { try { return JSON.parse(row.allowed_providers || '[]'); } catch { return []; } })(),
+        useN2b: row.use_n2b === 0 ? false : true,
         total: contactIds.length,
         verified: row.verified_count || 0,
         pushed: row.pushed_count || 0,
@@ -23482,12 +23498,17 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
     try {
       initPausedJobsTable(sq);
       sq.prepare(`INSERT OR REPLACE INTO paused_push_jobs
-        (id, workspace_id, campaign_id, workspace_name, campaign_name, contact_ids, include_risky, max_age_days, loose, allowed_statuses)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        (id, workspace_id, campaign_id, workspace_name, campaign_name, contact_ids, include_risky, max_age_days, loose, allowed_statuses,
+         exclude_microsoft, allowed_providers, use_n2b)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         jobId, workspace_id, campaign_id,
         workspace_name || workspace_id, campaign_name || campaign_id,
         JSON.stringify(contact_ids), include_risky ? 1 : 0, max_age_days, looseMode ? 1 : 0,
-        JSON.stringify(allowedStatuses)
+        JSON.stringify(allowedStatuses),
+        // Persisted so a resumed job enforces the same exclusions as the original.
+        (excludeMicrosoft === 'true' || excludeMicrosoft === true) ? 1 : 0,
+        JSON.stringify(allowedProviders || []),
+        useN2b === false ? 0 : 1
       );
     } catch (e) { console.warn('[push] Could not persist job to SQLite:', e.message); }
   }
@@ -24127,6 +24148,20 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
   // Restore loose mode from the persisted row (survives a deploy that rebuilt
   // the in-memory job), so a resumed engine push keeps the looser gate.
   job.loose = job.loose || !!row.loose;
+  // Restore the exclusion settings from the row whenever the in-memory job lost
+  // them (a restart rebuilds the job without them). Without this the resumed run
+  // applied a weaker filter than the run it was continuing. Fail safe on
+  // excludeMicrosoft: a NULL column (pre-migration row) keeps the guard ON.
+  if (job.excludeMicrosoft === undefined) {
+    job.excludeMicrosoft = row.exclude_microsoft == null ? true : row.exclude_microsoft === 1;
+  }
+  if (!Array.isArray(job.allowedProviders)) {
+    try { job.allowedProviders = JSON.parse(row.allowed_providers || '[]'); } catch { job.allowedProviders = []; }
+  }
+  if (job.useN2b === undefined) job.useN2b = row.use_n2b === 0 ? false : true;
+  if (!Array.isArray(job.allowedStatuses)) {
+    try { job.allowedStatuses = row.allowed_statuses ? JSON.parse(row.allowed_statuses) : undefined; } catch {}
+  }
   // Clear the deploy-resume flag now it's running again — a later manual pause
   // must not be auto-resumed by the next deploy.
   try { sq && sq.prepare(`UPDATE paused_push_jobs SET resume_on_boot = 0 WHERE id = ?`).run(job.id); } catch {}
@@ -24174,7 +24209,8 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
       const VERIFY_TIMEOUT_MS = parseInt(process.env.PUSH_VERIFY_TIMEOUT_MS || (job.loose ? '10000' : '65000'), 10);
       const VERIFY_THEN_PUSH = Math.max(20, parseInt(process.env.VERIFY_THEN_PUSH || '100', 10));
       let doneCount = 0;
-      const skipped = { unsafe: 0, dnc: 0, departed: 0, cooldownWorkspace: 0, verticalCollision: 0, burstGap: 0, densityCeiling: 0, alreadyInCampaign: 0, snoozed: 0 };
+      const skipped = { unsafe: 0, dnc: 0, departed: 0, cooldownWorkspace: 0, verticalCollision: 0, burstGap: 0, densityCeiling: 0, alreadyInCampaign: 0, snoozed: 0, missingEnrichment: 0, wrongProvider: 0, missingName: 0 };
+      const allowedProviders = Array.isArray(job.allowedProviders) ? job.allowedProviders : [];
 
       const campaignVertical = detectVertical((job.campaign_name || '') + ' ' + (job.workspace_name || ''), job.workspace_id);
       const crossClientGuard = buildCrossClientGuard(job.workspace_id || '', job.workspace_name || '', job.overrideGuards);
@@ -24199,6 +24235,25 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
         }
         if (c.do_not_contact) { skipped.dnc++; return false; }
         if (departed.has(String(c.email || '').toLowerCase())) { skipped.departed++; return false; }
+        // The four gates below existed only in the main worker. A resumed job
+        // therefore applied a WEAKER filter than the run it continued — most
+        // seriously, it ignored excludeMicrosoft and allowedProviders, so a
+        // deploy mid-push could send to addresses the operator had excluded.
+        // Sending is irreversible, so the two gates must match exactly.
+        if (!looseHere
+            && (!(c.first_name && c.first_name.trim()) || !(c.last_name && c.last_name.trim()))) {
+          skipped.missingName++; return false;
+        }
+        if (allowedProviders.length && c.mx_provider && !allowedProviders.includes(c.mx_provider)) {
+          skipped.wrongProvider++; return false;
+        }
+        if (job.excludeMicrosoft && (c.mx_provider === 'email_outlook' || (!c.mx_provider && !job.loose))) {
+          skipped.wrongProvider++; return false;
+        }
+        if (!looseHere
+            && ((!c.keywords || c.keywords.trim() === '') || (!c.industry || c.industry.trim() === ''))) {
+          skipped.missingEnrichment++; return false;
+        }
         const pushed = Array.isArray(c.pushed_campaigns)
           ? c.pushed_campaigns
           : (typeof c.pushed_campaigns === 'string' ? JSON.parse(c.pushed_campaigns || '[]') : []);
