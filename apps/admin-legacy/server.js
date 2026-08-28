@@ -411,14 +411,22 @@ function sanitizePvLead(lead) {
   let changed = false;
   let reason = null;
 
-  // PlusVibe requires these to be STRINGS and rejects the whole batch otherwise.
-  // The old guard read `!= null && typeof !== 'string'`, which skipped exactly
-  // the case that breaks: null passed straight through to the API. contactToPvLead
-  // sends `phone_number: c.phone || null` and `department: null`, so nearly every
-  // batch 400'd with "must be a string" and pushed zero leads while the UI showed
-  // hundreds verified. Coerce null/undefined to '' rather than exempting them.
-  for (const f of ['phone_number', 'department']) {
-    if (typeof out[f] !== 'string') out[f] = out[f] == null ? '' : String(out[f]);
+  // PlusVibe validates every string field and rejects the ENTIRE batch on the
+  // first bad one, so a single null in a 100-lead batch pushes zero contacts.
+  // The original guard read `!= null && typeof !== 'string'`, which skipped
+  // precisely the value that breaks — null went straight through.
+  //
+  // Fixing only the fields seen failing is whack-a-mole: the first outage was
+  // phone_number and department, then city 400'd the next batch. contactToBisonLead
+  // nulls eight of these. Coerce every known string field instead, so no future
+  // null in any of them can poison a batch.
+  const PV_STRING_FIELDS = [
+    'first_name', 'last_name', 'job_title', 'company_name', 'phone_number',
+    'company_website', 'industry', 'linkedin_person_url', 'linkedin_company_url',
+    'city', 'state', 'country', 'address_line', 'department',
+  ];
+  for (const f of PV_STRING_FIELDS) {
+    if (f in out && typeof out[f] !== 'string') out[f] = out[f] == null ? '' : String(out[f]);
   }
 
   const email = (out.email || '').trim();
