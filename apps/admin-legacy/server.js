@@ -411,9 +411,14 @@ function sanitizePvLead(lead) {
   let changed = false;
   let reason = null;
 
-  // phone_number must be a string — coerce null/number → string.
-  if (out.phone_number != null && typeof out.phone_number !== 'string') {
-    out.phone_number = String(out.phone_number);
+  // PlusVibe requires these to be STRINGS and rejects the whole batch otherwise.
+  // The old guard read `!= null && typeof !== 'string'`, which skipped exactly
+  // the case that breaks: null passed straight through to the API. contactToPvLead
+  // sends `phone_number: c.phone || null` and `department: null`, so nearly every
+  // batch 400'd with "must be a string" and pushed zero leads while the UI showed
+  // hundreds verified. Coerce null/undefined to '' rather than exempting them.
+  for (const f of ['phone_number', 'department']) {
+    if (typeof out[f] !== 'string') out[f] = out[f] == null ? '' : String(out[f]);
   }
 
   const email = (out.email || '').trim();
@@ -17236,7 +17241,8 @@ function contactToBisonLead(c) {
     last_name:           c.last_name  || '',
     job_title:           c.job_title  || '',
     company_name:        c.company_name || '',
-    phone_number:        c.phone || null,
+    // PlusVibe validates these two as strings and 400s the entire batch on null.
+    phone_number:        c.phone || '',
     company_website:     c.company_domain || null,
     industry:            raw.Industry || c.industry || null,
     linkedin_person_url: c.linkedin_url || null,
@@ -17245,7 +17251,7 @@ function contactToBisonLead(c) {
     state:               c.company_county || c.company_state || c.state || null,
     country:             c.company_country || c.country || null,
     address_line:        null,
-    department:          null,
+    department:          '',
   };
 }
 
