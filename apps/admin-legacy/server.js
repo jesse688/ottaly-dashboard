@@ -23981,7 +23981,12 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
           // Network/timeout reaching the finder itself = a real outage signal
           // (distinct from an SMTP-level "unknown" the finder returns normally).
           verifyResults[c.id] = 'unknown';
-          batchUpdates.push({ id: c.id, email_status: 'unknown', email_verified_at: new Date().toISOString(), _netfail: true });
+          // Record WHY. This path wrote no reason, and bulkUpdateVerification
+          // assigns email_verify_reason unconditionally — so a transient finder
+          // outage NULLed any previous legitimate reason and stored a bare
+          // 'unknown', wiping the very column that exists to explain it.
+          batchUpdates.push({ id: c.id, email_status: 'unknown', email_verified_at: new Date().toISOString(), _netfail: true,
+                              email_verify_reason: `verifier unreachable: ${String(err.message || '').slice(0, 200)}` });
           // Defer rather than destroy. This address was never actually checked,
           // so queue it for retry with backoff; the drain picks it up once the
           // verifier recovers. Without this the 'unknown' above was the only
@@ -24434,27 +24439,15 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
           // PlusVibe: top-level native fields (no custom_variables pre-step).
           // Name filter is a Bison-era rule; skip it for loose pushes (PV accepts
           // nameless leads) — mirrors the main verify-and-push path.
+          // Hand toLead's output straight to sanitizePvLead, exactly as the main
+          // worker does. There used to be a manual remap to 15 fields here which
+          // DROPPED custom_variables — so a resumed campaign sent with every merge
+          // token empty ({{seniority}}, location vars, cleaned company/title). It
+          // also coerced 14 fields to null, feeding the PlusVibe batch-rejection
+          // bug that sanitizePvLead now has to undo. Both problems vanish by not
+          // rewriting the payload.
           var pvPayload = slice.map(toLead)
             .filter(function(l){ return job.loose || (l.first_name && String(l.first_name).trim() && l.last_name && String(l.last_name).trim()); })
-            .map(function(l) {
-              return {
-                email:               l.email,
-                first_name:          l.first_name || null,
-                last_name:           l.last_name  || null,
-                job_title:           l.job_title  || null,
-                company_name:        l.company_name || null,
-                phone_number:        l.phone_number || null,
-                city:                l.city         || null,
-                state:               l.state        || null,
-                country:             l.country      || null,
-                industry:            l.industry     || null,
-                linkedin_person_url: l.linkedin_person_url  || null,
-                linkedin_company_url:l.linkedin_company_url || null,
-                company_website:     l.company_website      || null,
-                department:          l.department           || null,
-                address_line:        l.address_line         || null,
-              };
-            })
             .map(function(l){
               var s = sanitizePvLead(l);
               if (s.reason) console.warn('[pv-push] ' + s.reason);
@@ -24469,7 +24462,17 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
             job.pvUploaded   = (job.pvUploaded   || 0) + addRes.uploaded;
             job.pvDuplicates = (job.pvDuplicates || 0) +
               Math.max(0, (addRes.sent || pvPayload.length) - addRes.uploaded);
-          } catch (e) { console.warn('[pv-push] lead add failed:', e.message); }
+          } catch (e) {
+            // MUST `continue` — falling through stamps pushed_campaigns for a
+            // slice PlusVibe REJECTED, which marks those contacts as already-in-
+            // campaign so the dedup gate drops them from every future push. They
+            // were never delivered and there is no record: job.pushed += 0 is
+            // arithmetically correct, which is exactly what hid this. The main
+            // worker has always had this `continue` (see the sibling loop); the
+            // resume worker did not, and silently destroyed leads.
+            console.warn('[pv-push] batch /lead/add failed (slice ' + i + ', ' + pvPayload.length + ' leads), skipping: ' + e.message);
+            continue;
+          }
           try {
             const ids = slice.map(c => c.id).filter(Boolean);
             if (ids.length && db.stampPushedCampaign) {
@@ -24506,6 +24509,22 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
           const mxProvider = /google|gmail/.test(mxHost) ? 'email_google'
             : /outlook|microsoft|protection\.outlook|mail\.microsoft/.test(mxHost) ? 'email_outlook'
             : mxHost ? 'email_other' : null;
+          // Stamp the resolved provider onto the in-memory contact and warm the
+          // domain cache, exactly as the main worker does. Without the assignment
+          // passesFilter — which runs on `c` moments later — evaluates the
+          // allowedProviders and excludeMicrosoft gates against the STALE
+          // pre-verification value. Those gates were textually present in this
+          // worker but behaviourally inert, so a resumed job could send to a
+          // provider the operator had excluded. Warming the cache also stops the
+          // next job re-spending a verification to learn the same domain.
+          if (mxProvider) {
+            c.mx_provider = mxProvider;
+            const mxDomain = (c.email || '').split('@')[1]?.toLowerCase();
+            if (mxDomain) {
+              try { await db.setDomainMxProvider(mxDomain, mxProvider); }
+              catch (e) { console.warn('[verify] domain mx cache update failed:', e.message); }
+            }
+          }
           verifyResults[c.id] = status;
           // Persist WHY, not just the verdict. Only for non-safe results — a
           // clean pass writes null so a stale reason can't outlive its cause.
@@ -24515,7 +24534,12 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
           // Network/timeout reaching the finder itself = a real outage signal
           // (distinct from an SMTP-level "unknown" the finder returns normally).
           verifyResults[c.id] = 'unknown';
-          batchUpdates.push({ id: c.id, email_status: 'unknown', email_verified_at: new Date().toISOString(), _netfail: true });
+          // Record WHY. This path wrote no reason, and bulkUpdateVerification
+          // assigns email_verify_reason unconditionally — so a transient finder
+          // outage NULLed any previous legitimate reason and stored a bare
+          // 'unknown', wiping the very column that exists to explain it.
+          batchUpdates.push({ id: c.id, email_status: 'unknown', email_verified_at: new Date().toISOString(), _netfail: true,
+                              email_verify_reason: `verifier unreachable: ${String(err.message || '').slice(0, 200)}` });
           // Defer rather than destroy. This address was never actually checked,
           // so queue it for retry with backoff; the drain picks it up once the
           // verifier recovers. Without this the 'unknown' above was the only
@@ -24642,7 +24666,10 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
           job.risky        = Object.values(verifyResults).filter(s => s === 'risky').length;
           job.invalid      = Object.values(verifyResults).filter(s => s === 'invalid').length;
           job.unknown      = Object.values(verifyResults).filter(s => s === 'unknown').length;
-          if (n2bPush.length) { job.status = 'pushing'; await pushLeads(n2bPush); }
+          // Re-check cancellation: N2B validation can take minutes, and sending is
+          // irreversible. The main worker checks here; this path did not, so a
+          // cancel during N2B still pushed.
+          if (n2bPush.length && !job.cancelled) { job.status = 'pushing'; await pushLeads(n2bPush); }
         }
       }
 
@@ -24650,6 +24677,13 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
       if (sq) { try { sq.prepare(`DELETE FROM paused_push_jobs WHERE id = ?`).run(job.id); } catch {} }
       job.status = job.cancelled ? 'cancelled' : 'completed';
       job.progress = 100;
+      // The success path never recorded history — only the catch below did. Since
+      // auto-resume is the normal path after every deploy, that meant the jobs
+      // MOST likely to be asked about ("I pushed 3,000, why did 900 arrive?") were
+      // exactly the ones with no permanent record: the in-memory Map is capped at
+      // 20 and dies with the process.
+      recordPushHistory(sq, job);
+      console.log(`[push] ${job.id} resumed-run done — pushed ${job.pushed}, skipped:`, skipped);
     } catch (err) {
       job.status = 'failed';
       job.error = err.message;

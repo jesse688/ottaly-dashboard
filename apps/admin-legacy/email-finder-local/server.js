@@ -1282,9 +1282,21 @@ async function callReacherOnce(email, job = null) {
 
     if (EV2_PROXY_URL) {
       let proxy = null;
-      try { proxy = await fetchEv2Proxy(); } catch { /* pool fetch failed */ }
+      let proxyErr = '';
+      // Was a bare `catch {}`, so a network failure reaching the pool was
+      // indistinguishable from a genuinely empty pool.
+      try { proxy = await fetchEv2Proxy(); } catch (e) { proxyErr = e.message || String(e); }
       if (!proxy) {
-        return { email, status: 'unknown', confidence: 'low', reason: 'EV2: no Webshare proxies in pool — add proxies in Email Verify 2.0' };
+        // MUST return the [result, member] tuple. Returning a bare object made the
+        // caller's `[lastResult] = await callReacherOnce(...)` destructure index 0
+        // of a non-array => undefined, so checkWithReacher fell through to its
+        // generic 'No Reacher response' and the real cause was destroyed. Only
+        // reachable when EV2_PROXY_URL is set, but then it breaks EVERY check.
+        const reason = proxyErr
+          ? `EV2: could not fetch a proxy from the pool — ${proxyErr}`
+          : 'EV2: no Webshare proxies in pool — add proxies in Email Verify 2.0';
+        _recordReacherFailure(reason);
+        return [{ email, status: 'unknown', confidence: 'low', reason }, m];
       }
       body.proxy = { host: proxy.host, port: proxy.port, username: proxy.username || undefined, password: proxy.password || undefined };
       console.log(`[EV2] Using proxy ${proxy.host}:${proxy.port} for ${email}`);
