@@ -22621,10 +22621,10 @@ function initPausedJobsTable(sq) {
   // so a resumed job keeps the selection.
   try { sq.exec(`ALTER TABLE paused_push_jobs ADD COLUMN allowed_statuses TEXT`); } catch {}
   // The three below were NOT persisted, so after a restart they came back
-  // undefined and their gates silently stopped applying — a resumed job could
-  // push to Microsoft addresses, or providers, the operator had excluded.
-  // excludeMicrosoft especially must survive: undefined is falsy, i.e. the guard
-  // defaulted OFF on exactly the path where nobody was watching.
+  // undefined and their gates silently stopped applying — a resumed job filtered
+  // differently from the run it was continuing. Microsoft sending is supported
+  // now, so exclude_microsoft is simply an opt-in preference to preserve rather
+  // than a safety guard.
   try { sq.exec(`ALTER TABLE paused_push_jobs ADD COLUMN exclude_microsoft INTEGER DEFAULT 0`); } catch {}
   try { sq.exec(`ALTER TABLE paused_push_jobs ADD COLUMN allowed_providers TEXT`); } catch {}
   try { sq.exec(`ALTER TABLE paused_push_jobs ADD COLUMN use_n2b INTEGER DEFAULT 1`); } catch {}
@@ -22689,12 +22689,11 @@ function restorePausedJobs(sq) {
         workspace_name: row.workspace_name || row.workspace_id,
         campaign_name: row.campaign_name || row.campaign_id,
         allowedStatuses,
-        // Restore the exclusion settings too. These used to come back undefined,
-        // which silently disabled their gates on the resumed run — excludeMicrosoft
-        // defaulting to falsy meant a deploy could turn a Microsoft-excluded push
-        // into one that sends to Microsoft. Older rows predate these columns, so
-        // exclude_microsoft defaults ON when the column is NULL (fail safe).
-        excludeMicrosoft: row.exclude_microsoft == null ? true : row.exclude_microsoft === 1,
+        // Restore the exclusion settings so a resumed run filters like the
+        // original. Microsoft sending is supported now, so the guard is a plain
+        // opt-in preference (UI default: off) — a NULL column means the row
+        // predates this migration and carries no preference, which is OFF.
+        excludeMicrosoft: row.exclude_microsoft === 1,
         allowedProviders: (() => { try { return JSON.parse(row.allowed_providers || '[]'); } catch { return []; } })(),
         useN2b: row.use_n2b === 0 ? false : true,
         total: contactIds.length,
@@ -23644,9 +23643,10 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
         if (allowedProviders.length && c.mx_provider && !allowedProviders.includes(c.mx_provider)) {
           skipped.wrongProvider++; return false;
         }
-        // Default-ON Microsoft guard. Drop confirmed-Microsoft always; drop
-        // UNRESOLVED (null) MX only in strict mode — in loose mode an unresolved
-        // provider is accepted (we can't resolve it without verifying).
+        // Opt-in Microsoft exclusion (UI checkbox, default off — we send to
+        // Microsoft now). Only when ticked: drop confirmed-Microsoft always, and
+        // drop UNRESOLVED (null) MX in strict mode only, since in loose mode we
+        // cannot resolve the provider without verifying.
         if (job.excludeMicrosoft && (c.mx_provider === 'email_outlook' || (!c.mx_provider && !job.loose))) {
           skipped.wrongProvider++; return false;
         }
@@ -24150,10 +24150,9 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
   job.loose = job.loose || !!row.loose;
   // Restore the exclusion settings from the row whenever the in-memory job lost
   // them (a restart rebuilds the job without them). Without this the resumed run
-  // applied a weaker filter than the run it was continuing. Fail safe on
-  // excludeMicrosoft: a NULL column (pre-migration row) keeps the guard ON.
+  // applied a weaker filter than the run it was continuing.
   if (job.excludeMicrosoft === undefined) {
-    job.excludeMicrosoft = row.exclude_microsoft == null ? true : row.exclude_microsoft === 1;
+    job.excludeMicrosoft = row.exclude_microsoft === 1;
   }
   if (!Array.isArray(job.allowedProviders)) {
     try { job.allowedProviders = JSON.parse(row.allowed_providers || '[]'); } catch { job.allowedProviders = []; }
