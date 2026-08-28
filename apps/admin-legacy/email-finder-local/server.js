@@ -33,6 +33,19 @@ const CATCH_ALL_TIMING_MS = Math.max(0, parseInt(process.env.CATCH_ALL_TIMING_MS
 // When set, each Reacher call fetches a fresh proxy from the pool instead of using SOCKS5
 const EV2_PROXY_URL = process.env.EV2_PROXY_URL || '';
 const REACHER_URL = (process.env.REACHER_URL || 'http://127.0.0.1:8080').replace(/\/$/, '');
+
+// Reacher instances to spread load across, comma-separated in REACHER_URLS.
+// Each container is pinned to its own proxy4smtp account (5 simultaneous SMTP
+// sessions each), so N containers give N*5 real concurrency. With one entry this
+// is a no-op and the original single-instance path is used unchanged.
+const REACHER_URLS = (process.env.REACHER_URLS || '')
+  .split(',').map(s => s.trim().replace(/\/$/, '')).filter(Boolean);
+let _rrIndex = 0;
+function _nextReacherBase() {
+  const base = REACHER_URLS[_rrIndex % REACHER_URLS.length];
+  _rrIndex = (_rrIndex + 1) % REACHER_URLS.length;
+  return base;
+}
 // Auto-discovery: if REACHER_URL is unreachable, we try these in order.
 // Covers every EasyPanel / Docker Compose naming pattern we've ever seen.
 const REACHER_FALLBACK_BASES = [
@@ -1240,7 +1253,16 @@ async function callReacherOnce(email, job = null) {
   // Resolve the endpoint BEFORE taking a slot. Discovery does up to N sequential
   // 3s probes; doing it while holding one of only 5 SMTP slots wasted scarce
   // capacity on work that needs none.
-  const base = await resolveReacherBaseFor(m);
+  //
+  // Round-robin across the Reacher instances. Each container is pinned to its
+  // OWN proxy4smtp account, and each account has its own hard cap of 5
+  // simultaneous SMTP sessions — so two containers give a real 10.
+  //
+  // Round-robin rather than Reacher's native per-provider routing: that routing
+  // is static (Google always to one account), so a Google-heavy batch saturates
+  // one account while the other sits idle. Alternating per call balances
+  // whatever the provider mix happens to be.
+  const base = REACHER_URLS.length > 1 ? _nextReacherBase() : await resolveReacherBaseFor(m);
 
   // Slot acquisition can now fail (timeout or cancellation) instead of hanging
   // forever. It sits outside the try because no slot is held when it throws —

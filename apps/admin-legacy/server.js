@@ -901,6 +901,11 @@ function startEmailFinderApp() {
       CHECK_CATCH_ALL: process.env.CHECK_CATCH_ALL || 'false',
       DEFAULT_VERIFIER: process.env.DEFAULT_VERIFIER || 'reacher',
       REACHER_URL: process.env.REACHER_URL || 'http://127.0.0.1:8080',
+      // Comma-separated Reacher instances to round-robin across. Each container
+      // is pinned to its own proxy4smtp account (5 simultaneous SMTP sessions
+      // each), so two entries give 10 real concurrency. Empty = single-instance
+      // behaviour, unchanged.
+      REACHER_URLS: process.env.REACHER_URLS || '',
       REACHER_API_KEY: process.env.REACHER_API_KEY || '',
       REACHER_FROM_EMAIL: process.env.REACHER_FROM_EMAIL || '',
       REACHER_HELLO_NAME: process.env.REACHER_HELLO_NAME || '',
