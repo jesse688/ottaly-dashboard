@@ -22918,6 +22918,10 @@ async function computeVerifierHealth() {
     // so it cannot answer "is it broken right now" — these can.
     report.slots = d.slots || null;
     report.runningJobs = d.runningJobs || [];
+    // The rolling unknown-rate. This is the PRIMARY signal — see the verdict
+    // section below for why the daily ratio cannot be trusted.
+    report.unknownWindow = d.unknownWindow || null;
+    report.secondary = d.secondary || null;
   } catch (e) {
     report.reasons.push(`Could not read verifier pool counters: ${e.message}`);
   }
@@ -22950,20 +22954,57 @@ async function computeVerifierHealth() {
     report.status = 'ok';
   }
 
-  // Live signals, independent of the daily ratio. A stalled job or a saturated
-  // slot queue is a problem happening NOW — on 2026-08-28 both were true while
-  // the ratio stayed under threshold and the widget read merely "degraded".
+  // ── PRIMARY signal: the rolling unknown-rate ──────────────────────────
+  // The daily ratio above CANNOT see the failure that actually took the verifier
+  // down. A proxy concurrency rejection comes back as HTTP 200 carrying
+  // is_reachable:'unknown', so it increments usageToday — the DENOMINATOR — and
+  // never failureCount. With ~95% of checks failing it still computes near zero,
+  // which is why the widget reported "OK in 4272ms" throughout the outage.
+  //
+  // The window below counts unknowns directly over the last N checks, so it
+  // cannot be fooled the same way. Normal is 5-10%; a sustained 40%+ means the
+  // verifier is returning nothing usable.
+  const uw = report.unknownWindow;
+  if (uw && uw.ready && uw.unknownRate != null) {
+    const upct = (uw.unknownRate * 100).toFixed(0);
+    if (uw.unknownRate >= uw.alertAt) {
+      report.status = 'down';
+      report.reasons.push(`${upct}% of the last ${uw.sample} checks came back "unknown" (normal is 5-10%). `
+        + `Verification is returning nothing usable — contacts will be skipped or pushed unverified.`);
+    } else if (uw.unknownRate >= 0.25) {
+      if (report.status === 'ok') report.status = 'degraded';
+      report.reasons.push(`${upct}% of the last ${uw.sample} checks came back "unknown" (normal is 5-10%). Yield will be lower than usual.`);
+    }
+  } else if (uw && !uw.ready) {
+    report.reasons.push(`Unknown-rate not yet meaningful (${uw.sample}/${uw.window} checks since restart).`);
+  }
+
+  // A stalled job is a problem happening NOW and holds capacity until stopped.
   const stalled = (report.runningJobs || []).filter(j => j.stalledMs > 120000);
   if (stalled.length) {
     report.status = 'down';
     report.reasons.push(`${stalled.length} verification job(s) stalled with no progress for over 2 minutes. `
       + `They hold verifier capacity until stopped.`);
   }
-  if (report.slots && report.slots.queued > 0 && report.slots.active >= report.slots.cap) {
-    if (report.status === 'ok') report.status = 'degraded';
-    report.reasons.push(`Verifier at capacity: ${report.slots.active}/${report.slots.cap} slots in use, `
-      + `${report.slots.queued} request(s) queued. Checks are waiting rather than running.`);
+
+  // Per-container imbalance: each Reacher instance is pinned to its own
+  // proxy4smtp account with its own hard cap, so one pool full while another
+  // idles means requests are being rejected while capacity sits unused.
+  const pc = report.slots && report.slots.perContainer;
+  if (pc) {
+    const pools = Object.entries(pc);
+    const full = pools.filter(([, p]) => p.active >= p.cap);
+    const idle = pools.filter(([, p]) => p.active === 0);
+    if (full.length && idle.length) {
+      if (report.status === 'ok') report.status = 'degraded';
+      report.reasons.push(`Verifier load is uneven: ${full.map(([n]) => n).join(', ')} at capacity while `
+        + `${idle.map(([n]) => n).join(', ')} idle. One proxy account may be rejecting.`);
+    }
   }
+
+  // NOTE: full slots with a queue is deliberately NOT an alert. That is what a
+  // healthy verifier under load looks like, and flagging it as "degraded" trains
+  // people to ignore the widget — which is how a real outage gets missed.
 
   if (report.lastError && report.status !== 'ok') {
     report.reasons.push(`Most recent verifier error: ${report.lastError}`);

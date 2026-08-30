@@ -439,6 +439,32 @@ function _recordReacherOutcome(status) {
   }
 }
 
+// The rolling unknown-rate, exposed so the health check can USE it.
+//
+// This is the number that mattered on 2026-08-28 and nobody could see. The health
+// check's own ratio is failureCount/(usageToday+failureCount), and a proxy
+// concurrency rejection arrives as HTTP 200 carrying is_reachable:'unknown' — so
+// it increments usageToday (the DENOMINATOR) and never failureCount. With ~95% of
+// checks failing that ratio still reads near zero, which is why the widget said
+// "OK in 4272ms" through the outage. The window below counts unknowns directly,
+// so it cannot be fooled the same way.
+//
+// `sample < REACHER_HEALTH_WINDOW` means not enough data yet (e.g. just after a
+// restart) — callers must treat that as "no opinion", not as healthy.
+function reacherUnknownStats() {
+  const m = _reacherMember;
+  const sample = m.recent.length;
+  const unknowns = m.recent.reduce((a, b) => a + b, 0);
+  return {
+    sample,
+    window: REACHER_HEALTH_WINDOW,
+    unknownRate: sample ? unknowns / sample : null,
+    ready: sample >= REACHER_HEALTH_WINDOW,
+    alertAt: REACHER_UNKNOWN_ALERT,
+    unhealthySinceMs: _reacherUnhealthySince ? Date.now() - _reacherUnhealthySince : 0,
+  };
+}
+
 // Returns the current "Reacher day" key — resets at UTC midnight to match Reacher's own daily limit counter.
 function _reacherTodayUtc() { return new Date().toISOString().slice(0, 10); }
 const REACHER_FROM_EMAIL = process.env.REACHER_FROM_EMAIL || SMTP_SENDER || '';
@@ -2601,6 +2627,10 @@ const server = http.createServer((req, res) => {
       // was returning HTTP 200 with an 'unknown' verdict, which is not counted
       // as a failure at all. These three numbers described the outage exactly.
       slots: reacherSlotStats(),
+      // The rolling unknown-rate — the only signal that can see a proxy
+      // concurrency rejection, which arrives as HTTP 200 + 'unknown' and is
+      // therefore invisible to the daily failure ratio.
+      unknownWindow: reacherUnknownStats(),
       secondary: secondaryStats(),
       runningJobs: [...jobs.values()].filter(j => j.status === 'running').map(j => ({
         id: j.id,
