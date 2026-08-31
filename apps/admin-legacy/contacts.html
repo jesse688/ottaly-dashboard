@@ -4260,6 +4260,13 @@
             })(),
             // Count what the push would actually accept, override included.
             override_send_rules: isSendRuleOverrideOn(),
+            // The target campaign. WITHOUT this the server's targetCampId is
+            // empty, so its already-in-this-campaign checks are skipped entirely
+            // and the badge counts contacts the push will immediately reject. On
+            // a 5,000-contact Hawthorne push that was 2,325 of them — every one
+            // verified first, then discarded.
+            campaign_id: (document.getElementById('pvCampaign') || {}).value || '',
+            campaign_name: (document.getElementById('pvCampaign')?.selectedOptions?.[0]?.textContent || '').trim(),
           }),
         });
         const d = await res.json();
@@ -4302,7 +4309,11 @@
         // The override changes which ids come back, so it belongs in the key —
         // otherwise toggling it would serve the previous answer from cache.
         const override = isSendRuleOverrideOn();
-        const key = workspaceId + '|' + JSON.stringify(f) + '|' + sample + '|' + override;
+        // The campaign belongs in the key too: it changes which ids come back
+        // (already-in-this-campaign contacts are excluded), so switching campaign
+        // must not serve the previous campaign's answer.
+        const campForKey = (document.getElementById('pvCampaign') || {}).value || '';
+        const key = workspaceId + '|' + JSON.stringify(f) + '|' + sample + '|' + override + '|' + campForKey;
         if (_sendableIdCache.key === key && _sendableIdCache.ids) return _sendableIdCache.ids;
         const res = await fetch('/api/contacts/sendability', {
           method: 'POST',
@@ -4313,6 +4324,11 @@
             filters: f,
             return_ids: true,
             override_send_rules: override,
+            // Target campaign — see refreshSendability. Without it the returned
+            // ids include contacts already in this campaign, so "select all
+            // sendable" hands the push thousands it will reject after verifying.
+            campaign_id: (document.getElementById('pvCampaign') || {}).value || '',
+            campaign_name: (document.getElementById('pvCampaign')?.selectedOptions?.[0]?.textContent || '').trim(),
             // Cover at least what is being selected, within the server cap.
             sample: Math.min(Math.max(parseInt(sample, 10) || 5000, 5000), 20000),
           }),
@@ -5618,6 +5634,16 @@
     function isSendRuleOverrideOn() {
       return !!document.getElementById('overrideSendRules')?.checked;
     }
+
+    // Changing the target campaign changes the answer: contacts already in that
+    // campaign are excluded from "sendable". Without this the badge kept the
+    // previous campaign's number, so the count shown was for a campaign the CM
+    // was no longer pushing to.
+    document.addEventListener('change', (e) => {
+      if (e.target && e.target.id === 'pvCampaign' && typeof refreshSendability === 'function') {
+        refreshSendability();
+      }
+    });
 
     // ── Push to PlusVibe ──────────────────────────────────────────
     // Build an auto campaign name from the currently-active filters (NOT the
