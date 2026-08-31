@@ -489,6 +489,26 @@ const ANTHROPIC_API_KEY      = process.env.ANTHROPIC_API_KEY      || '';
 const SLACK_SIGNING_SECRET   = process.env.SLACK_SIGNING_SECRET   || '';
 const ANTHROPIC_MODEL        = process.env.ANTHROPIC_MODEL        || 'claude-haiku-4-5-20251001';
 const NO2BOUNCE_KEY          = process.env.NO2BOUNCE_KEY          || 'ab55c5f1325ad50bf92850e030c16caa';
+
+// How far a contact must be "already pushed" before we skip it.
+//   'workspace' (default) — already in ANY campaign for this client. This is the
+//                           rule PlusVibe itself enforces: we send
+//                           skip_if_in_workspace:true, so PV drops a contact
+//                           already anywhere in that workspace and returns
+//                           leads_uploaded:0.
+//   'campaign'            — the old behaviour, per campaign only.
+//
+// Defaulted to 'workspace' after measuring the gap: 150,860 contacts across all
+// clients (9,090 for Hawthorne alone) passed the per-campaign gate, were fully
+// verified, were sent, and were silently discarded by PlusVibe because they were
+// already in that client's workspace. Every one a paid verification for a lead
+// that could never land.
+//
+// Reverting to 'campaign' ALSO requires sending skip_if_in_workspace:false, or
+// the waste simply returns. Defined here rather than beside the other push
+// constants because sendability (~line 16490) reads it and const is not hoisted.
+const PUSH_DEDUP_SCOPE = (process.env.PUSH_DEDUP_SCOPE || 'workspace').toLowerCase() === 'campaign'
+  ? 'campaign' : 'workspace';
 const STRIPE_SECRET_KEY      = process.env.STRIPE_SECRET_KEY      || '';
 const STRIPE_PUBLISHABLE_KEY = process.env.STRIPE_PUBLISHABLE_KEY || '';
 const STRIPE_WEBHOOK_SECRET  = process.env.STRIPE_WEBHOOK_SECRET  || '';
@@ -16487,8 +16507,13 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
       // renamed campaign, or a caller that passes no name, silently defeated
       // the name-only check and re-offered contacts PlusVibe already holds —
       // which it then drops as duplicates without saying so).
+      //
+      // Scope must match the push worker's, or the badge promises contacts the
+      // push then rejects. Default is WORKSPACE, mirroring PlusVibe's
+      // skip_if_in_workspace behaviour — see the push worker for the full note.
       if (workspaceId && pushed.some(pc => pc.workspace_id === workspaceId
-          && ((targetCampId && pc.campaign_id === targetCampId)
+          && (PUSH_DEDUP_SCOPE === 'workspace'
+           || (targetCampId && pc.campaign_id === targetCampId)
            || (targetCampLc && String(pc.campaign_name || '').toLowerCase() === targetCampLc)))) {
         skipped.alreadyInCampaign++; continue;
       }
@@ -23805,15 +23830,29 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
             && ((!c.keywords || c.keywords.trim() === '') || (!c.industry || c.industry.trim() === ''))) {
           skipped.missingEnrichment++; return false;
         }
-        // Bulletproof per-campaign dedup: check the full pushed_campaigns
-        // history, not just last_campaign_name (which only remembers the
-        // most-recent push and leaks when campaigns interleave).
+        // Dedup at the WORKSPACE level, because that is the rule PlusVibe
+        // actually enforces. We send skip_if_in_workspace:true, so PV silently
+        // drops any contact already anywhere in that client's workspace and
+        // returns leads_uploaded:0 — while our own gate only asked "is this
+        // contact in THIS campaign?".
+        //
+        // A contact pushed to Hawthorne campaign A therefore sailed through the
+        // gate when pushing campaign B, got fully verified, got sent, and was
+        // discarded by PlusVibe. Measured: 9,090 such contacts for Hawthorne
+        // alone, 150,860 across all clients — every one a paid verification for
+        // a lead that could never land.
+        //
+        // PUSH_DEDUP_SCOPE=campaign restores the old per-campaign behaviour, for
+        // which PV must also be sent skip_if_in_workspace:false or the waste
+        // simply returns.
         const pushed = Array.isArray(c.pushed_campaigns)
           ? c.pushed_campaigns
           : (typeof c.pushed_campaigns === 'string' ? JSON.parse(c.pushed_campaigns || '[]') : []);
         if (pushed.some(p =>
           p.workspace_id === job.workspace_id &&
-          (p.campaign_id === job.campaign_id || (targetCampLc && (p.campaign_name || '').toLowerCase() === targetCampLc))
+          (PUSH_DEDUP_SCOPE === 'workspace'
+            || p.campaign_id === job.campaign_id
+            || (targetCampLc && (p.campaign_name || '').toLowerCase() === targetCampLc))
         )) { skipped.alreadyInCampaign++; return false; }
         // Legacy guard kept for contacts imported pre-pushed_campaigns —
         // last_campaign_name comes from PlusVibe CSV imports.

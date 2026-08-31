@@ -5259,7 +5259,10 @@
       departed:          'Left the company',
       missingName:       'No first/last name',
       missingEnrichment: 'No keywords or industry',
-      alreadyInCampaign: 'Already in this campaign',
+      // Dedup is workspace-scoped (matching PlusVibe's skip_if_in_workspace),
+      // so this now means "already in one of this client's campaigns", not just
+      // the one being pushed. The old wording made the count look wrong.
+      alreadyInCampaign: 'Already sent for this client',
       cooldownWorkspace: 'In 30-day client cooldown',
       verticalCollision: 'Same-vertical lockout',
       burstGap:          'Too soon after another client',
