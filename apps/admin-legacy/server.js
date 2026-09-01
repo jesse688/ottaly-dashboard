@@ -11556,8 +11556,17 @@ async function reconcileBisonReplies() {
     // an id stored for workspace B and silently abandon the rest of the page.
     // That is how a genuine "Interested" reply to Hayes & Co went missing while
     // auto-replies either side of it came through.
+    // Also select PV's own email id out of `raw`. The portal's pv-reconcile
+    // writes the SAME email with bison_reply_id = `pv_<RFC Message-ID>`, so
+    // matching on bison_reply_id alone never recognised a row the portal had
+    // already stored — and both copies landed. Whichever key a row was written
+    // under, `raw->>'id'` is PlusVibe's id and is identical across both feeds,
+    // so seeding the seen-set with it makes this poll idempotent against the
+    // portal's writes. (2026-09-01: this is what produced 584 duplicate replies
+    // and 18 double-billed leads.)
     const existing = await pgdb.query(
-      `SELECT workspace_id, bison_reply_id FROM unibox_replies WHERE received_at >= $1`,
+      `SELECT workspace_id, bison_reply_id, raw->>'id' AS pv_id
+         FROM unibox_replies WHERE received_at >= $1`,
       [since]
     );
     const seenByWs = new Map();
@@ -11566,6 +11575,7 @@ async function reconcileBisonReplies() {
       let s = seenByWs.get(k);
       if (!s) { s = new Set(); seenByWs.set(k, s); }
       s.add(String(r.bison_reply_id));
+      if (r.pv_id) s.add(String(r.pv_id));
     }
 
     for (const ws of PV_WORKSPACES) {
@@ -11617,12 +11627,23 @@ async function reconcileBisonReplies() {
             if (pvWarmRe && pvWarmRe.test(warmupHay)) continue;    // PlusVibe's own warm-ups
 
             seen.add(replyId);
+            // Guard against the portal having written this same email under its
+            // own key (`pv_<Message-ID>`) since the seen-set was built a moment
+            // ago. A unique index on raw->>'id' cannot be used here: both
+            // writers' ON CONFLICT names (bison_team_id, bison_reply_id), and a
+            // violation on a DIFFERENT index raises instead of being ignored,
+            // which would kill ingestion outright. The WHERE NOT EXISTS keeps
+            // the insert a no-op instead.
             await pgdb.query(`
               INSERT INTO unibox_replies
                 (bison_team_id, bison_reply_id, lead_email,
                  workspace_id, sender_email, mailbox_email, subject, body_preview, category, folder,
                  received_at, raw, ingest_source, campaign_id)
-              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'inbox',$10,$11,'pv-reconciler',$12)
+              SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,'inbox',$10,$11,'pv-reconciler',$12
+              WHERE NOT EXISTS (
+                SELECT 1 FROM unibox_replies
+                 WHERE workspace_id = $4 AND raw->>'id' = $2
+              )
               ON CONFLICT (bison_team_id, bison_reply_id) DO NOTHING
             `, [
               workspaceId,
