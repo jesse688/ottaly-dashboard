@@ -22,8 +22,22 @@ function authed(req: NextRequest): Promise<boolean> | boolean {
   return getAdminSession().then(s => !!s)
 }
 
+// Grouped by PlusVibe's OWN email id (raw->>'id'), which is identical for the
+// same email no matter which feed stored it — the only trustworthy identity.
+//
+// It used to group on (workspace_id, lead_email, subject). That was wrong in
+// BOTH directions:
+//   • too narrow — the two writers resolve lead_email differently (the address
+//     that REPLIED vs the one CONTACTED, ben@ vs info@), so it saw only 35 of
+//     584 real duplicates on 2026-09-01;
+//   • too wide — it flagged genuinely SEPARATE emails that merely share a
+//     sender and subject (repeat marketing sends: 3 distinct PV ids and 3
+//     distinct received_at values for one address), and would have deleted
+//     real replies.
+// Rows without a PV id are skipped rather than guessed at.
 const GROUP_SQL = `
   SELECT workspace_id, lower(lead_email) AS lead, COALESCE(subject,'') AS subj,
+         raw->>'id' AS pv_id,
          COUNT(*)::int AS n,
          json_agg(json_build_object(
            'id', id, 'team', bison_team_id, 'reply_id', bison_reply_id,
@@ -34,7 +48,8 @@ const GROUP_SQL = `
            'created_at', created_at
          ) ORDER BY created_at) AS rows
     FROM unibox_replies
-   GROUP BY workspace_id, lower(lead_email), COALESCE(subject,'')
+   WHERE raw->>'id' IS NOT NULL
+   GROUP BY workspace_id, raw->>'id', lower(lead_email), COALESCE(subject,'')
   HAVING COUNT(*) > 1
    ORDER BY COUNT(*) DESC
    LIMIT 500
@@ -73,8 +88,11 @@ export async function POST(req: NextRequest) {
     //   5. PlusVibe API source as a gentle tiebreaker between two PV copies
     //   6. clearly-legacy imports (winnr one-offs, retired Bison, dead pv-other)
     //      are penalised so they always lose to a live PlusVibe row.
-    // NOTE: the deeper cause is TWO reconcilers writing this table (pv-api +
-    // an external 'pv-reconciler'); this scoring only cleans the symptom.
+    // NOTE: the deeper cause — TWO reconcilers writing this table (pv-api +
+    // admin-legacy's 'pv-reconciler') under incompatible dedup keys — was fixed
+    // at source on 2026-09-01 (PRs #77/#78): admin-legacy now recognises the
+    // portal's rows, and the portal adopts admin-legacy's. This endpoint is now
+    // a safety net for anything that slips through, not the primary defence.
     const LEGACY = new Set(['winnr', 'bison', 'bison-webhook', 'pv-other'])
     const score = (x: Row) =>
       (x.marked_as_lead ? 1000 : 0) +
