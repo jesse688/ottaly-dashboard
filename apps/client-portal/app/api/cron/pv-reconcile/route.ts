@@ -271,6 +271,24 @@ export async function GET(req: NextRequest) {
       // the two feeds gave different ids — the email then showed in Review AND Leads.
       const dedupeKey = stableEmailKey(e)
 
+      // admin-legacy's pv-reconciler stores this SAME email keyed on PlusVibe's
+      // raw id, NOT on our Message-ID key — so ON CONFLICT below never matches
+      // its row and we used to insert a second copy of an email already in the
+      // unibox. Heal that row instead: adopt it by rewriting its key to ours, so
+      // this and every future run collapse onto the one row. (2026-09-01: this
+      // is what produced 584 duplicate replies and 18 double-billed leads.)
+      if (e.id) {
+        await pool.query(
+          `UPDATE unibox_replies SET bison_reply_id = $1, last_seen_at = NOW(), updated_at = NOW()
+            WHERE workspace_id = $2 AND raw->>'id' = $3 AND bison_reply_id <> $1
+              AND NOT EXISTS (
+                SELECT 1 FROM unibox_replies x
+                 WHERE x.bison_team_id = $2 AND x.bison_reply_id = $1
+              )`,
+          [dedupeKey, ws, String(e.id)]
+        ).catch(err => console.error(`[pv-reconcile] adopt failed ws=${ws} id=${e.id}:`, err))
+      }
+
       const ins = await pool.query(
         `INSERT INTO unibox_replies
            (bison_team_id, bison_reply_id, workspace_id, client_id, lead_email, sender_email,
