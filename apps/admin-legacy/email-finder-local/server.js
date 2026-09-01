@@ -1444,6 +1444,22 @@ async function callReacherOnce(email, job = null) {
         m.consecutiveFailures = 0;
       }
       const mapped = mapReacherResult(email, data);
+      // A proxy concurrency rejection means we exceeded an account's 5-session
+      // limit, which the per-container pools are supposed to make impossible.
+      // Log the pool state AT THE MOMENT OF REJECTION so the next occurrence
+      // names its own cause instead of being reconstructed from guesswork:
+      // which container was used, how many slots each pool believed were in
+      // use, and how many sockets are actually open. If the pool numbers look
+      // legal while the proxy disagrees, the limit is being exceeded by
+      // something outside this semaphore.
+      const smtpErr = smtpErrorText(data);
+      if (smtpErr && /concurrency limit/i.test(smtpErr)) {
+        const st = reacherSlotStats();
+        console.error(`[Reacher] CONCURRENCY REJECT via ${slotBase || 'primary'} — `
+          + `pools ${JSON.stringify(st.perContainer)} (cap ${st.perContainerCap}/container, `
+          + `${st.active} active, ${st.queued} queued). If a pool shows <= its cap here, the `
+          + `account limit is being consumed by a caller outside this semaphore.`);
+      }
       // Track the outcome even on the success path: a timeout comes back as a
       // perfectly valid response with status 'unknown', which is exactly how
       // three hours of dead verification went unnoticed.
