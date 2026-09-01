@@ -1,1 +1,1 @@
-redeploy: 2026-08-01 pg pool-slot leak fix — query/statement timeouts + keepAlive, pool telemetry, mark-as-lead early release
+redeploy: 2026-09-01 unibox dedup cleaner keyed on PlusVibe's email id (PR #79) — the old sender+subject key would have deleted real replies
