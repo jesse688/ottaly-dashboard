@@ -22,8 +22,9 @@ const money = (n: number | null) => (n == null ? '—' : '$' + n.toFixed(2))
 // Top-border color per supplier/type (legacy stat-card accents).
 const ACCENT: Record<string, string> = {
   Maildoso: '#10B981', Mithun: '#F59E0B', Winnr: '#6366F1', Inboxing: '#7C89CD',
-  'Winnr Generic': '#8B5CF6', 'Google Generic': '#4285F4',
-  Unassigned: '#9CA3AF', google: '#EA4335', 'google generic': '#FBBC04', microsoft: '#0078D4', smtp: '#475569',
+  'Winnr Generic': '#8B5CF6', 'Google Generic': '#4285F4', 'Google New': '#34A853',
+  Unassigned: '#9CA3AF', google: '#EA4335', 'google generic': '#FBBC04', 'google new': '#34A853',
+  microsoft: '#0078D4', smtp: '#475569',
 }
 
 interface DaySeries { sent: number[]; replies: number[]; ooo: number[]; bounces: number[]; contacted: number[] }

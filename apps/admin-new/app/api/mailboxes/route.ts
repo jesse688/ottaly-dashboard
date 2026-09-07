@@ -102,18 +102,28 @@ export async function GET() {
       needs_attention: mailboxes.filter(m => m.attention.length > 0).length,
     }
 
-    // "Google Generic" is a TIER of google mailbox, not a supplier — flagged by a
-    // PlusVibe tag ("Google generic" / "GenericGoogle"). We keep type='google' in
-    // the data (so pricing/filters/enums don't break) but split the type dimension
-    // into 'google' (standard) vs 'google generic' for the performance cards.
-    const isGenericGoogle = new Set(
-      mbRes.rows
-        .filter(r => (r.type === 'google') && Array.isArray(r.tags) &&
-          r.tags.some((t: string) => { const n = (t || '').toLowerCase().replace(/[^a-z0-9]/g, ''); return n.includes('google') && n.includes('generic') }))
-        .map(r => r.email as string)
-    )
-    // Effective type key: generic-tagged google → 'google generic', else the raw type.
-    const typeKey = (m: Mailbox) => (m.type === 'google' && isGenericGoogle.has(m.email)) ? 'google generic' : (m.type || null)
+    // "Google Generic" / "Google New" are TIERS of google mailbox, not suppliers —
+    // each flagged by a PlusVibe tag. We keep type='google' in the data (so
+    // pricing/filters/enums don't break) but split the type dimension into
+    // 'google' (standard) vs 'google generic' / 'google new' for the perf cards.
+    // Fuzzy match: normalize the tag then require ALL the rule's words, so
+    // "Google New", "New Google", "GoogleNew" and "Google new" all match — while
+    // "New Winnr" / "MS New" (no 'google') do not. Mirrors GOOGLE_TIER_RULES in
+    // lib/mailbox-sync.ts; keep the two in step.
+    const GOOGLE_TIER_RULES: { needs: string[]; key: string }[] = [
+      { needs: ['google', 'generic'], key: 'google generic' },
+      { needs: ['google', 'new'], key: 'google new' },
+    ]
+    // email → tier key, for the google boxes that carry a tier tag.
+    const googleTier = new Map<string, string>()
+    for (const r of mbRes.rows) {
+      if (r.type !== 'google' || !Array.isArray(r.tags)) continue
+      const norm = (r.tags as string[]).map(t => (t || '').toLowerCase().replace(/[^a-z0-9]/g, ''))
+      const hit = GOOGLE_TIER_RULES.find(rule => norm.some(t => rule.needs.every(w => t.includes(w))))
+      if (hit) googleTier.set(r.email as string, hit.key)
+    }
+    // Effective type key: tiered google → 'google <tier>', else the raw type.
+    const typeKey = (m: Mailbox) => (m.type === 'google' ? (googleTier.get(m.email) ?? m.type) : (m.type || null))
 
     const stats = {
       bySupplier: groupStats(mailboxes, m => m.supplier || 'Unassigned'),
