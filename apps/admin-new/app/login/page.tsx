@@ -1,15 +1,32 @@
 'use client'
 
-import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { Suspense, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 
+// useSearchParams opts the tree into client-side rendering, so Next requires a
+// Suspense boundary above it or the /login prerender fails the build.
 export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginForm />
+    </Suspense>
+  )
+}
+
+function LoginForm() {
   const [key, setKey] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const router = useRouter()
+  const params = useSearchParams()
+  // The middleware redirects gated pages here as /login?next=<path>, and the
+  // Mailboxes write-refused prompt links here the same way. Send the user back
+  // where they were trying to go. Only a same-origin absolute path is accepted
+  // ("/x", never "//host" or "https://…") so this can't become an open redirect.
+  const raw = params.get('next') ?? ''
+  const next = raw.startsWith('/') && !raw.startsWith('//') ? raw : '/contacts'
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -25,7 +42,7 @@ export default function LoginPage() {
         setError('Invalid key')
         return
       }
-      router.push('/contacts')
+      router.push(next)
       router.refresh()
     } catch {
       setError('Something went wrong')
