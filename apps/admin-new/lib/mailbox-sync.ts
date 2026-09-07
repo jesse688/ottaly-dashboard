@@ -21,23 +21,52 @@ const PV_KEY = process.env.PLUSVIBE_KEY ?? ''
 const SUPPLIERS_ALLOWED = ['Maildoso', 'Mithun', 'Winnr', 'Inboxing']
 
 // ── PlusVibe fetch (rate-limited, retry on 429) ──────────────────────────────
-let lastPv = 0
+// The pacing here has to be a real queue, not a timestamp check. The old version
+// read a shared `lastPv`, computed a wait and then fired — so the 8 concurrent
+// callers from mapPool all read the SAME value, all waited the same tiny amount
+// and all hit PlusVibe together. The 120ms spacer was effectively 8-at-once,
+// which is what produced sustained 429s (267 in 40 minutes, measured) and
+// starved the mailbox sync: pvFetch gives up after 4 attempts and returns null,
+// so the backfill silently wrote nothing.
+//
+// Chaining every call onto one promise makes the gap actually hold no matter how
+// many callers there are. PV_GAP_MS is the floor between requests; on a 429 we
+// back off AND widen the floor for a while, so a rate-limited window slows the
+// whole queue down instead of each caller retrying into the same wall.
+const PV_GAP_MS = 250
+let pvChain: Promise<unknown> = Promise.resolve()
+let pvPenaltyUntil = 0
+function pvGate<T>(fn: () => Promise<T>): Promise<T> {
+  const run = pvChain.then(async () => {
+    const gap = Date.now() < pvPenaltyUntil ? PV_GAP_MS * 4 : PV_GAP_MS
+    await new Promise(r => setTimeout(r, gap))
+    return fn()
+  })
+  // Keep the chain alive even if this call rejects.
+  pvChain = run.then(() => undefined, () => undefined)
+  return run
+}
+
 async function pvFetch<T>(path: string): Promise<T | null> {
   if (!PV_KEY) return null
-  const wait = 120 - (Date.now() - lastPv)
-  if (wait > 0) await new Promise(r => setTimeout(r, wait))
-  lastPv = Date.now()
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const res = await fetch(`${PV_BASE}${path}`, {
-      headers: { 'x-api-key': PV_KEY },
-      signal: AbortSignal.timeout(20000),
-    }).catch(() => null)
-    if (!res) return null
-    if (res.status === 429) { await new Promise(r => setTimeout(r, 2000 * (attempt + 1))); continue }
-    if (!res.ok) return null
-    return await res.json() as T
-  }
-  return null
+  return pvGate(async () => {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const res = await fetch(`${PV_BASE}${path}`, {
+        headers: { 'x-api-key': PV_KEY },
+        signal: AbortSignal.timeout(20000),
+      }).catch(() => null)
+      if (!res) return null
+      if (res.status === 429) {
+        // Widen the gap for everyone queued behind us, then back off.
+        pvPenaltyUntil = Date.now() + 30_000
+        await new Promise(r => setTimeout(r, 2000 * (attempt + 1)))
+        continue
+      }
+      if (!res.ok) return null
+      return await res.json() as T
+    }
+    return null
+  })
 }
 
 // Per-mailbox real stats from PlusVibe email-stats (filtered by email_acc_id).
@@ -90,9 +119,26 @@ export async function backfillSupplierDaily(days = 30): Promise<{ ok: boolean; m
       c.sent += r.sent; c.replies += r.replies; c.ooo += r.ooo; c.bounces += r.bounces; c.contacted += r.contacted
       agg.set(k, c)
     }
-    const charts = await mapPool(rows, 8, m => fetchMailboxDailyChart(m.workspace_id, m.account_id, start, end).catch(() => [] as DayRow[]))
+    // Concurrency is now bounded by pvGate (calls are serialized), so a big pool
+    // just queues. Keep it small and honest.
+    // A failed chart fetch must NOT be treated as "this mailbox sent nothing":
+    // that silently understates every group it belongs to. Track failures and
+    // refuse to write a corrupt snapshot below.
+    let failed = 0
+    const charts = await mapPool(rows, 3, m =>
+      fetchMailboxDailyChart(m.workspace_id, m.account_id, start, end)
+        .catch(() => { failed++; return null as DayRow[] | null })
+    )
+    if (failed) console.warn(`[backfill] ${failed}/${rows.length} mailbox chart fetches failed`)
+    // If a large share failed (PlusVibe rate-limiting us, typically), the totals
+    // would be wrong in a way nobody can see on the page. Bail instead.
+    if (rows.length && failed / rows.length > 0.1) {
+      const msg = `backfill aborted: ${failed}/${rows.length} PlusVibe chart fetches failed (rate limited?)`
+      console.error(`[backfill] ${msg}`)
+      return { ok: false, mailboxes: rows.length, rows: 0, error: msg }
+    }
     rows.forEach((m, i) => {
-      for (const day of charts[i]) {
+      for (const day of charts[i] ?? []) {
         if (!day.sent && !day.replies && !day.bounces) continue
         add('supplier', m.supplier || 'Unassigned', day.date, day)
         add('type', typeDimKey(m.type, m.tags), day.date, day)
@@ -376,10 +422,18 @@ function computeAttention(m: FullMailbox): Array<{ level: string; msg: string }>
 
 // Run a full sync and upsert mailbox_full. Returns the row count.
 export async function syncMailboxes(): Promise<{ ok: boolean; count: number; error?: string }> {
-  // mark running
-  await pool.query(`UPDATE mailbox_sync_state SET running = TRUE WHERE id = 1`).catch(() => {})
-  // Self-heal the tags column (schema is applied manually; this avoids a psql step).
+  // mark running, and stamp WHEN so the claim can expire. running=TRUE is only
+  // ever cleared on success or a caught error, so a process that dies mid-sync
+  // (redeploy, OOM, crash) used to leave the flag set forever and the UI stuck
+  // on "syncing" — with no way back short of a manual UPDATE. The heartbeat
+  // below refreshes this stamp; anything older than STALE_SYNC_MIN is a corpse.
+  // Self-heal the schema first (applied manually; this avoids a psql step) — the
+  // running_since column has to exist before the UPDATE below can set it.
   await pool.query(`ALTER TABLE mailbox_full ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}'`).catch(() => {})
+  await pool.query(`ALTER TABLE mailbox_sync_state ADD COLUMN IF NOT EXISTS running_since TIMESTAMPTZ`).catch(() => {})
+  await pool.query(
+    `UPDATE mailbox_sync_state SET running = TRUE, running_since = now() WHERE id = 1`
+  ).catch(() => {})
   try {
     const raw = await listSendingMailboxes()
     if (!raw.length) {
@@ -416,7 +470,8 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
     const end = new Date().toISOString().slice(0, 10)
     const start = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
     const withAcc = raw.filter(m => m.account_id && m.workspace_id)
-    const statsList = await mapPool(withAcc, 8, m =>
+    // pvGate serializes these anyway; a wide pool only builds a queue.
+    const statsList = await mapPool(withAcc, 3, m =>
       fetchMailboxStats(m.workspace_id as string, m.account_id as string, start, end).catch(() => null)
     )
     const statsByEmail = new Map<string, MbStats>()
@@ -600,6 +655,12 @@ let _mbJobRunning = false
 async function runSyncThenMaybeBackfill(backfillDays: number) {
   if (_mbJobRunning) return
   _mbJobRunning = true
+  // Keep running_since fresh while we work, so "is a sync alive?" can be
+  // answered from the DB by any process. Without this the flag is unfalsifiable
+  // after a crash. 60s beats the 15-min staleness cutoff comfortably.
+  const beat = setInterval(() => {
+    void pool.query(`UPDATE mailbox_sync_state SET running_since = now() WHERE id = 1 AND running`).catch(() => {})
+  }, 60_000)
   try {
     await syncMailboxes()
     // ALWAYS refresh today (+yesterday) so today's daily counts are real, not 0.
@@ -608,12 +669,38 @@ async function runSyncThenMaybeBackfill(backfillDays: number) {
   } catch (e) {
     console.error('[mailbox-scheduler]', e instanceof Error ? e.message : e)
   } finally {
+    clearInterval(beat)
     _mbJobRunning = false
+    // Whatever happened, this process is no longer syncing. Release the claim so
+    // a thrown error inside syncMailboxes (which sets running=FALSE itself) or a
+    // failure in the backfill can never strand the flag.
+    await pool.query(`UPDATE mailbox_sync_state SET running = FALSE WHERE id = 1`).catch(() => {})
   }
+}
+
+// Release a claim left by a process that died mid-sync. Called at boot: if the
+// flag is set but the heartbeat has not been touched for STALE_SYNC_MIN, no
+// live process owns it. Bounded by the heartbeat above, so this can only ever
+// reap a corpse — a genuinely running sync refreshes the stamp every 60s.
+const STALE_SYNC_MIN = 15
+async function clearStaleSyncClaim(): Promise<void> {
+  await pool.query(`ALTER TABLE mailbox_sync_state ADD COLUMN IF NOT EXISTS running_since TIMESTAMPTZ`).catch(() => {})
+  const r = await pool.query(
+    `UPDATE mailbox_sync_state
+        SET running = FALSE,
+            last_error = COALESCE(last_error, 'sync did not finish (process restarted)')
+      WHERE id = 1 AND running
+        AND (running_since IS NULL OR running_since < now() - ($1 || ' minutes')::interval)
+      RETURNING 1`,
+    [String(STALE_SYNC_MIN)]
+  ).catch(() => null)
+  if (r?.rowCount) console.log('[mailbox-scheduler] cleared a stale sync claim from a previous process')
 }
 export function startMailboxSyncInterval(): void {
   if (_mbSchedulerStarted) return
   _mbSchedulerStarted = true
+  // A previous process may have died mid-sync and left running=TRUE behind.
+  void clearStaleSyncClaim()
   // Initial run shortly after boot: sync + a full 90-day backfill.
   setTimeout(() => { void runSyncThenMaybeBackfill(90) }, 15_000)
   // Every 30 min: sync + a SHORT 2-day backfill so today's per-day counts stay

@@ -425,7 +425,7 @@ export default function MailboxesPage() {
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: C.muted, margin: '0 0 .5rem' }}>By provider type (Google / Microsoft / SMTP)</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: '1rem' }}>
-                {data.stats.byType.map(g => <ProviderCard key={g.key} g={g} accent={ACCENT[g.key] || C.navy} days={typeHistory?.days ?? []} ds={typeHistory?.series[g.key]} leads={leads?.byType[g.key]} />)}
+                {data.stats.byType.map(g => <ProviderCard key={g.key} g={g} accent={ACCENT[g.key] || C.navy} days={typeHistory?.days ?? []} ds={typeHistory?.series[g.key]} leads={leads?.byType[g.key]} periodDays={periodDays} />)}
               </div>
             </div>
 
@@ -433,7 +433,7 @@ export default function MailboxesPage() {
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: C.muted, margin: '0 0 .5rem' }}>By supplier (Winnr / Maildoso / Mithun)</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: '1rem' }}>
-                {data.stats.bySupplier.map(g => <ProviderCard key={g.key} g={g} accent={ACCENT[g.key] || C.navy} days={history?.days ?? []} ds={history?.series[g.key]} leads={leads?.bySupplier[g.key]} />)}
+                {data.stats.bySupplier.map(g => <ProviderCard key={g.key} g={g} accent={ACCENT[g.key] || C.navy} days={history?.days ?? []} ds={history?.series[g.key]} leads={leads?.bySupplier[g.key]} periodDays={periodDays} />)}
               </div>
             </div>
 
@@ -628,12 +628,20 @@ const sum = (a: number[] | undefined) => (a ?? []).reduce((s, v) => s + v, 0)
 // Combined per-group card: window-total stats (SENT, human RR, RR+OOO, bounce)
 // + a toggleable daily multi-line chart (Sent / RR human / RR+OOO). Click a
 // legend item to hide/show that series — see results per day for what's left.
-function ProviderCard({ g, accent, days, ds, leads }: { g: MailboxGroupStats; accent: string; days: string[]; ds?: DaySeries; leads?: number }) {
+function ProviderCard({ g, accent, days, ds, leads, periodDays }: { g: MailboxGroupStats; accent: string; days: string[]; ds?: DaySeries; leads?: number; periodDays: number }) {
   const [hidden, setHidden] = useState<Set<string>>(new Set())
   const toggle = (k: string) => setHidden(p => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n })
 
-  // Window totals (from the daily series if present, else the point-in-time agg).
-  const tSent = ds ? sum(ds.sent) : g.total_sent
+  // Window totals come from the daily series. Without it we have no per-day
+  // numbers at all: g.total_sent is a FIXED 30-day total from mailbox_full, so
+  // rendering it under a "Today" or "7d" heading states a number that is simply
+  // not what the label says (a brand-new group showed 30 days of sends as
+  // "today", with 0.00% rates because the replies had no matching series).
+  // Show it only when the window IS 30 days, and otherwise report "no data yet"
+  // rather than a figure for the wrong period.
+  const noSeries = !ds
+  const fallbackUsable = noSeries && periodDays === 30
+  const tSent = ds ? sum(ds.sent) : (fallbackUsable ? g.total_sent : 0)
   const tReplies = ds ? sum(ds.replies) : 0
   const tOoo = ds ? sum(ds.ooo) : 0
   const tBounces = ds ? sum(ds.bounces) : 0
@@ -662,11 +670,13 @@ function ProviderCard({ g, accent, days, ds, leads }: { g: MailboxGroupStats; ac
     <div style={{ background: '#fff', border: '1px solid #E2E6F0', borderRadius: 10, padding: '1rem 1.1rem', borderTop: `3px solid ${accent}` }}>
       <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>{g.key} · <span style={{ color: '#6B7280', fontWeight: 500 }}>{g.count} mailboxes</span></div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 8, marginBottom: 10 }}>
-        <Stat v={tSent.toLocaleString()} l="Sent" />
+        {/* With no daily series there is nothing true to show for this window —
+            an em dash beats a 0.00% that reads as "this group gets no replies". */}
+        <Stat v={noSeries && !fallbackUsable ? '—' : tSent.toLocaleString()} l="Sent" />
         <Stat v={leads == null ? '—' : leads.toLocaleString()} l="Leads" color="#7C3AED" />
-        <Stat v={(human * 100).toFixed(2) + '%'} l="RR (human)" color="#16A34A" />
-        <Stat v={(withOoo * 100).toFixed(2) + '%'} l="RR incl. OOO" color="#3B82F6" />
-        <Stat v={(bounceRate * 100).toFixed(2) + '%'} l="Bounce" />
+        <Stat v={noSeries ? '—' : (human * 100).toFixed(2) + '%'} l="RR (human)" color="#16A34A" />
+        <Stat v={noSeries ? '—' : (withOoo * 100).toFixed(2) + '%'} l="RR incl. OOO" color="#3B82F6" />
+        <Stat v={noSeries ? '—' : (bounceRate * 100).toFixed(2) + '%'} l="Bounce" />
       </div>
       {days.length > 1 ? (
         <>
