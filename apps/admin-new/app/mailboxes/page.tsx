@@ -284,12 +284,13 @@ export default function MailboxesPage() {
 
         {msg && <div style={{ marginBottom: 12, background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: C.navy }}>{msg}</div>}
 
-        {/* A write was refused because there is no admin session. Viewing this page
-            needs no login, so this is the first point the user learns that. */}
+        {/* A write was refused (no admin session). There is no login to send the
+            user to in practice, and they don't need one: the scheduler already
+            syncs + backfills on boot and every 30 min, so the buttons are a
+            manual nudge, not the only path. Say that instead of demanding a login. */}
         {needsAuth && (
-          <div style={{ marginBottom: 12, background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#92400E' }}>
-            You need to be logged in to sync or backfill. Viewing is open, changes are not.{' '}
-            <a href="/login?next=/mailboxes" style={{ color: '#92400E', fontWeight: 600 }}>Log in</a>, then try again.
+          <div style={{ marginBottom: 12, background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: C.navy }}>
+            Manual sync is locked down, but nothing is stuck — the server syncs and rebuilds these charts by itself every 30 minutes.
           </div>
         )}
 
