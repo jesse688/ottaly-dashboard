@@ -55,13 +55,16 @@ function LoginForm() {
     <div className="min-h-screen bg-gray-900 flex items-center justify-center">
       <div className="bg-white rounded-xl p-8 w-full max-w-sm shadow-xl">
         <div className="mb-6">
-          <h1 className="text-xl font-semibold text-gray-900">Ottaly Admin</h1>
-          <p className="text-sm text-gray-500 mt-1">Enter your admin key to continue</p>
+          <h1 className="text-xl font-semibold text-gray-900">Ottaly</h1>
+          {/* One field takes EITHER key — roleForKey() resolves which role you
+              get. Saying "admin key" made CMs think they had no way in, so the
+              copy names both. Finance/Revenue stay behind their own passphrase. */}
+          <p className="text-sm text-gray-500 mt-1">Sign in with your admin or campaign manager key</p>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">
           <Input
             type="password"
-            placeholder="Admin key"
+            placeholder="Admin or campaign manager key"
             value={key}
             onChange={e => setKey(e.target.value)}
             autoFocus
