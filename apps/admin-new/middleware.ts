@@ -7,19 +7,22 @@ const SECRET = new TextEncoder().encode(
 const COOKIE = 'ottaly_session'
 const FIN_COOKIE = 'ottaly_fin'
 
-// Access model: PAGES are open, WRITES are not.
+// Access model: EVERYTHING requires a login. Deny by default.
 //
-// CMs do not log in, so every *page* renders without a session. But the API is
-// deny-by-default: any request that can mutate data, spend money, send mail or
-// expose credentials still requires the admin login. Read-only GETs stay open so
-// the public pages can fetch their data.
+// This previously ran "pages open, writes closed" on the premise that CMs do not
+// log in. That premise is obsolete — there is a CM role and a CM_KEY, so CMs can
+// sign in — and the open pages meant dev.ottaly.co.uk served real client data to
+// anyone who knew the hostname: /contacts returned contact PII (names, emails,
+// employers, LinkedIn), /clients returned client names with volumes and reply
+// rates. Subdomains are not secret; they show up in certificate-transparency
+// logs. admin-legacy has always gated its whole site; this brings admin-new in
+// line rather than leaving the newer app as the weaker door.
 //
-// Rationale: a public page is a disclosure risk; a public POST/DELETE is a live
-// production hazard (contact deletion, campaign injection, paid-API spend). The
-// two are separated deliberately — do NOT collapse them back together.
+// Only PUBLIC_PATHS below stay reachable without a session. Adding to that list
+// puts real client data back on the open internet — do not add a page to it.
 //
-// Finance + Revenue keep their separate FINANCE_KEY passphrase (12h unlock).
-// Settings + Commission require the normal admin login.
+// Finance + Revenue keep their separate FINANCE_KEY passphrase (12h unlock) ON
+// TOP of the login. Settings + Commission require the admin role specifically.
 const FINANCE_PATHS = ['/finance', '/revenue', '/api/finance', '/api/revenue']
 const ADMIN_PATHS = [
   '/admin-settings',
@@ -30,30 +33,21 @@ const ADMIN_PATHS = [
   '/api/admin',
 ]
 
-// APIs that stay fully open regardless of method — they self-protect or are
-// needed to sign in. /api/auth mints sessions; /api/auth/finance checks its own
-// session internally; the cron enforce endpoint validates ?key=ADMIN_KEY itself.
-const OPEN_API_PATHS = [
+// The ONLY things reachable without a session. Everything else — every page and
+// every API — needs the login. Each entry here is deliberate:
+//   /login              the sign-in page itself, or there is no way in
+//   /unlock             the finance passphrase prompt (its own gate)
+//   /api/auth           mints the session; /api/auth/finance self-checks
+//   /api/healthz        deploy verification (returns {ok, sha, ts, db} only)
+//   /api/data/esp-matching/enforce  cron endpoint, validates ?key=ADMIN_KEY itself
+// /api/metrics was public and is NOT any more — it exposed operational data with
+// no login and nothing external scrapes it.
+const PUBLIC_PATHS = [
+  '/login',
+  '/unlock',
   '/api/auth',
   '/api/healthz',
-  '/api/metrics',
   '/api/data/esp-matching/enforce',
-]
-
-// Read-only GETs are public (pages need them), but these leak credentials or raw
-// upstream payloads, so they require a login even for GET.
-const SENSITIVE_GET_PATHS = [
-  '/api/debug',
-  '/api/stats/debug',
-  '/api/stats/reconcile',
-  '/api/mailboxes/tags-debug',
-  '/api/mailboxes/mb-debug',
-  // Bulk PII exports — full contact/lead dumps.
-  '/api/database/contacts',
-  '/api/data/database/contacts',
-  '/api/data/contacts/export',
-  '/api/data/engine-leads/export',
-  '/api/apollo-prep/contacts/export',
 ]
 
 function matchesPrefix(pathname: string, paths: string[]): boolean {
@@ -63,31 +57,24 @@ function matchesPrefix(pathname: string, paths: string[]): boolean {
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl
 
-  const needsFinance = matchesPrefix(pathname, FINANCE_PATHS)
-  let needsAdmin = matchesPrefix(pathname, ADMIN_PATHS)
-
-  // API deny-by-default: everything except safe read-only GETs needs a login.
-  if (!needsFinance && !needsAdmin && pathname.startsWith('/api/')) {
-    if (!matchesPrefix(pathname, OPEN_API_PATHS)) {
-      const isRead = req.method === 'GET' || req.method === 'HEAD'
-      if (!isRead || matchesPrefix(pathname, SENSITIVE_GET_PATHS)) {
-        needsAdmin = true
-      }
-    }
-  }
-
-  // Pages (and safe read-only API GETs) are public — no session required.
-  if (!needsFinance && !needsAdmin) {
+  // The sign-in page and the few self-protecting endpoints are the only way in.
+  if (matchesPrefix(pathname, PUBLIC_PATHS)) {
     return NextResponse.next()
   }
 
-  // Gated routes still require a valid login session.
+  const needsFinance = matchesPrefix(pathname, FINANCE_PATHS)
+  const needsAdmin = matchesPrefix(pathname, ADMIN_PATHS)
+
+  // Everything else needs a valid session — pages and APIs alike.
   const token = req.cookies.get(COOKIE)?.value
   let sessionOk = false
+  let role: string | null = null
   if (token) {
     try {
-      await jwtVerify(token, SECRET)
+      const { payload } = await jwtVerify(token, SECRET)
       sessionOk = true
+      // Tokens minted before roles existed carried role:'admin'.
+      role = payload.role === 'cm' ? 'cm' : 'admin'
     } catch {
       sessionOk = false
     }
@@ -99,6 +86,15 @@ export async function middleware(req: NextRequest) {
     const url = new URL('/login', req.url)
     url.searchParams.set('next', pathname)
     return NextResponse.redirect(url)
+  }
+
+  // Admin-only areas (Settings, Commission, the legacy-admin proxies) need the
+  // admin role specifically — a signed-in CM is not enough.
+  if (needsAdmin && role !== 'admin') {
+    if (pathname.startsWith('/api/')) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
+    return NextResponse.redirect(new URL('/', req.url))
   }
 
   // Finance gate: viewing Finance/Revenue needs a valid finance-unlock cookie
@@ -128,6 +124,10 @@ export async function middleware(req: NextRequest) {
   return NextResponse.next()
 }
 
+// Everything except Next's own build assets goes through the gate. This is App
+// Router, so there is no /_next/data — RSC navigation payloads arrive on the
+// page's own path with ?_rsc=, which means they are gated too. Do not widen
+// these exclusions: each one is a path that serves without a session.
 export const config = {
   matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
 }
