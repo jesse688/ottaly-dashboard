@@ -78,6 +78,8 @@ export default function MailboxesPage() {
   const [err, setErr] = useState('')
   const [syncing, setSyncing] = useState(false)
   const [msg, setMsg] = useState('')
+  // Set when a write came back 401 — renders the "log in to do that" prompt.
+  const [needsAuth, setNeedsAuth] = useState(false)
   const [periodDays, setPeriodDays] = useState(30)
   const [history, setHistory] = useState<HistoryResponse | null>(null)
   const [typeHistory, setTypeHistory] = useState<HistoryResponse | null>(null)
@@ -117,10 +119,18 @@ export default function MailboxesPage() {
     fetch(`/api/mailboxes/leads?days=${periodDays}`).then(r => r.json()).then(setLeads).catch(() => setLeads(null))
   }, [tab, periodDays])
 
+  // Sync and Backfill are POSTs, and the middleware is deny-by-default on writes:
+  // pages and read-only GETs are public (so the cards load fine while logged out)
+  // but any write needs the admin session. Without this check a logged-out CM sees
+  // the raw "Sync failed: Unauthorized" — which reads like the sync ran and broke,
+  // when the request never reached the route. Say what to do instead.
+  const needsLogin = () => setNeedsAuth(true)
+
   const runSync = useCallback(async () => {
-    setSyncing(true); setMsg('')
+    setSyncing(true); setMsg(''); setNeedsAuth(false)
     try {
       const r = await fetch('/api/mailboxes/sync', { method: 'POST' })
+      if (r.status === 401) return needsLogin()
       const d = await r.json()
       setMsg(d.ok ? `Synced ${d.count} mailboxes.` : `Sync failed: ${d.error}`)
       if (d.ok) await load()
@@ -128,9 +138,10 @@ export default function MailboxesPage() {
   }, [load])
 
   const runBackfill = useCallback(async () => {
-    setSyncing(true); setMsg('Backfilling chart history… (a few minutes)')
+    setSyncing(true); setMsg('Backfilling chart history… (a few minutes)'); setNeedsAuth(false)
     try {
       const r = await fetch(`/api/mailboxes/backfill?days=${periodDays}`, { method: 'POST' })
+      if (r.status === 401) return needsLogin()
       const d = await r.json()
       setMsg(d.ok ? `Backfilled ${d.rows} trend rows from ${d.mailboxes} mailboxes.` : `Backfill failed: ${d.error}`)
       if (d.ok && tab === 'performance') {
@@ -272,6 +283,15 @@ export default function MailboxesPage() {
         </div>
 
         {msg && <div style={{ marginBottom: 12, background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: C.navy }}>{msg}</div>}
+
+        {/* A write was refused because there is no admin session. Viewing this page
+            needs no login, so this is the first point the user learns that. */}
+        {needsAuth && (
+          <div style={{ marginBottom: 12, background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#92400E' }}>
+            You need to be logged in to sync or backfill. Viewing is open, changes are not.{' '}
+            <a href="/login?next=/mailboxes" style={{ color: '#92400E', fontWeight: 600 }}>Log in</a>, then try again.
+          </div>
+        )}
 
         {/* Not-on-warmup alert banner */}
         {notWarming.length > 0 && (
