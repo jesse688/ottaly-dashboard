@@ -37,15 +37,19 @@ export async function GET(req: Request) {
       params
     )
 
-    // "Google Generic" is a google TIER (tag-flagged), not a real type — split the
-    // type key the same way the performance cards do so leads line up per card.
+    // "Google Generic" / "Google New" are google TIERS (tag-flagged), not real
+    // types — split the type key the same way the performance cards do so leads
+    // line up per card. Mirrors GOOGLE_TIER_RULES in lib/mailbox-sync.ts.
+    const GOOGLE_TIER_RULES: { needs: string[]; key: string }[] = [
+      { needs: ['google', 'generic'], key: 'google generic' },
+      { needs: ['google', 'new'], key: 'google new' },
+    ]
     const effType = (type: string | null, tags: unknown): string => {
       const t = type || 'unknown'
-      if (t === 'google' && Array.isArray(tags) &&
-        tags.some((x: string) => { const n = (x || '').toLowerCase().replace(/[^a-z0-9]/g, ''); return n.includes('google') && n.includes('generic') })) {
-        return 'google generic'
-      }
-      return t
+      if (t !== 'google' || !Array.isArray(tags)) return t
+      const norm = (tags as string[]).map(x => (x || '').toLowerCase().replace(/[^a-z0-9]/g, ''))
+      const hit = GOOGLE_TIER_RULES.find(r => norm.some(n => r.needs.every(w => n.includes(w))))
+      return hit ? hit.key : t
     }
 
     const bySupplier: Record<string, number> = {}

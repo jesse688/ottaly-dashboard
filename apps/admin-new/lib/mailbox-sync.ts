@@ -172,6 +172,7 @@ const normTag = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
 // "generic google" all map to Google Generic. Add a line to group another tag.
 const TAG_SUPPLIER_RULES: { needs: string[]; supplier: string }[] = [
   { needs: ['google', 'generic'], supplier: 'Google Generic' },
+  { needs: ['google', 'new'], supplier: 'Google New' },
 ]
 function supplierFromTags(tags: string[]): string | null {
   const norm = tags.map(normTag)
@@ -198,16 +199,28 @@ const WINNR_GENERIC_DOMAINS = new Set([
   'saleslytalents.biz', 'saleslytalents.org', 'sokinfinancial.org', 'springavenue.org',
   'springdrivepro.com', 'springdrives.net', 'thereportspro.com',
 ])
-// Is this a generic-google mailbox? Flagged by a PlusVibe tag ("Google generic"
-// / "GenericGoogle"). Used to split the TYPE dimension into 'google' vs
-// 'google generic' on the performance cards — type stays 'google' in the data.
-function isGenericGoogleTags(type: string | null | undefined, tags: string[] | null | undefined): boolean {
-  if (type !== 'google' || !Array.isArray(tags)) return false
-  return tags.some(t => { const n = normTag(t || ''); return n.includes('google') && n.includes('generic') })
+// Google TIERS. A google mailbox is split by its PlusVibe tag into a sub-type for
+// the performance cards — type stays 'google' in the data (pricing/filters/enums
+// unchanged). Fuzzy-matched like the supplier rules: a tag matches when its
+// normalized form contains ALL the words, so "Google New", "New Google",
+// "GoogleNew" and "Google new" all land on 'google new' — while "New Winnr" and
+// "MS New" (no 'google') correctly do not. Add a line to split another tier.
+const GOOGLE_TIER_RULES: { needs: string[]; key: string }[] = [
+  { needs: ['google', 'generic'], key: 'google generic' },
+  { needs: ['google', 'new'], key: 'google new' },
+]
+// Which google tier (if any) do these tags flag? First matching rule wins.
+function googleTierFromTags(type: string | null | undefined, tags: string[] | null | undefined): string | null {
+  if (type !== 'google' || !Array.isArray(tags)) return null
+  const norm = tags.map(t => normTag(t || ''))
+  for (const r of GOOGLE_TIER_RULES) {
+    if (norm.some(t => r.needs.every(w => t.includes(w)))) return r.key
+  }
+  return null
 }
-// Effective type key for aggregation: generic-tagged google → 'google generic'.
+// Effective type key for aggregation: tiered google → 'google <tier>', else raw type.
 function typeDimKey(type: string | null | undefined, tags: string[] | null | undefined): string {
-  return isGenericGoogleTags(type, tags) ? 'google generic' : (type || 'smtp')
+  return googleTierFromTags(type, tags) ?? (type || 'smtp')
 }
 
 function supplierFromDomain(email: string): string | null {
