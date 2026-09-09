@@ -27,7 +27,7 @@ const ACCENT: Record<string, string> = {
   microsoft: '#0078D4', smtp: '#475569', azure: '#00A4EF',
   // Tag dimension
   'Google New Sep': '#34A853', 'Google Legacy': '#9AA0A6',
-  'MS New Sep': '#0078D4', 'MS Legacy': '#7A8BA6', Untagged: '#C4C9D4',
+  'MS New Sep': '#0078D4', 'MS Legacy': '#7A8BA6', 'Inboxing.com': '#7C89CD', Untagged: '#C4C9D4',
 }
 
 interface DaySeries { sent: number[]; replies: number[]; ooo: number[]; bounces: number[]; contacted: number[] }
@@ -426,7 +426,7 @@ export default function MailboxesPage() {
 
             {/* By tag — the tier each mailbox was tagged with in PlusVibe */}
             <div>
-              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: C.muted, margin: '0 0 .5rem' }}>By tag (Google New Sep / MS New Sep / Google Generic / Google Legacy / MS Legacy)</div>
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: C.muted, margin: '0 0 .5rem' }}>By tag (Google New Sep / MS New Sep / Google Generic / Google Legacy / MS Legacy / Inboxing.com)</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: '1rem' }}>
                 {data.stats.byTag.map(g => <ProviderCard key={g.key} g={g} accent={ACCENT[g.key] || C.navy} days={[]} periodDays={periodDays} />)}
               </div>
