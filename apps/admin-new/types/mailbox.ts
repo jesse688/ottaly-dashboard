@@ -84,6 +84,7 @@ export interface MailboxesResponse {
   stats: {
     bySupplier: MailboxGroupStats[]
     byType: MailboxGroupStats[]
+    byTag: MailboxGroupStats[]
     bySupplierType: MailboxGroupStats[]
     byClient: MailboxGroupStats[]
   }
