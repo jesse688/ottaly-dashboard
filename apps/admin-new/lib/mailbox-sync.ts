@@ -644,11 +644,27 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
     const end = new Date().toISOString().slice(0, 10)
     const start = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
     const withAcc = raw.filter(m => m.account_id && m.workspace_id)
-    // pvGate serializes these anyway; a wide pool only builds a queue.
-    const statsList = await mapPool(withAcc, 3, m =>
-      fetchMailboxStats(m.workspace_id as string, m.account_id as string, start, end).catch(() => null)
-    )
+
+    // DEADLINE. This module and cache-warming each keep their OWN pvGate — two
+    // limiters, neither aware of the other — so under a warm pass PlusVibe 429s
+    // us, every 429 sets a 30s penalty that quadruples our gap, and ~1,900 calls
+    // at 1s each stops being "slow" and becomes "never finishes". A sync was
+    // observed alive (heartbeat ticking) for 35 minutes having written nothing.
+    //
+    // Whatever we have when the clock runs out is written; the rest keep their
+    // previous numbers and the next run picks them up. A partial refresh beats
+    // a job that hangs until the process restarts.
+    const STATS_DEADLINE_MS = 10 * 60 * 1000
+    const deadline = Date.now() + STATS_DEADLINE_MS
+    let skipped = 0
+    const statsList = await mapPool(withAcc, 3, m => {
+      if (Date.now() > deadline) { skipped++; return Promise.resolve(null) }
+      return fetchMailboxStats(m.workspace_id as string, m.account_id as string, start, end).catch(() => null)
+    })
     withAcc.forEach((m, i) => { const s = statsList[i]; if (s) statsByEmail.set(m.email, s) })
+    if (skipped) {
+      console.warn(`[mailbox-sync] stats deadline hit — ${statsByEmail.size}/${withAcc.length} refreshed, ${skipped} kept their previous numbers`)
+    }
 
     // Rebuild with the stats in hand and write ONLY the performance columns, so
     // a concurrent supplier/tag edit made while we were fetching isn't clobbered.
@@ -657,7 +673,10 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
       const c2 = await pool.connect()
       try {
         await c2.query('BEGIN')
-        for (const m of full) {
+        // ONLY the mailboxes we actually got fresh stats for. Writing every row
+        // would zero the ones the deadline skipped — worse than leaving them on
+        // yesterday's numbers, which is the whole point of stopping early.
+        for (const m of full.filter(x => statsByEmail.has(x.email))) {
           await c2.query(
             `UPDATE mailbox_full SET
                attributed_sent=$2, attributed_replies=$3, attributed_bounces=$4,
