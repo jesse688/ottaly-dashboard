@@ -123,9 +123,17 @@ export async function backfillSupplierDaily(days = 30): Promise<{ ok: boolean; m
     // that silently understates every group it belongs to. Track failures and
     // refuse to write a corrupt snapshot below.
     let failed = 0
+    // Progress logging: this loop is ~1,700 serialized PV calls and used to run
+    // for many minutes emitting NOTHING, so "still working" and "wedged" looked
+    // identical from outside.
+    console.log(`[backfill] starting — ${rows.length} mailboxes, ${days}d window (${start}..${end})`)
+    let done = 0
     const charts = await mapPool(rows, 3, m =>
       fetchMailboxDailyChart(m.workspace_id, m.account_id, start, end)
         .catch(() => { failed++; return null as DayRow[] | null })
+        .finally(() => {
+          if (++done % 250 === 0) console.log(`[backfill] ${done}/${rows.length} fetched (${failed} failed)`)
+        })
     )
     if (failed) console.warn(`[backfill] ${failed}/${rows.length} mailbox chart fetches failed`)
     // If a large share failed (PlusVibe rate-limiting us, typically), the totals
@@ -713,23 +721,31 @@ async function runSyncThenMaybeBackfill(backfillDays: number) {
     void pool.query(`UPDATE mailbox_sync_state SET running_since = now() WHERE id = 1 AND running`).catch(() => {})
   }, 60_000)
   try {
-    // The sync refreshes the mailbox LIST; the backfill writes the per-day
-    // counts the stat cards actually read. Run them independently: a sync that
-    // throws (or gives up on its stats deadline) must not skip the backfill —
-    // that is how the cards stayed empty while the logs only ever mentioned the
-    // sync.
+    // BACKFILL FIRST. Both jobs make ~1,700 PlusVibe calls, and PV only has
+    // budget for roughly one of them per cycle: syncMailboxes' stats pass spends
+    // a hard 10-minute deadline (STATS_DEADLINE_MS) fetching per-mailbox
+    // aggregates, and whatever budget it burns is gone before the backfill even
+    // starts. Running sync first is why the stat cards stayed empty for hours —
+    // the backfill, which is the ONLY writer of the per-day counts the cards
+    // read, never got a usable share.
+    //
+    // The sync refreshes the mailbox LIST (new boxes, tags, suppliers). That is
+    // real but far less urgent than the numbers on the page, and it recovers on
+    // the next tick. So: numbers first, inventory second.
+    const bf = await backfillSupplierDaily(backfillDays).catch(e => ({
+      ok: false as const, mailboxes: 0, rows: 0,
+      error: e instanceof Error ? e.message : String(e),
+    }))
+    if (bf.ok) console.log(`[mailbox-scheduler] backfill ok — ${bf.rows} rows from ${bf.mailboxes} mailboxes (${backfillDays}d)`)
+    else console.error(`[mailbox-scheduler] backfill FAILED — ${bf.error}`)
+
+    // Then refresh the mailbox list with whatever budget is left. Independent of
+    // the backfill: a throw here must never take the numbers down with it.
     try {
       await syncMailboxes()
     } catch (e) {
       console.error('[mailbox-scheduler] sync failed:', e instanceof Error ? e.message : e)
     }
-    // ALWAYS refresh today (+yesterday) so today's daily counts are real, not 0.
-    // The 30-min snapshot only writes metadata now — backfill OWNS the counts.
-    // Log the result either way: this step silently aborting (its >10%-failed
-    // guard, tripped by 429s) was invisible for an entire debugging session.
-    const bf = await backfillSupplierDaily(backfillDays)
-    if (bf.ok) console.log(`[mailbox-scheduler] backfill ok — ${bf.rows} rows from ${bf.mailboxes} mailboxes (${backfillDays}d)`)
-    else console.error(`[mailbox-scheduler] backfill FAILED — ${bf.error}`)
   } catch (e) {
     console.error('[mailbox-scheduler]', e instanceof Error ? e.message : e)
   } finally {

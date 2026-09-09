@@ -1,1 +1,1 @@
-redeploy: 2026-09-09 share ONE PlusVibe rate limiter (cache-warming + mailbox-sync) so the backfill can finish
+redeploy: 2026-09-09 run the mailbox BACKFILL before the sync — the sync's 10min stats deadline was eating the whole PV budget
