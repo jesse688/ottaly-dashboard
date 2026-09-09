@@ -4,6 +4,7 @@ import { recomputeAll } from './newlead-cache'
 import {
   pvGate,
   pvBackoffSignal,
+  pvBulkActive,
   PV_MAX_RETRIES,
   PV_BASE_BACKOFF_MS,
   PV_COOLDOWN_MS,
@@ -683,6 +684,11 @@ export async function startCacheWarmingInterval(): Promise<void> {
   // Then every 2 minutes (same as legacy)
   const INTERVAL_MS = 2 * 60 * 1000
   setInterval(() => {
+    // Yield to a bulk job (the mailbox backfill). A warm pass is small and
+    // frequent; the backfill needs ~1,700 consecutive slots and commits nothing
+    // until it has them all, so an endless drip of small passes starves it.
+    // Skipping a pass costs minutes of cache staleness — cheap by comparison.
+    if (pvBulkActive()) return
     warmPerformanceCache().catch(() => {})
   }, INTERVAL_MS)
   // Combo every 2 min. This is now the ONLY thing that fills the combo cache
@@ -695,6 +701,7 @@ export async function startCacheWarmingInterval(): Promise<void> {
   // so ticking them together just makes them queue behind each other.
   const COMBO_INTERVAL_MS = Number(process.env.COMBO_INTERVAL_MS ?? 5 * 60 * 1000)
   setInterval(() => {
+    if (pvBulkActive()) return   // yield to the mailbox backfill, as above
     warmComboCache().catch(() => {})
   }, COMBO_INTERVAL_MS)
 

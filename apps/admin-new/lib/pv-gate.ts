@@ -56,6 +56,41 @@ export function pvBackoffSignal(ms: number): void {
   pvState.pausedUntil = Math.max(pvState.pausedUntil, Date.now() + ms)
 }
 
+// ── Bulk-job yielding ────────────────────────────────────────────────────────
+// A BULK job needs thousands of CONSECUTIVE slots: the mailbox backfill makes
+// ~1,700 calls and commits nothing until every one of them is done.
+//
+// Sharing one queue (the fix for the duplicate-limiter bug) removed the 429
+// storm but exposed a second failure: cache-warming starts a fresh pass every
+// ~30 SECONDS, forever. The backfill got a few hundred calls in, each new warm
+// pass enqueued ahead of the rest of its work, and it stopped advancing —
+// measured stuck at 500/1700 for ten minutes with ZERO failed fetches. Not rate
+// limiting: starvation by an endless stream of small jobs.
+//
+// So a bulk job announces itself and the recurring warmers skip their pass while
+// one is active. They are caches: a skipped pass costs minutes of staleness,
+// whereas a starved backfill means the stat cards show nothing at all.
+const BULK_STALE_MS = 30 * 60 * 1000
+let bulkUntil = 0
+
+/** Mark a long bulk job active. Returns the release function. */
+export function pvBeginBulk(): () => void {
+  // Self-expiring, so a job that dies without releasing cannot mute the warmers
+  // forever.
+  bulkUntil = Date.now() + BULK_STALE_MS
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    bulkUntil = 0
+  }
+}
+
+/** True while a bulk job owns the queue — recurring warmers should skip. */
+export function pvBulkActive(): boolean {
+  return Date.now() < bulkUntil
+}
+
 /**
  * Serialise a PlusVibe call.
  *
