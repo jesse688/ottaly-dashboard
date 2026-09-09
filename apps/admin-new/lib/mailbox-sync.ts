@@ -3,6 +3,7 @@ import { DIMENSIONS, keyFor, type DimMailbox } from './mailbox-dimensions'
 import {
   pvGate,
   pvBackoffSignal,
+  pvBeginBulk,
   PV_MAX_RETRIES,
   PV_BASE_BACKOFF_MS,
   PV_COOLDOWN_MS,
@@ -101,6 +102,11 @@ async function fetchMailboxDailyChart(workspaceId: string, accountId: string, st
 // the window, aggregate per (day, supplier) and (day, type) using CURRENT
 // supplier/type tags, and upsert. One-time-ish; slow (one PV call per mailbox).
 export async function backfillSupplierDaily(days = 30): Promise<{ ok: boolean; mailboxes: number; rows: number; error?: string }> {
+  // Claim the PV queue for the duration. cache-warming starts a pass every ~30s
+  // and would otherwise keep cutting in front of us: this job needs ~1,700
+  // CONSECUTIVE slots and commits nothing until it has them all. Measured stuck
+  // at 500/1700 for ten minutes, zero failed fetches — pure starvation.
+  const endBulk = pvBeginBulk()
   try {
     const end = new Date().toISOString().slice(0, 10)
     const start = new Date(Date.now() - (days - 1) * 86400000).toISOString().slice(0, 10)
@@ -182,6 +188,10 @@ export async function backfillSupplierDaily(days = 30): Promise<{ ok: boolean; m
     return { ok: true, mailboxes: rows.length, rows: written }
   } catch (err) {
     return { ok: false, mailboxes: 0, rows: 0, error: err instanceof Error ? err.message : String(err) }
+  } finally {
+    // Always hand the queue back, including on the abort path — otherwise a
+    // failed backfill would keep the warmers muted until the claim expires.
+    endBulk()
   }
 }
 

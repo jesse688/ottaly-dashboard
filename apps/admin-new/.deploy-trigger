@@ -1,1 +1,1 @@
-redeploy: 2026-09-09 run the mailbox BACKFILL before the sync — the sync's 10min stats deadline was eating the whole PV budget
+redeploy: 2026-09-09 backfill claims the PV queue; cache-warming yields (was starved at 750/1700)
