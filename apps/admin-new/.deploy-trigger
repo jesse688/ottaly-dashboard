@@ -1,1 +1,1 @@
-redeploy: 2026-09-09 mailbox stat cards — shared bucketing (azure + tag dimensions, leads keys) #91
+redeploy: 2026-09-09 share ONE PlusVibe rate limiter (cache-warming + mailbox-sync) so the backfill can finish

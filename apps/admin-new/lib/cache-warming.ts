@@ -1,6 +1,13 @@
 import pool from './db'
 import { getActiveWorkspaceIds } from './active-clients'
 import { recomputeAll } from './newlead-cache'
+import {
+  pvGate,
+  pvBackoffSignal,
+  PV_MAX_RETRIES,
+  PV_BASE_BACKOFF_MS,
+  PV_COOLDOWN_MS,
+} from './pv-gate'
 
 const PV_BASE = 'https://api.plusvibe.ai/api/v1'
 const PV_KEY = process.env.PLUSVIBE_KEY ?? ''
@@ -14,89 +21,11 @@ const TTL_OLD_MS = 12 * 60 * 60 * 1000
 const deadWorkspaces = new Set<string>()
 
 // ── PlusVibe request pacing ────────────────────────────────────────────────
-// One global gate for EVERY PV call in this process. The combo warmer used to
-// fire a whole pass at once (120 ws-days x 9 combos = ~1,080 parallel requests)
-// and PV answered with 429s; those failures were swallowed, so days were left
-// half-written and the backlog grew every pass. Serialising with a small
-// minimum gap keeps us under PV's limit and makes a pass slow-but-complete,
-// which is what a cache actually needs.
-// Tuned from live logs: at 2 concurrent / 120ms we still hit 429s constantly
-// and PV's own Retry-After was 10s every time — its real ceiling is far below
-// what we were asking for. Serialise (1 at a time) with a 400ms floor ≈ 2.5
-// req/s, which is slower than a burst but finishes; the previous settings
-// spent most of their time in backoff anyway, so throughput barely changes.
-const PV_CONCURRENCY = 1
-const PV_MIN_GAP_MS = 400
-const PV_MAX_RETRIES = 6         // was 4; one cell still exhausted retries
-const PV_BASE_BACKOFF_MS = 2000
-// After a 429 the whole process pauses briefly, not just the failing request.
-// Without this every other in-flight call marches into the same wall and each
-// burns its own retry budget — which is how a cell exhausted 5 attempts.
-const PV_COOLDOWN_MS = 5000
-
+// The gate now lives in lib/pv-gate.ts and is shared with mailbox-sync. It used
+// to be defined here, and mailbox-sync kept a SECOND one of its own — two
+// limiters in one process, so PV saw roughly double the intended rate and 429'd
+// both of them permanently. See that file's header.
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
-
-// The gate's state lives on globalThis for the same reason the start flag does:
-// Next instantiates this module once per entry bundle, so module-level state
-// would give each copy its OWN limiter. Two limiters = double the request rate
-// PV actually sees, which is how a "1 concurrent, 400ms apart" gate still
-// produced constant 429s. One shared object means one real gate per process.
-interface PvGateState {
-  active: number
-  lastStart: number
-  pausedUntil: number
-  queue: Array<() => void>
-  /** Interactive waiters. Always drained before `queue`. */
-  priorityQueue?: Array<() => void>
-}
-const pvState: PvGateState = ((globalThis as Record<string, unknown>).__ottalyPvGate ??= {
-  active: 0,
-  lastStart: 0,
-  pausedUntil: 0,
-  queue: [],
-}) as PvGateState
-
-export function pvBackoffSignal(ms: number): void {
-  pvState.pausedUntil = Math.max(pvState.pausedUntil, Date.now() + ms)
-}
-
-/**
- * Serialise a PlusVibe call.
- *
- * `priority` is for requests a HUMAN is waiting on. The queue is otherwise
- * FIFO, and the background warmers enqueue up to 40 calls every 2 minutes at
- * PV_CONCURRENCY=1 — so a page request landed behind minutes of warm work and
- * blew its budget every time, even though PlusVibe itself answers in under a
- * second. Priority waiters are drained first; the rate limit and cooldown that
- * protect PV still apply to everyone.
- */
-async function pvGate<T>(fn: () => Promise<T>, priority = false): Promise<T> {
-  pvState.priorityQueue ??= []
-  if (pvState.active >= PV_CONCURRENCY) {
-    await new Promise<void>((resolve) => {
-      if (priority) pvState.priorityQueue!.push(resolve)
-      else pvState.queue.push(resolve)
-    })
-  }
-  pvState.active++
-  try {
-    // Respect a process-wide cooldown first, then the per-request spacing.
-    for (;;) {
-      const waitFor = pvState.pausedUntil - Date.now()
-      if (waitFor <= 0) break
-      await sleep(Math.min(waitFor, 10_000))
-    }
-    const since = Date.now() - pvState.lastStart
-    if (since < PV_MIN_GAP_MS) await sleep(PV_MIN_GAP_MS - since)
-    pvState.lastStart = Date.now()
-    return await fn()
-  } finally {
-    pvState.active--
-    // Interactive waiters first, then background work.
-    const next = pvState.priorityQueue?.shift() ?? pvState.queue.shift()
-    next?.()
-  }
-}
 
 // Only warm workspaces that are ACTIVE clients (legacy /api/client-status) AND
 // not already known-dead in PlusVibe. workspace_stats is polluted with stale/

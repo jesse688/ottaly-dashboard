@@ -1,5 +1,12 @@
 import pool from './db'
 import { DIMENSIONS, keyFor, type DimMailbox } from './mailbox-dimensions'
+import {
+  pvGate,
+  pvBackoffSignal,
+  PV_MAX_RETRIES,
+  PV_BASE_BACKOFF_MS,
+  PV_COOLDOWN_MS,
+} from './pv-gate'
 
 // Independent mailbox sync for admin-new — full parity with admin-legacy's
 // /api/mailboxes, with NO dependency on admin-legacy. It assembles the same
@@ -22,45 +29,35 @@ const PV_KEY = process.env.PLUSVIBE_KEY ?? ''
 const SUPPLIERS_ALLOWED = ['Maildoso', 'Mithun', 'Winnr', 'Inboxing']
 
 // ── PlusVibe fetch (rate-limited, retry on 429) ──────────────────────────────
-// The pacing here has to be a real queue, not a timestamp check. The old version
-// read a shared `lastPv`, computed a wait and then fired — so the 8 concurrent
-// callers from mapPool all read the SAME value, all waited the same tiny amount
-// and all hit PlusVibe together. The 120ms spacer was effectively 8-at-once,
-// which is what produced sustained 429s (267 in 40 minutes, measured) and
-// starved the mailbox sync: pvFetch gives up after 4 attempts and returns null,
-// so the backfill silently wrote nothing.
+// Pacing comes from lib/pv-gate.ts — THE single limiter for this process.
 //
-// Chaining every call onto one promise makes the gap actually hold no matter how
-// many callers there are. PV_GAP_MS is the floor between requests; on a 429 we
-// back off AND widen the floor for a while, so a rate-limited window slows the
-// whole queue down instead of each caller retrying into the same wall.
-const PV_GAP_MS = 250
-let pvChain: Promise<unknown> = Promise.resolve()
-let pvPenaltyUntil = 0
-function pvGate<T>(fn: () => Promise<T>): Promise<T> {
-  const run = pvChain.then(async () => {
-    const gap = Date.now() < pvPenaltyUntil ? PV_GAP_MS * 4 : PV_GAP_MS
-    await new Promise(r => setTimeout(r, gap))
-    return fn()
-  })
-  // Keep the chain alive even if this call rejects.
-  pvChain = run.then(() => undefined, () => undefined)
-  return run
-}
-
+// This file used to define its own gate. cache-warming defined another. Two
+// limiters in one process meant PV saw about double the intended rate, so both
+// sat in permanent backoff:
+//
+//   [cache-warming] PlusVibe 429, retry 1/6 in 10000ms   (constant, in the logs)
+//   [mailbox-sync] stats deadline hit — 119/1927 refreshed
+//
+// and backfillSupplierDaily could never complete its calls before tripping its
+// own >10%-failed guard, so it aborted and wrote nothing — which is why the
+// by-tag and azure cards stayed empty however often the backfill ran.
+//
+// Never add a second limiter here. Change lib/pv-gate.ts instead.
 async function pvFetch<T>(path: string): Promise<T | null> {
   if (!PV_KEY) return null
   return pvGate(async () => {
-    for (let attempt = 0; attempt < 4; attempt++) {
+    for (let attempt = 0; attempt < PV_MAX_RETRIES; attempt++) {
       const res = await fetch(`${PV_BASE}${path}`, {
         headers: { 'x-api-key': PV_KEY },
         signal: AbortSignal.timeout(20000),
       }).catch(() => null)
       if (!res) return null
       if (res.status === 429) {
-        // Widen the gap for everyone queued behind us, then back off.
-        pvPenaltyUntil = Date.now() + 30_000
-        await new Promise(r => setTimeout(r, 2000 * (attempt + 1)))
+        // Pause the SHARED queue, so cache-warming backs off with us instead of
+        // marching into the same wall while we wait.
+        const wait = PV_BASE_BACKOFF_MS * (attempt + 1)
+        pvBackoffSignal(Math.max(wait, PV_COOLDOWN_MS))
+        await new Promise(r => setTimeout(r, wait))
         continue
       }
       if (!res.ok) return null
@@ -716,10 +713,23 @@ async function runSyncThenMaybeBackfill(backfillDays: number) {
     void pool.query(`UPDATE mailbox_sync_state SET running_since = now() WHERE id = 1 AND running`).catch(() => {})
   }, 60_000)
   try {
-    await syncMailboxes()
+    // The sync refreshes the mailbox LIST; the backfill writes the per-day
+    // counts the stat cards actually read. Run them independently: a sync that
+    // throws (or gives up on its stats deadline) must not skip the backfill —
+    // that is how the cards stayed empty while the logs only ever mentioned the
+    // sync.
+    try {
+      await syncMailboxes()
+    } catch (e) {
+      console.error('[mailbox-scheduler] sync failed:', e instanceof Error ? e.message : e)
+    }
     // ALWAYS refresh today (+yesterday) so today's daily counts are real, not 0.
     // The 30-min snapshot only writes metadata now — backfill OWNS the counts.
-    await backfillSupplierDaily(backfillDays)
+    // Log the result either way: this step silently aborting (its >10%-failed
+    // guard, tripped by 429s) was invisible for an entire debugging session.
+    const bf = await backfillSupplierDaily(backfillDays)
+    if (bf.ok) console.log(`[mailbox-scheduler] backfill ok — ${bf.rows} rows from ${bf.mailboxes} mailboxes (${backfillDays}d)`)
+    else console.error(`[mailbox-scheduler] backfill FAILED — ${bf.error}`)
   } catch (e) {
     console.error('[mailbox-scheduler]', e instanceof Error ? e.message : e)
   } finally {
