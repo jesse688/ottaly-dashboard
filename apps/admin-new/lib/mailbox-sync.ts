@@ -464,20 +464,19 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
     const dhByDomain = new Map(dhRes.rows.map(r => [r.domain as string, r]))
     const parseJsonb = (v: unknown) => (typeof v === 'string' ? JSON.parse((v as string) || 'null') : v)
 
-    // Real per-mailbox sent/reply/bounce from PlusVibe (last 30 days), fetched
-    // with bounded concurrency. One call per mailbox that has an account_id +
-    // workspace. Falls back to email_events sent/bounce when PV has no data.
-    const end = new Date().toISOString().slice(0, 10)
-    const start = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
-    const withAcc = raw.filter(m => m.account_id && m.workspace_id)
-    // pvGate serializes these anyway; a wide pool only builds a queue.
-    const statsList = await mapPool(withAcc, 3, m =>
-      fetchMailboxStats(m.workspace_id as string, m.account_id as string, start, end).catch(() => null)
-    )
+    // Per-mailbox stats are fetched AFTER the first write (see below). Everything
+    // the page needs to group mailboxes — tags, provider, supplier, type — is
+    // already in `raw`, so we must not make the whole sync wait on ~2k
+    // rate-limited PlusVibe calls before any of it reaches the database.
+    //
+    // WHY THIS ORDER: those stats calls are serialized behind pvGate and share a
+    // rate-limit budget with cache-warming. On a busy day the fetch takes 30-60
+    // min, and until it finished NOTHING was written — so a newly-tagged mailbox
+    // stayed invisible on /mailboxes for an hour, and an interrupted sync threw
+    // away the lot. Now the rows land in seconds and the numbers catch up.
     const statsByEmail = new Map<string, MbStats>()
-    withAcc.forEach((m, i) => { const s = statsList[i]; if (s) statsByEmail.set(m.email, s) })
 
-    const full: FullMailbox[] = raw.map(m => {
+    const buildFull = (): FullMailbox[] => raw.map(m => {
       const meta = metaByEmail.get(m.email) ?? {}
       const typeAuto = detectMailboxType(m.provider)
       const type = meta.mailbox_type || typeAuto || 'smtp'
@@ -536,6 +535,10 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
       fm.attention = computeAttention(fm)
       return fm
     })
+
+    // PASS 1 — rows with everything except the performance numbers, which are
+    // zero for now. This is what makes tags/supplier/type visible immediately.
+    let full = buildFull()
 
     // Upsert all rows in one transaction.
     const client = await pool.connect()
@@ -629,6 +632,49 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
       throw e
     } finally {
       client.release()
+    }
+
+    // PASS 2 — the slow part. Real per-mailbox sent/reply/bounce from PlusVibe
+    // (last 30 days), one call per mailbox, serialized behind pvGate. Falls back
+    // to email_events sent/bounce when PV has no data.
+    //
+    // Everything above is already committed, so if this is cut short by a
+    // restart or rate limiting we keep the fresh mailbox list and tags and just
+    // carry yesterday's numbers — instead of losing the whole sync.
+    const end = new Date().toISOString().slice(0, 10)
+    const start = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
+    const withAcc = raw.filter(m => m.account_id && m.workspace_id)
+    // pvGate serializes these anyway; a wide pool only builds a queue.
+    const statsList = await mapPool(withAcc, 3, m =>
+      fetchMailboxStats(m.workspace_id as string, m.account_id as string, start, end).catch(() => null)
+    )
+    withAcc.forEach((m, i) => { const s = statsList[i]; if (s) statsByEmail.set(m.email, s) })
+
+    // Rebuild with the stats in hand and write ONLY the performance columns, so
+    // a concurrent supplier/tag edit made while we were fetching isn't clobbered.
+    if (statsByEmail.size) {
+      full = buildFull()
+      const c2 = await pool.connect()
+      try {
+        await c2.query('BEGIN')
+        for (const m of full) {
+          await c2.query(
+            `UPDATE mailbox_full SET
+               attributed_sent=$2, attributed_replies=$3, attributed_bounces=$4,
+               reply_rate=$5, bounce_rate=$6, attention=$7::jsonb
+             WHERE email=$1`,
+            [m.email, m.attributed_sent, m.attributed_replies, m.attributed_bounces,
+             m.reply_rate, m.bounce_rate, JSON.stringify(m.attention)]
+          )
+        }
+        await c2.query('COMMIT')
+      } catch (e) {
+        await c2.query('ROLLBACK').catch(() => {})
+        console.error('[mailbox-sync] stats pass failed (rows + tags are already saved)',
+          e instanceof Error ? e.message : e)
+      } finally {
+        c2.release()
+      }
     }
 
     await pool.query(`UPDATE mailbox_sync_state SET running=FALSE, last_run=now(), last_error=NULL, count=$1 WHERE id=1`, [full.length]).catch(() => {})
