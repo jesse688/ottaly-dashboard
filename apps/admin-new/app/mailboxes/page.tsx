@@ -428,7 +428,7 @@ export default function MailboxesPage() {
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: C.muted, margin: '0 0 .5rem' }}>By tag (Google New Sep / MS New Sep / Google Generic / Google Legacy / MS Legacy)</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: '1rem' }}>
-                {data.stats.byTag.map(g => <ProviderCard key={g.key} g={g} accent={ACCENT[g.key] || C.navy} days={[]} />)}
+                {data.stats.byTag.map(g => <ProviderCard key={g.key} g={g} accent={ACCENT[g.key] || C.navy} days={[]} periodDays={periodDays} />)}
               </div>
             </div>
 
