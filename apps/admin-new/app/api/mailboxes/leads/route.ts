@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import pool from '@/lib/db'
+import { providerKey, supplierKey, tagKey, typeKeyTiered, type DimMailbox } from '@/lib/mailbox-dimensions'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,6 +28,7 @@ export async function GET(req: Request) {
 
     const res = await pool.query(
       `SELECT
+         mf.email    AS email,
          mf.supplier AS supplier,
          mf.type     AS type,
          mf.tags     AS tags,
@@ -37,23 +39,15 @@ export async function GET(req: Request) {
       params
     )
 
-    // "Google Generic" / "Google New" are google TIERS (tag-flagged), not real
-    // types — split the type key the same way the performance cards do so leads
-    // line up per card. Mirrors GOOGLE_TIER_RULES in lib/mailbox-sync.ts.
-    const GOOGLE_TIER_RULES: { needs: string[]; key: string }[] = [
-      { needs: ['google', 'generic'], key: 'google generic' },
-      { needs: ['google', 'new'], key: 'google new' },
-    ]
-    const effType = (type: string | null, tags: unknown): string => {
-      const t = type || 'unknown'
-      if (t !== 'google' || !Array.isArray(tags)) return t
-      const norm = (tags as string[]).map(x => (x || '').toLowerCase().replace(/[^a-z0-9]/g, ''))
-      const hit = GOOGLE_TIER_RULES.find(r => norm.some(n => r.needs.every(w => n.includes(w))))
-      return hit ? hit.key : t
-    }
-
+    // Bucket leads with the SAME functions the cards group by
+    // (lib/mailbox-dimensions) so each card's Leads number lands on the card it
+    // belongs to. This route used to keep its own copy of the google-tier rules,
+    // which meant it emitted 'google generic'/'google new' under byType while
+    // the provider cards asked for google/microsoft/smtp/azure — so those cards
+    // showed no leads at all.
     const bySupplier: Record<string, number> = {}
     const byType: Record<string, number> = {}
+    const byTag: Record<string, number> = {}
     const bySupplierType: Record<string, number> = {}
     let total = 0
     let matched = 0
@@ -63,16 +57,25 @@ export async function GET(req: Request) {
       total++
       if (!r.matched) { unmatched++; continue }
       matched++
-      const sup = (r.supplier as string | null) || 'Unassigned'
-      const typ = effType(r.type as string | null, r.tags)
+      const m: DimMailbox = {
+        email: (r.email as string | null) || '',
+        type: r.type as string | null,
+        tags: Array.isArray(r.tags) ? (r.tags as string[]) : null,
+        supplier: r.supplier as string | null,
+      }
+      const sup = supplierKey(m)
+      const prov = providerKey(m) || 'unknown'
       bySupplier[sup] = (bySupplier[sup] || 0) + 1
-      byType[typ] = (byType[typ] || 0) + 1
-      // Key matches the comparison table's group key: "Supplier · type".
-      const stKey = `${sup} · ${typ}`
+      byType[prov] = (byType[prov] || 0) + 1
+      const tag = tagKey(m)
+      byTag[tag] = (byTag[tag] || 0) + 1
+      // Key matches the comparison table's group key: "Supplier · type", which
+      // still uses the tiered google split.
+      const stKey = `${sup} · ${typeKeyTiered(m) || 'unknown'}`
       bySupplierType[stKey] = (bySupplierType[stKey] || 0) + 1
     }
 
-    return NextResponse.json({ days, total, matched, unmatched, bySupplier, byType, bySupplierType })
+    return NextResponse.json({ days, total, matched, unmatched, bySupplier, byType, byTag, bySupplierType })
   } catch (err) {
     console.error('[mailboxes/leads]', err)
     return NextResponse.json({ error: 'Database error' }, { status: 500 })

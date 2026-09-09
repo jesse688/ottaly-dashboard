@@ -35,7 +35,7 @@ interface HistoryResponse { dimension: string; days: string[]; series: Record<st
 // Billable leads (revenue leads) attributed to each supplier / provider type by
 // the mailbox that received the reply. total = all marked leads in window;
 // matched = those we could tie to a mailbox; unmatched = pre-portal / no mailbox.
-interface LeadsResponse { days: number; total: number; matched: number; unmatched: number; bySupplier: Record<string, number>; byType: Record<string, number>; bySupplierType: Record<string, number> }
+interface LeadsResponse { days: number; total: number; matched: number; unmatched: number; bySupplier: Record<string, number>; byType: Record<string, number>; byTag: Record<string, number>; bySupplierType: Record<string, number> }
 
 // ── Legacy pill ──────────────────────────────────────────────────────────────
 function Pill({ tone, children }: { tone: 'good' | 'warn' | 'bad' | 'gray' | 'google' | 'microsoft' | 'smtp'; children: React.ReactNode }) {
@@ -86,6 +86,7 @@ export default function MailboxesPage() {
   const [periodDays, setPeriodDays] = useState(30)
   const [history, setHistory] = useState<HistoryResponse | null>(null)
   const [typeHistory, setTypeHistory] = useState<HistoryResponse | null>(null)
+  const [tagHistory, setTagHistory] = useState<HistoryResponse | null>(null)
   const [leads, setLeads] = useState<LeadsResponse | null>(null)
 
   const [search, setSearch] = useState('')
@@ -115,12 +116,23 @@ export default function MailboxesPage() {
   }, [])
   useEffect(() => { load() }, [load])
 
+  // One place that loads every performance series, so a dimension can't be
+  // added to the cards and forgotten here — that is how the tag cards ended up
+  // permanently blank.
+  const loadPerformance = useCallback((days: number) => {
+    const hist = (dimension: string, set: (h: HistoryResponse | null) => void) =>
+      fetch(`/api/mailboxes/history?dimension=${dimension}&days=${days}`)
+        .then(r => r.json()).then(set).catch(() => set(null))
+    hist('supplier', setHistory)
+    hist('type', setTypeHistory)
+    hist('tag', setTagHistory)
+    fetch(`/api/mailboxes/leads?days=${days}`).then(r => r.json()).then(setLeads).catch(() => setLeads(null))
+  }, [])
+
   useEffect(() => {
     if (tab !== 'performance') return
-    fetch(`/api/mailboxes/history?dimension=supplier&days=${periodDays}`).then(r => r.json()).then(setHistory).catch(() => setHistory(null))
-    fetch(`/api/mailboxes/history?dimension=type&days=${periodDays}`).then(r => r.json()).then(setTypeHistory).catch(() => setTypeHistory(null))
-    fetch(`/api/mailboxes/leads?days=${periodDays}`).then(r => r.json()).then(setLeads).catch(() => setLeads(null))
-  }, [tab, periodDays])
+    loadPerformance(periodDays)
+  }, [tab, periodDays, loadPerformance])
 
   // Sync and Backfill are POSTs, and the middleware is deny-by-default on writes:
   // pages and read-only GETs are public (so the cards load fine while logged out)
@@ -147,12 +159,9 @@ export default function MailboxesPage() {
       if (r.status === 401) return needsLogin()
       const d = await r.json()
       setMsg(d.ok ? `Backfilled ${d.rows} trend rows from ${d.mailboxes} mailboxes.` : `Backfill failed: ${d.error}`)
-      if (d.ok && tab === 'performance') {
-        fetch(`/api/mailboxes/history?dimension=supplier&days=${periodDays}`).then(r => r.json()).then(setHistory).catch(() => {})
-        fetch(`/api/mailboxes/history?dimension=type&days=${periodDays}`).then(r => r.json()).then(setTypeHistory).catch(() => {})
-      }
+      if (d.ok && tab === 'performance') loadPerformance(periodDays)
     } catch (e) { setMsg(e instanceof Error ? e.message : String(e)) } finally { setSyncing(false) }
-  }, [periodDays, tab])
+  }, [periodDays, tab, loadPerformance])
 
   const mailboxes = data?.mailboxes ?? []
   const clients = useMemo(() => Array.from(new Set(mailboxes.map(m => m.workspace_name).filter(Boolean))).sort() as string[], [mailboxes])
@@ -428,7 +437,7 @@ export default function MailboxesPage() {
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: C.muted, margin: '0 0 .5rem' }}>By tag (Google New Sep / MS New Sep / Google Generic / Google Legacy / MS Legacy / Inboxing.com)</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: '1rem' }}>
-                {data.stats.byTag.map(g => <ProviderCard key={g.key} g={g} accent={ACCENT[g.key] || C.navy} days={[]} periodDays={periodDays} />)}
+                {data.stats.byTag.map(g => <ProviderCard key={g.key} g={g} accent={ACCENT[g.key] || C.navy} days={tagHistory?.days ?? []} ds={tagHistory?.series[g.key]} leads={leads?.byTag[g.key]} periodDays={periodDays} />)}
               </div>
             </div>
 

@@ -1,4 +1,5 @@
 import pool from './db'
+import { DIMENSIONS, keyFor, type DimMailbox } from './mailbox-dimensions'
 
 // Independent mailbox sync for admin-new — full parity with admin-legacy's
 // /api/mailboxes, with NO dependency on admin-legacy. It assembles the same
@@ -140,8 +141,14 @@ export async function backfillSupplierDaily(days = 30): Promise<{ ok: boolean; m
     rows.forEach((m, i) => {
       for (const day of charts[i] ?? []) {
         if (!day.sent && !day.replies && !day.bounces) continue
-        add('supplier', m.supplier || 'Unassigned', day.date, day)
-        add('type', typeDimKey(m.type, m.tags), day.date, day)
+        // Every dimension the cards render, bucketed by the shared keyFor so a
+        // key can never exist on one side only. keyFor returns null when a
+        // mailbox has no bucket for that dimension (a missing type) — skip it
+        // rather than inventing one.
+        for (const dim of DIMENSIONS) {
+          const key = keyFor(dim, m as DimMailbox)
+          if (key) add(dim, key, day.date, day)
+        }
       }
     })
 
@@ -245,29 +252,12 @@ const WINNR_GENERIC_DOMAINS = new Set([
   'saleslytalents.biz', 'saleslytalents.org', 'sokinfinancial.org', 'springavenue.org',
   'springdrivepro.com', 'springdrives.net', 'thereportspro.com',
 ])
-// Google TIERS. A google mailbox is split by its PlusVibe tag into a sub-type for
-// the performance cards — type stays 'google' in the data (pricing/filters/enums
-// unchanged). Fuzzy-matched like the supplier rules: a tag matches when its
-// normalized form contains ALL the words, so "Google New", "New Google",
-// "GoogleNew" and "Google new" all land on 'google new' — while "New Winnr" and
-// "MS New" (no 'google') correctly do not. Add a line to split another tier.
-const GOOGLE_TIER_RULES: { needs: string[]; key: string }[] = [
-  { needs: ['google', 'generic'], key: 'google generic' },
-  { needs: ['google', 'new'], key: 'google new' },
-]
-// Which google tier (if any) do these tags flag? First matching rule wins.
-function googleTierFromTags(type: string | null | undefined, tags: string[] | null | undefined): string | null {
-  if (type !== 'google' || !Array.isArray(tags)) return null
-  const norm = tags.map(t => normTag(t || ''))
-  for (const r of GOOGLE_TIER_RULES) {
-    if (norm.some(t => r.needs.every(w => t.includes(w)))) return r.key
-  }
-  return null
-}
-// Effective type key for aggregation: tiered google → 'google <tier>', else raw type.
-function typeDimKey(type: string | null | undefined, tags: string[] | null | undefined): string {
-  return googleTierFromTags(type, tags) ?? (type || 'smtp')
-}
+// NOTE: the google-tier split that used to live here has moved to
+// lib/mailbox-dimensions.ts (typeKeyTiered). The provider dimension no longer
+// splits google — tiers are a TAG concern — and every dimension this file
+// writes is now bucketed through the shared keyFor(), so the rows it writes can
+// only ever use keys the cards actually ask for. See that file's header for the
+// three silent bugs the split definitions caused.
 
 function supplierFromDomain(email: string): string | null {
   const domain = (email.split('@')[1] || '').toLowerCase()
@@ -609,10 +599,9 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
         }
         return g
       }
-      const dims: Array<[string, Map<string, Agg>]> = [
-        ['supplier', roll(m => m.supplier || 'Unassigned')],
-        ['type', roll(m => typeDimKey(m.type, m.tags))],
-      ]
+      const dims: Array<[string, Map<string, Agg>]> = DIMENSIONS.map(
+        dim => [dim, roll(m => keyFor(dim, m as DimMailbox))]
+      )
       for (const [dimension, groups] of dims) {
         for (const [key, a] of groups) {
           await client.query(
