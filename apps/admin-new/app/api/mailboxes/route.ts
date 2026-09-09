@@ -126,7 +126,10 @@ export async function GET() {
     // require ALL the rule's words, so "Google New Sep", "New Google" and
     // "GoogleNewSep" all match while "MS New SEP" (no 'google') does not.
     // Order matters — 'generic' is checked before the legacy fallbacks.
+    // 'inboxing' goes first: those mailboxes also carry client tags, and this is
+    // the one that says where they came from.
     const TAG_RULES: { needs: string[]; key: string }[] = [
+      { needs: ['inboxing'], key: 'Inboxing.com' },
       { needs: ['google', 'generic'], key: 'Google Generic' },
       { needs: ['google', 'new'], key: 'Google New Sep' },
       { needs: ['google', 'legacy'], key: 'Google Legacy' },
