@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import pool from '@/lib/db'
 import type { Mailbox, MailboxGroupStats, MailboxesResponse } from '@/types/mailbox'
+import { providerKey, supplierKey, tagKey, typeKeyTiered, type DimMailbox } from '@/lib/mailbox-dimensions'
 
 export const dynamic = 'force-dynamic'
 
@@ -102,62 +103,30 @@ export async function GET() {
       needs_attention: mailboxes.filter(m => m.attention.length > 0).length,
     }
 
-    // Azure = the five Inboxing.com domains. They are microsoft mailboxes but a
-    // different supply route, so the provider dimension counts them separately.
-    const AZURE_DOMAINS = new Set([
-      'lvmgroupuk.co.uk',
-      'hawthorneenergypartners.co.uk',
-      'firstvehicleteam.co.uk',
-      'butterflyeco-greenenergy.co.uk',
-      'ottalyuk.co.uk',
-    ])
-    const domainOf = (email: string) => (email.split('@')[1] || '').toLowerCase()
-
-    // Provider dimension: google / smtp / azure / microsoft — nothing else.
-    // Google tiers (generic / new) are a TAG concern, so they live in the tag
-    // section below rather than splitting this one.
-    const providerKey = (m: Mailbox) => {
-      if (m.type === 'microsoft') return AZURE_DOMAINS.has(domainOf(m.email)) ? 'azure' : 'microsoft'
-      return m.type || null
-    }
-
-    // Tag dimension. Each mailbox lands in exactly ONE bucket, first match wins,
-    // so the cards add up to the fleet. Fuzzy match: normalise the tag then
-    // require ALL the rule's words, so "Google New Sep", "New Google" and
-    // "GoogleNewSep" all match while "MS New SEP" (no 'google') does not.
-    // Order matters — 'generic' is checked before the legacy fallbacks.
-    // 'inboxing' goes first: those mailboxes also carry client tags, and this is
-    // the one that says where they came from.
-    const TAG_RULES: { needs: string[]; key: string }[] = [
-      { needs: ['inboxing'], key: 'Inboxing.com' },
-      { needs: ['google', 'generic'], key: 'Google Generic' },
-      { needs: ['google', 'new'], key: 'Google New Sep' },
-      { needs: ['google', 'legacy'], key: 'Google Legacy' },
-      { needs: ['ms', 'new'], key: 'MS New Sep' },
-      { needs: ['ms', 'legacy'], key: 'MS Legacy' },
-    ]
-    const tagBucket = new Map<string, string>()
-    for (const r of mbRes.rows) {
-      if (!Array.isArray(r.tags)) continue
-      const norm = (r.tags as string[]).map(t => (t || '').toLowerCase().replace(/[^a-z0-9]/g, ''))
-      const hit = TAG_RULES.find(rule => norm.some(t => rule.needs.every(w => t.includes(w))))
-      if (hit) tagBucket.set(r.email as string, hit.key)
-    }
-    const tagKey = (m: Mailbox) => tagBucket.get(m.email) ?? 'Untagged'
-
-    // Kept for the supplier × type comparison table, which still wants the
-    // google tier split.
-    const typeKey = (m: Mailbox) => {
-      if (m.type !== 'google') return m.type || null
-      const b = tagBucket.get(m.email)
-      return b === 'Google Generic' ? 'google generic' : b === 'Google New Sep' ? 'google new' : m.type
-    }
+    // Bucketing lives in lib/mailbox-dimensions so the cards and the stats
+    // writer (lib/mailbox-sync) can never disagree about a key — when they did,
+    // the mismatched cards silently rendered em dashes forever.
+    //
+    // `tags` is not part of the Mailbox type (the page never needs it), so
+    // resolve each mailbox's bucket here from the raw row and look it up by
+    // email below.
+    const dimOf = new Map<string, DimMailbox>(
+      mbRes.rows.map(r => [r.email as string, {
+        email: r.email as string,
+        type: r.type as string | null,
+        tags: Array.isArray(r.tags) ? (r.tags as string[]) : null,
+        supplier: r.supplier as string | null,
+      }])
+    )
+    const dim = (m: Mailbox): DimMailbox =>
+      dimOf.get(m.email) ?? { email: m.email, type: m.type, tags: null, supplier: m.supplier }
 
     const stats = {
-      bySupplier: groupStats(mailboxes, m => m.supplier || 'Unassigned'),
-      byType: groupStats(mailboxes, m => providerKey(m)),
-      byTag: groupStats(mailboxes, m => tagKey(m)),
-      bySupplierType: groupStats(mailboxes, m => (m.supplier ? `${m.supplier} · ${typeKey(m)}` : null)),
+      bySupplier: groupStats(mailboxes, m => supplierKey(dim(m))),
+      byType: groupStats(mailboxes, m => providerKey(dim(m))),
+      byTag: groupStats(mailboxes, m => tagKey(dim(m))),
+      // The comparison table still wants the google tier split.
+      bySupplierType: groupStats(mailboxes, m => (m.supplier ? `${m.supplier} · ${typeKeyTiered(dim(m))}` : null)),
       byClient: groupStats(mailboxes, m => m.workspace_name || null),
     }
 

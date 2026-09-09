@@ -1,18 +1,27 @@
 import { NextResponse } from 'next/server'
 import pool from '@/lib/db'
+import { DIMENSIONS, type Dimension } from '@/lib/mailbox-dimensions'
 
 export const dynamic = 'force-dynamic'
 
-// GET /api/mailboxes/history?dimension=supplier|type&days=30
-// Per-group daily series for the provider/supplier performance cards. Returns
-// raw daily counts so the cards can show SENT, human RR (replies/contacted),
-// RR+OOO ((replies+ooo)/contacted), and bounce rate — and a toggleable
-// multi-line chart. NOTE: total_replies is PV's total_reply_count, which is
-// ALREADY the human/non-OOO count; total_ooo is a SEPARATE additive bucket.
+// GET /api/mailboxes/history?dimension=supplier|type|tag&days=30
+// Per-group daily series for the tag/provider/supplier performance cards.
+// Returns raw daily counts so the cards can show SENT, human RR
+// (replies/contacted), RR+OOO ((replies+ooo)/contacted), and bounce rate — and a
+// toggleable multi-line chart. NOTE: total_replies is PV's total_reply_count,
+// which is ALREADY the human/non-OOO count; total_ooo is a SEPARATE additive
+// bucket.
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url)
-    const dimension = searchParams.get('dimension') === 'type' ? 'type' : 'supplier'
+    // Reject an unknown dimension instead of silently falling back to
+    // 'supplier': a typo used to return another dimension's series, which the
+    // cards then rendered as if it were their own.
+    const raw = searchParams.get('dimension') ?? 'supplier'
+    if (!(DIMENSIONS as readonly string[]).includes(raw)) {
+      return NextResponse.json({ error: `Unknown dimension '${raw}'` }, { status: 400 })
+    }
+    const dimension = raw as Dimension
     const days = Math.min(Math.max(Number(searchParams.get('days')) || 30, 1), 90)
 
     const res = await pool.query(
