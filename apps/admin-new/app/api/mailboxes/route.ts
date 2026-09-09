@@ -102,32 +102,58 @@ export async function GET() {
       needs_attention: mailboxes.filter(m => m.attention.length > 0).length,
     }
 
-    // "Google Generic" / "Google New" are TIERS of google mailbox, not suppliers —
-    // each flagged by a PlusVibe tag. We keep type='google' in the data (so
-    // pricing/filters/enums don't break) but split the type dimension into
-    // 'google' (standard) vs 'google generic' / 'google new' for the perf cards.
-    // Fuzzy match: normalize the tag then require ALL the rule's words, so
-    // "Google New", "New Google", "GoogleNew" and "Google new" all match — while
-    // "New Winnr" / "MS New" (no 'google') do not. Mirrors GOOGLE_TIER_RULES in
-    // lib/mailbox-sync.ts; keep the two in step.
-    const GOOGLE_TIER_RULES: { needs: string[]; key: string }[] = [
-      { needs: ['google', 'generic'], key: 'google generic' },
-      { needs: ['google', 'new'], key: 'google new' },
-    ]
-    // email → tier key, for the google boxes that carry a tier tag.
-    const googleTier = new Map<string, string>()
-    for (const r of mbRes.rows) {
-      if (r.type !== 'google' || !Array.isArray(r.tags)) continue
-      const norm = (r.tags as string[]).map(t => (t || '').toLowerCase().replace(/[^a-z0-9]/g, ''))
-      const hit = GOOGLE_TIER_RULES.find(rule => norm.some(t => rule.needs.every(w => t.includes(w))))
-      if (hit) googleTier.set(r.email as string, hit.key)
+    // Azure = the five Inboxing.com domains. They are microsoft mailboxes but a
+    // different supply route, so the provider dimension counts them separately.
+    const AZURE_DOMAINS = new Set([
+      'lvmgroupuk.co.uk',
+      'hawthorneenergypartners.co.uk',
+      'firstvehicleteam.co.uk',
+      'butterflyeco-greenenergy.co.uk',
+      'ottalyuk.co.uk',
+    ])
+    const domainOf = (email: string) => (email.split('@')[1] || '').toLowerCase()
+
+    // Provider dimension: google / smtp / azure / microsoft — nothing else.
+    // Google tiers (generic / new) are a TAG concern, so they live in the tag
+    // section below rather than splitting this one.
+    const providerKey = (m: Mailbox) => {
+      if (m.type === 'microsoft') return AZURE_DOMAINS.has(domainOf(m.email)) ? 'azure' : 'microsoft'
+      return m.type || null
     }
-    // Effective type key: tiered google → 'google <tier>', else the raw type.
-    const typeKey = (m: Mailbox) => (m.type === 'google' ? (googleTier.get(m.email) ?? m.type) : (m.type || null))
+
+    // Tag dimension. Each mailbox lands in exactly ONE bucket, first match wins,
+    // so the cards add up to the fleet. Fuzzy match: normalise the tag then
+    // require ALL the rule's words, so "Google New Sep", "New Google" and
+    // "GoogleNewSep" all match while "MS New SEP" (no 'google') does not.
+    // Order matters — 'generic' is checked before the legacy fallbacks.
+    const TAG_RULES: { needs: string[]; key: string }[] = [
+      { needs: ['google', 'generic'], key: 'Google Generic' },
+      { needs: ['google', 'new'], key: 'Google New Sep' },
+      { needs: ['google', 'legacy'], key: 'Google Legacy' },
+      { needs: ['ms', 'new'], key: 'MS New Sep' },
+      { needs: ['ms', 'legacy'], key: 'MS Legacy' },
+    ]
+    const tagBucket = new Map<string, string>()
+    for (const r of mbRes.rows) {
+      if (!Array.isArray(r.tags)) continue
+      const norm = (r.tags as string[]).map(t => (t || '').toLowerCase().replace(/[^a-z0-9]/g, ''))
+      const hit = TAG_RULES.find(rule => norm.some(t => rule.needs.every(w => t.includes(w))))
+      if (hit) tagBucket.set(r.email as string, hit.key)
+    }
+    const tagKey = (m: Mailbox) => tagBucket.get(m.email) ?? 'Untagged'
+
+    // Kept for the supplier × type comparison table, which still wants the
+    // google tier split.
+    const typeKey = (m: Mailbox) => {
+      if (m.type !== 'google') return m.type || null
+      const b = tagBucket.get(m.email)
+      return b === 'Google Generic' ? 'google generic' : b === 'Google New Sep' ? 'google new' : m.type
+    }
 
     const stats = {
       bySupplier: groupStats(mailboxes, m => m.supplier || 'Unassigned'),
-      byType: groupStats(mailboxes, m => typeKey(m)),
+      byType: groupStats(mailboxes, m => providerKey(m)),
+      byTag: groupStats(mailboxes, m => tagKey(m)),
       bySupplierType: groupStats(mailboxes, m => (m.supplier ? `${m.supplier} · ${typeKey(m)}` : null)),
       byClient: groupStats(mailboxes, m => m.workspace_name || null),
     }
