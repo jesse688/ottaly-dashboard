@@ -25,9 +25,14 @@ const ACCENT: Record<string, string> = {
   'Winnr Generic': '#8B5CF6', 'Google Generic': '#4285F4', 'Google New': '#34A853',
   Unassigned: '#9CA3AF', google: '#EA4335', 'google generic': '#FBBC04', 'google new': '#34A853',
   microsoft: '#0078D4', smtp: '#475569', azure: '#00A4EF',
-  // Tag dimension
+  // Tag dimension. One entry per key TAG_RULES can return (see
+  // lib/mailbox-dimensions.ts) — a key with no accent here still renders, it
+  // just falls back to navy, so keep these in step when a rule is added.
   'Google New Sep': '#34A853', 'Google Legacy': '#9AA0A6',
-  'MS New Sep': '#0078D4', 'MS Legacy': '#7A8BA6', 'Inboxing.com': '#7C89CD', Untagged: '#C4C9D4',
+  // NB 'Winnr' is already keyed above as a supplier accent and doubles as the
+  // tag accent — do not re-add it here, a duplicate key is a TS error.
+  'SMTP to MS - SEP': '#0078D4', 'MS Legacy': '#7A8BA6', 'MS New': '#F5A623',
+  'Inboxing.com': '#7C89CD', Untagged: '#C4C9D4',
 }
 
 interface DaySeries { sent: number[]; replies: number[]; ooo: number[]; bounces: number[]; contacted: number[] }
@@ -435,7 +440,7 @@ export default function MailboxesPage() {
 
             {/* By tag — the tier each mailbox was tagged with in PlusVibe */}
             <div>
-              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: C.muted, margin: '0 0 .5rem' }}>By tag (Google New Sep / MS New Sep / Google Generic / Google Legacy / MS Legacy / Inboxing.com)</div>
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: C.muted, margin: '0 0 .5rem' }}>By tag</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: '1rem' }}>
                 {data.stats.byTag.map(g => <ProviderCard key={g.key} g={g} accent={ACCENT[g.key] || C.navy} days={tagHistory?.days ?? []} ds={tagHistory?.series[g.key]} leads={leads?.byTag[g.key]} periodDays={periodDays} />)}
               </div>

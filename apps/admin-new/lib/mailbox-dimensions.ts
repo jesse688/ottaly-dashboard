@@ -58,6 +58,10 @@ const domainOf = (email: string) => (email.split('@')[1] || '').toLowerCase()
 // 344 switched-off mailboxes report 274 sends. Keep the Sept batch matched on
 // its own tag name, and let 'legacy' win before 'new' for a mailbox carrying
 // both.
+// 'winnr' is LAST: it names a supply route, not a provider, and some mailboxes
+// carry it alongside their provider tag. Matching it earlier would pull those
+// out of the provider bucket the card is actually reporting on. Reaching it
+// means the mailbox has no provider tag of its own.
 export const TAG_RULES: { needs: string[]; key: string }[] = [
   { needs: ['inboxing'], key: 'Inboxing.com' },
   { needs: ['google', 'generic'], key: 'Google Generic' },
@@ -66,6 +70,7 @@ export const TAG_RULES: { needs: string[]; key: string }[] = [
   { needs: ['smtptoms'], key: 'SMTP to MS - SEP' },
   { needs: ['ms', 'legacy'], key: 'MS Legacy' },
   { needs: ['ms', 'new'], key: 'MS New' },
+  { needs: ['winnr'], key: 'Winnr' },
 ]
 
 // Which tag bucket does this mailbox fall in? Untagged mailboxes get their own
