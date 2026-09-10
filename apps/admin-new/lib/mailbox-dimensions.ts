@@ -49,13 +49,23 @@ const domainOf = (email: string) => (email.split('@')[1] || '').toLowerCase()
 // match while "MS New SEP" (no 'google') does not. Order matters — 'generic' is
 // checked before the legacy fallbacks. 'inboxing' goes first: those mailboxes
 // also carry client tags, and this is the one that says where they came from.
+//
+// WHY 'smtptoms' AND 'legacy' COME BEFORE 'ms'+'new': these needs-words are
+// SUBSTRING tests, so a bare ['ms','new'] also swallowed "MS New" (a different
+// ShireRecoveries batch) and "New MS NonAdmin" — the latter tagged MS Legacy
+// too. That put 71 unrelated mailboxes on the September card and, because they
+// were the only ones in the group with a non-zero daily_limit, made a card of
+// 344 switched-off mailboxes report 274 sends. Keep the Sept batch matched on
+// its own tag name, and let 'legacy' win before 'new' for a mailbox carrying
+// both.
 export const TAG_RULES: { needs: string[]; key: string }[] = [
   { needs: ['inboxing'], key: 'Inboxing.com' },
   { needs: ['google', 'generic'], key: 'Google Generic' },
   { needs: ['google', 'new'], key: 'Google New Sep' },
   { needs: ['google', 'legacy'], key: 'Google Legacy' },
-  { needs: ['ms', 'new'], key: 'MS New Sep' },
+  { needs: ['smtptoms'], key: 'SMTP to MS - SEP' },
   { needs: ['ms', 'legacy'], key: 'MS Legacy' },
+  { needs: ['ms', 'new'], key: 'MS New' },
 ]
 
 // Which tag bucket does this mailbox fall in? Untagged mailboxes get their own
