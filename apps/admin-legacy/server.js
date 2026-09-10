@@ -16472,7 +16472,7 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
     const skipped = {
       unsafe: 0, dnc: 0, departed: 0, missingName: 0, alreadyInCampaign: 0,
       cooldownWorkspace: 0, verticalCollision: 0, burstGap: 0, densityCeiling: 0,
-      snoozed: 0,
+      snoozed: 0, missingEnrichment: 0,
     };
 
     // Mirror the push's override so the "sendable" badge and the Select-N
@@ -16541,6 +16541,21 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
       if (targetCampLc && c.last_campaign_name
           && String(c.last_campaign_name).toLowerCase() === targetCampLc) {
         skipped.alreadyInCampaign++; continue;
+      }
+
+      // Enrichment gate. MUST mirror the push worker's, or the badge counts
+      // contacts the push then drops as missingEnrichment — the exact split
+      // that showed 1,731 verified-safe against 4 actually pushed.
+      //
+      // Keyed on source==='engine' ONLY, deliberately NOT on this route's
+      // `loose`. The two flags are false friends: the push's job.loose is an
+      // explicit engine-push flag, while sendability's loose defaults to TRUE
+      // and means "count unverified as sendable". Mirroring `loose` here would
+      // bypass the gate for every normal push and re-inflate the badge.
+      if (c.source !== 'engine'
+          && ((!c.keywords || String(c.keywords).trim() === '')
+           || (!c.industry || String(c.industry).trim() === ''))) {
+        skipped.missingEnrichment++; continue;
       }
 
       // Same-client cooloff.
