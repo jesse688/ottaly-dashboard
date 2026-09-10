@@ -680,8 +680,14 @@ function ProviderCard({ g, accent, days, ds, leads, periodDays }: { g: MailboxGr
   const bounceRate = tSent > 0 ? tBounces / tSent : g.bounce_rate
 
   // Daily series for the chart (percentages computed per-day).
-  const dailyHuman = days.map((_, i) => { const c = ds?.contacted[i] || ds?.sent[i] || 0; return c > 0 ? (ds!.replies[i] / c) * 100 : 0 })
-  const dailyWithOoo = days.map((_, i) => { const c = ds?.contacted[i] || ds?.sent[i] || 0; return c > 0 ? ((ds!.replies[i] + ds!.ooo[i]) / c) * 100 : 0 })
+  //
+  // A day with NOTHING SENT has no reply rate — it is not 0%. Campaigns don't
+  // send at weekends, so returning 0 drew a cliff to the axis every Saturday and
+  // Sunday on every card, which reads as "replies collapsed" on a chart whose
+  // whole job is spotting exactly that. null + spanGaps bridges the gap instead,
+  // so the line joins Friday to Monday and only a REAL zero touches the floor.
+  const dailyHuman = days.map((_, i) => { const c = ds?.contacted[i] || ds?.sent[i] || 0; return c > 0 ? (ds!.replies[i] / c) * 100 : null })
+  const dailyWithOoo = days.map((_, i) => { const c = ds?.contacted[i] || ds?.sent[i] || 0; return c > 0 ? ((ds!.replies[i] + ds!.ooo[i]) / c) * 100 : null })
   const series = [
     { key: 'Sent', label: 'Sent', data: (ds?.sent ?? []).map(Number), color: accent, percent: false },
     { key: 'RR human', label: 'RR human', data: dailyHuman, color: '#16A34A', percent: true },
