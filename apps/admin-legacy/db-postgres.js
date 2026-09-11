@@ -5118,23 +5118,47 @@ class PostgresDatabase {
     if (!ids || ids.length === 0) return { stamped: 0 };
     // Use ANY($2::uuid[]) to avoid hitting PostgreSQL's parameter limit
     // (~65k positional params per statement; we may have tens of thousands of ids).
-    const sql = `
-      UPDATE contacts
-      SET exported_to_apollo_at = NOW()
-      WHERE workspace_id = $1
-        AND id = ANY($2::uuid[])
-        AND exported_to_apollo_at IS NULL
-    `;
-    // Stamping up to 100k rows updates every index on the table — that UPDATE was
-    // the query blowing the 45s pool timeout AFTER the CSV was already built (the
-    // SELECT is ~2s). Run it on a raised-timeout client like the export SELECTs.
+    // Chunked, with each chunk locking rows in a deterministic id order.
+    //
+    // One 50k-row UPDATE took row locks in whatever order the planner chose
+    // while a concurrent CSV import upserted the same contacts in its own
+    // order — a classic deadlock, and Postgres killed the export
+    // ("[Export] Error: deadlock detected") after the CSV had already been
+    // built. ORDER BY id gives both sides the same lock ordering, and small
+    // chunks keep each lock window short enough not to starve the importer
+    // (which was logging "Batch insert error: statement timeout" throughout).
+    const CHUNK = 5000;
+    const sorted = [...ids].sort();
     const client = await this.pool.connect();
+    let stamped = 0;
     try {
       await client.query(`SET statement_timeout = '300000'`);
-      const result = await client.query(sql, [workspaceId, ids]);
-      return { stamped: result.rowCount || 0 };
+      // Fail fast rather than queue behind a long import batch: a missed stamp
+      // is recoverable (the row just exports again), a wedged export is not.
+      await client.query(`SET lock_timeout = '10s'`);
+      for (let i = 0; i < sorted.length; i += CHUNK) {
+        const batch = sorted.slice(i, i + CHUNK);
+        try {
+          const r = await client.query(
+            `UPDATE contacts SET exported_to_apollo_at = NOW()
+              WHERE id IN (
+                SELECT id FROM contacts
+                 WHERE workspace_id = $1 AND id = ANY($2::uuid[])
+                   AND exported_to_apollo_at IS NULL
+                 ORDER BY id
+                 FOR UPDATE
+              )`, [workspaceId, batch]);
+          stamped += r.rowCount || 0;
+        } catch (e) {
+          // A deadlock or lock timeout on one chunk must not lose the CSV the
+          // caller is already holding. Log and continue: unstamped rows simply
+          // reappear in the next export.
+          console.warn(`[stampExportedToApollo] chunk skipped: ${e.message}`);
+        }
+      }
+      return { stamped };
     } finally {
-      try { await client.query(`SET statement_timeout = 45000`); } catch { /* connection may be dead */ }
+      try { await client.query(`SET statement_timeout = 45000`); await client.query(`SET lock_timeout = 0`); } catch { /* connection may be dead */ }
       client.release();
     }
   }
