@@ -273,6 +273,7 @@ module.exports = (db) => {
       updatedAge: q.updatedAge,
       worksRemote: q.worksRemote, excludeRemote: q.excludeRemote, excludeDNC: q.excludeDNC,
       freshnessDays: q.freshnessDays,
+      staleDays: q.staleDays,
       notExportedToApollo: q.notExportedToApollo, exportedToApollo: q.exportedToApollo,
       sentToPV: q.sentToPV, notSentToPV: q.notSentToPV,
       vertical: q.vertical,
@@ -614,6 +615,7 @@ module.exports = (db) => {
         excludeRemote: rest.excludeRemote,
         excludeDNC: rest.excludeDNC,
         freshnessDays: rest.freshnessDays,
+        staleDays: rest.staleDays,
         notExportedToApollo: rest.notExportedToApollo,
         exportedToApollo: rest.exportedToApollo,
         sentToPV: rest.sentToPV,
@@ -831,6 +833,10 @@ module.exports = (db) => {
         'industry','industryExclude','keywords','keywordsExclude','technologies','technologiesExclude',
         'sicCodes','numEmployeesRanges','emailProviders','excludeMicrosoft','gateway','gatewayExclude',
         'emailStatus','locationNeedsReview',
+        // Re-scrape targeting: staleDays keeps only rows NOT refreshed inside
+        // the window, so an export does not spend Apollo credits re-confirming
+        // data we already refreshed. freshnessDays is its complement.
+        'staleDays','freshnessDays',
         'city','cityExclude','state','stateExclude','country','countryExclude',
         'companyCity','companyState','companyCountry','companyCounty','companyRegion','companyTown',
         'personRegion','personCounty','personTown',
