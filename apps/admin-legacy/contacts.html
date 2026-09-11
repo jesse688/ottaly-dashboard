@@ -7556,6 +7556,10 @@
     srRefreshToolbar();     // flag the toolbar if the send rules are switched off
     loadVerifierHealth();                                     // verifier dot on load
     setInterval(() => loadVerifierHealth(), 60 * 60 * 1000);  // …and hourly after
+    // Apollo priority tiers sit in the always-visible toolbar, so their counts
+    // have to load with the page — they were previously only wired to the
+    // manual ↻ button and sat on em dashes until you clicked it.
+    loadTierCounts();
     loadDistinctValues();
     loadClients();
     loadSavedViews();
