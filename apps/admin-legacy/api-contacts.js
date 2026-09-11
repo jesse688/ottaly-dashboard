@@ -147,10 +147,13 @@ module.exports = (db) => {
               // Rows lost to within-batch email duplicates are reported as
               // errors so the UI's "skipped" count surfaces them.
               job.errors    += result.withinBatchDupes || 0;
-              // Anything that didn't insert, update, or get deduped was lost
-              // to a SQL failure — count those as errors too.
-              const accounted = (result.inserted || 0) + (result.updated || 0) + (result.withinBatchDupes || 0);
-              if (accounted < batch.length) job.errors += batch.length - accounted;
+              // Rows the DB layer reports as genuinely lost to a failed INSERT.
+              // Previously this was inferred by subtraction, which conflated a
+              // real failure with any row the RETURNING clause didn't account
+              // for — so "400 errors" named no cause and pointed at no rows.
+              // bulkCreateContacts now reports failures directly and logs the
+              // SQLSTATE plus sample emails for each one.
+              job.errors    += result.failed || 0;
             } catch (e) {
               job.errors += batch.length;
               console.error('[Import] Batch error:', e.message.slice(0, 150));

@@ -2943,6 +2943,7 @@ class PostgresDatabase {
     const batchSize = 1000;
     let inserted = 0;   // genuinely new rows
     let updated = 0;    // existing rows refreshed
+    let failed = 0;     // rows in a batch whose INSERT threw
 
     for (let i = 0; i < unique.length; i += batchSize) {
       const batch = unique.slice(i, i + batchSize);
@@ -3075,13 +3076,24 @@ class PostgresDatabase {
           if (r.inserted) inserted++; else updated++;
         }
       } catch (err) {
-        console.error('[PostgreSQL] Batch insert error:', err.message);
+        // A failed batch used to log only err.message and drop the rows on the
+        // floor: the caller saw a short count, booked the difference as
+        // "errors", and there was no way to tell WHICH rows or WHY. A 46,996-row
+        // import reported 400 errors — exactly two batches of 200 — with no
+        // usable log line to diagnose it. Record enough to act on, and report
+        // the loss back so the caller stops inferring it from arithmetic.
+        failed += batch.length;
+        const sample = batch.slice(0, 3).map(c => c.email).join(', ');
+        console.error(
+          `[PostgreSQL] Batch insert error: ${batch.length} rows lost ` +
+          `(code=${err.code || 'n/a'}) ${err.message} | first emails: ${sample}`
+        );
       }
     }
 
     // `created` kept for backward-compat with the import endpoint, which adds
     // it to job.imported. We want it to mean "newly inserted" only now.
-    return { created: inserted, inserted, updated, withinBatchDupes };
+    return { created: inserted, inserted, updated, withinBatchDupes, failed };
   }
 
   // ── Saved views ─────────────────────────────────────────────
