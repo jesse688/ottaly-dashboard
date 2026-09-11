@@ -274,6 +274,7 @@ module.exports = (db) => {
       worksRemote: q.worksRemote, excludeRemote: q.excludeRemote, excludeDNC: q.excludeDNC,
       freshnessDays: q.freshnessDays,
       staleDays: q.staleDays,
+      priorityTiers: q.priorityTiers,
       notExportedToApollo: q.notExportedToApollo, exportedToApollo: q.exportedToApollo,
       sentToPV: q.sentToPV, notSentToPV: q.notSentToPV,
       vertical: q.vertical,
@@ -420,6 +421,34 @@ module.exports = (db) => {
       await db.setSetting(FILTER_DEFAULTS_KEY, next);
       res.json({ ok: true, defaults: next });
     } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET /api/contacts/priority-tiers — how many contacts sit in each Apollo
+  // re-scrape tier, under the CURRENT filters. Apollo caps uploads at 500k a
+  // week, so the export screen needs to show what each tier costs before you
+  // commit a week to it. Counts honour staleDays/includeUnverified exactly as
+  // the export does, so the number shown is the number of rows you will get.
+  router.get('/contacts/priority-tiers', async (req, res) => {
+    try {
+      const includeUnverified = req.query.includeUnverified === '1' || req.query.includeUnverified === 'true';
+      const base = {};
+      for (const key of ['staleDays', 'freshnessDays', 'notExportedToApollo']) {
+        if (req.query[key]) base[key] = req.query[key];
+      }
+      const tiers = ['P1', 'P2', 'P3', 'P4', 'P5'];
+      const out = {};
+      // Sequential, not Promise.all: five uncached counts over ~1M rows in
+      // parallel is exactly the pattern that has starved the pool before.
+      for (const t of tiers) {
+        out[t] = await db.getExportableCount(
+          req.workspaceId, { ...base, priorityTiers: t }, includeUnverified);
+      }
+      out.total = Object.values(out).reduce((a, b) => a + b, 0);
+      res.json({ tiers: out, includeUnverified, filters: base });
+    } catch (err) {
+      console.error('[API] priority-tiers error:', err);
       res.status(500).json({ error: err.message });
     }
   });
@@ -616,6 +645,7 @@ module.exports = (db) => {
         excludeDNC: rest.excludeDNC,
         freshnessDays: rest.freshnessDays,
         staleDays: rest.staleDays,
+        priorityTiers: rest.priorityTiers,
         notExportedToApollo: rest.notExportedToApollo,
         exportedToApollo: rest.exportedToApollo,
         sentToPV: rest.sentToPV,
@@ -816,8 +846,11 @@ module.exports = (db) => {
       // includeUnverified lifts the verified-clean guard — export ALL matching
       // contacts (any status) so Apollo can enrich/verify them, then send back.
       const includeUnverified = req.query.includeUnverified === '1' || req.query.includeUnverified === 'true';
-      const MAX_BYTES = 45 * 1024 * 1024; // 45MB target per file (under Apollo's 50MB ceiling)
-      const MAX_ROWS  = 50000;             // hard cap per file regardless of size
+      // Apollo's per-file limits: 100MB and 50,000 rows. Stay just under both —
+      // 49,999 rows so a file can never trip an inclusive-vs-exclusive reading
+      // of the row cap, and 95MB to leave headroom for the final row + header.
+      const MAX_BYTES = 95 * 1024 * 1024;
+      const MAX_ROWS  = 49999;
       const CHUNK = 1000; // rows fetched per DB call
 
       // Build filters from query params — same keys as the contacts search.
@@ -836,7 +869,7 @@ module.exports = (db) => {
         // Re-scrape targeting: staleDays keeps only rows NOT refreshed inside
         // the window, so an export does not spend Apollo credits re-confirming
         // data we already refreshed. freshnessDays is its complement.
-        'staleDays','freshnessDays',
+        'staleDays','freshnessDays','priorityTiers',
         'city','cityExclude','state','stateExclude','country','countryExclude',
         'companyCity','companyState','companyCountry','companyCounty','companyRegion','companyTown',
         'personRegion','personCounty','personTown',

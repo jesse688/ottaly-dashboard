@@ -1587,6 +1587,31 @@
           <button class="btn btn-secondary" id="exportBtn" onclick="startApolloExport()">⬇ Apollo Export</button>
           <label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#6b7280;cursor:pointer;" title="Export ALL matching contacts (including unverified/risky) so Apollo can enrich & verify them, then send back. Off = only verified-clean (safe/safe_catchall) emails."><input type="checkbox" id="exportIncludeUnverified" style="accent-color:#8b5cf6"> Include unverified</label>
           <label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#6b7280;cursor:pointer;" title="Export the Email column only. Apollo matches on the address alone, so name/company/website are just upload weight — a 436k-row file drops from ~32MB to ~9MB. Leave OFF if you want Apollo to UPDATE existing records rather than create new ones (that needs Apollo Contact Id)."><input type="checkbox" id="exportEmailOnly" style="accent-color:#8b5cf6"> Email only</label>
+          <!-- Apollo re-scrape priority. Apollo allows 500,000 uploads a week and
+               the stale backlog is ~950k, so the export has to be ordered by what
+               our campaigns actually ask for. Tiers come from the 541 saved rows
+               in campaign_filters: employee range (504 uses), UK (423), seniority
+               (408). Tick any combination; the counts update live. -->
+          <span id="tierBox" style="display:inline-flex;align-items:center;gap:8px;font-size:11px;color:#374151;border:1px solid #e5e7eb;border-radius:6px;padding:3px 8px;background:#fafafa;">
+            <strong style="color:#6b7280;font-weight:600;">Priority</strong>
+            <label style="display:inline-flex;align-items:center;gap:3px;cursor:pointer;" title="UK · 11-50 staff · decision-maker. The single most-requested combination across saved campaign filters.">
+              <input type="checkbox" class="tierCb" value="P1" style="accent-color:#16a34a"> P1 <span class="tierN" data-t="P1" style="color:#6b7280;">—</span>
+            </label>
+            <label style="display:inline-flex;align-items:center;gap:3px;cursor:pointer;" title="UK · 1-10 staff · decision-maker.">
+              <input type="checkbox" class="tierCb" value="P2" style="accent-color:#16a34a"> P2 <span class="tierN" data-t="P2" style="color:#6b7280;">—</span>
+            </label>
+            <label style="display:inline-flex;align-items:center;gap:3px;cursor:pointer;" title="UK · 51-200 staff · decision-maker.">
+              <input type="checkbox" class="tierCb" value="P3" style="accent-color:#16a34a"> P3 <span class="tierN" data-t="P3" style="color:#6b7280;">—</span>
+            </label>
+            <label style="display:inline-flex;align-items:center;gap:3px;cursor:pointer;" title="UK · 1-200 staff · NO decision-maker seniority recorded. Worth enriching precisely because seniority is the field our campaigns filter on most.">
+              <input type="checkbox" class="tierCb" value="P4" style="accent-color:#f59e0b"> P4 <span class="tierN" data-t="P4" style="color:#6b7280;">—</span>
+            </label>
+            <label style="display:inline-flex;align-items:center;gap:3px;cursor:pointer;" title="Everything else — non-UK, or 200+ staff, or no employee count. Lowest campaign demand.">
+              <input type="checkbox" class="tierCb" value="P5" style="accent-color:#9ca3af"> P5 <span class="tierN" data-t="P5" style="color:#6b7280;">—</span>
+            </label>
+            <span id="tierSelected" style="font-weight:700;color:#111827;"></span>
+            <button type="button" class="btn btn-secondary" style="font-size:10px;padding:1px 6px;" onclick="loadTierCounts()" title="Recount each tier under the current filters">↻</button>
+          </span>
           <button class="btn btn-secondary" id="resetExportBtn" onclick="resetApolloExports()" title="Clear all 'exported to Apollo' stamps so every contact shows as not-exported again">↺ Reset Exports</button>
           <button class="btn btn-secondary" id="mxScanBtn" onclick="classifyUnknownProviders(this)" title="Verify each contact's TRUE email provider (Google / Microsoft / Other) via a live DNS MX lookup — the most accurate method. Detects Microsoft hidden behind security gateways (Mimecast/Proofpoint) via SPF. Runs in the background; safe to re-run.">🔍 Verify Providers</button>
           <label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#6b7280;cursor:pointer;" title="Re-resolve EVERY contact (not just unverified ones) — catches domains that migrated provider, e.g. Google→Microsoft. Slower."><input type="checkbox" id="mxReverify"> re-verify all</label>
@@ -3082,6 +3107,7 @@
           ? (document.getElementById('filterFreshDays')?.value || '60') : '',
         staleDays: document.getElementById('filterStaleOnly')?.checked
           ? (document.getElementById('filterStaleDays')?.value || '60') : '',
+        priorityTiers: selectedTiers().join(','),
         notExportedToApollo: document.getElementById('filterNotExported')?.checked ? 'true' : '',
         exportedToApollo: document.getElementById('filterExportedOnly')?.checked ? 'true' : '',
         sentToPV: document.getElementById('filterSentToPV')?.checked ? 'true' : '',
@@ -3751,6 +3777,8 @@
       ['emailGoogle','emailOutlook','emailOther','emailUnknown','filterRemote','filterExcludeRemote','filterExcludeDNC','filterNotExported','filterExportedOnly','filterSentToPV','filterNotSentToPV','filterSentToPV','filterNotSentToPV','filterFreshOnly','filterStaleOnly'].forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
       { const s = document.getElementById('filterFreshDays'); if (s) s.disabled = true; }
       { const s2 = document.getElementById('filterStaleDays'); if (s2) s2.disabled = true; }
+      document.querySelectorAll('.tierCb').forEach(cb => { cb.checked = false; });
+      if (typeof updateTierTotal === 'function') updateTierTotal();
       if (typeof applyFilterDefaults === 'function') applyFilterDefaults();
       window.location.hash = v.filters || '';
       restoreFiltersFromHash();
@@ -7131,6 +7159,61 @@
         btn.textContent = origLabel;
       }
     }
+
+    // ── Apollo re-scrape priority tiers ───────────────────────────
+    // Which tier boxes are ticked, in P1..P5 order so the CSV comes out
+    // highest-demand first when several are selected.
+    function selectedTiers() {
+      return [...document.querySelectorAll('.tierCb:checked')]
+        .map(cb => cb.value).sort();
+    }
+
+    // Counts are per-tier and honour the live filters, so the number on the
+    // label is the number of rows that tier will actually export. Recounted
+    // on demand rather than on every keystroke — five counts over ~1M rows.
+    async function loadTierCounts() {
+      const spans = document.querySelectorAll('.tierN');
+      spans.forEach(s => { s.textContent = '…'; });
+      try {
+        const p = new URLSearchParams();
+        if (document.getElementById('filterStaleOnly')?.checked) {
+          p.set('staleDays', document.getElementById('filterStaleDays')?.value || '60');
+        }
+        if (document.getElementById('filterNotExported')?.checked) p.set('notExportedToApollo', 'true');
+        if (document.getElementById('exportIncludeUnverified')?.checked) p.set('includeUnverified', '1');
+        const r = await fetch(`/api/contacts/priority-tiers?${p}`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const d = await r.json();
+        spans.forEach(s => {
+          const n = d.tiers?.[s.dataset.t];
+          s.textContent = typeof n === 'number' ? n.toLocaleString() : '—';
+        });
+        updateTierTotal(d.tiers || {});
+      } catch (e) {
+        spans.forEach(s => { s.textContent = '?'; });
+        showMessage(`Tier counts failed: ${e.message}`, 'error');
+      }
+    }
+
+    // Running total for the ticked tiers, against Apollo's 500k weekly ceiling.
+    let _tierCounts = {};
+    function updateTierTotal(counts) {
+      if (counts) _tierCounts = counts;
+      const sel = selectedTiers();
+      const el = document.getElementById('tierSelected');
+      if (!el) return;
+      if (!sel.length) { el.textContent = ''; el.style.color = '#111827'; return; }
+      const known = sel.filter(t => typeof _tierCounts[t] === 'number');
+      if (!known.length) { el.textContent = `= ${sel.join('+')}`; return; }
+      const total = known.reduce((a, t) => a + _tierCounts[t], 0);
+      const over = total > 500000;
+      el.textContent = `= ${total.toLocaleString()}${over ? ' ⚠ over 500k/wk' : ''}`;
+      el.style.color = over ? '#b91c1c' : '#111827';
+    }
+
+    document.addEventListener('change', e => {
+      if (e.target.classList?.contains('tierCb')) updateTierTotal();
+    });
 
     async function startApolloExport() {
       const btn = document.getElementById('exportBtn');
