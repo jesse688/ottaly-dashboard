@@ -9397,6 +9397,79 @@ function scoreDomain({ spf, dkim, dmarc, mx, blacklists }) {
   return { score, status, notes };
 }
 
+// A sending domain can point at the client's site in three legitimate ways,
+// and only one of them is a redirect:
+//
+//   redirect — 301/302 to the real site (URL bar changes)
+//   masked   — 200 whose body frames the real site (URL bar keeps the lookalike)
+//   hosted   — 200 serving the client's actual site on this domain (Wix etc.)
+//
+// Judging on the status code alone reports the last two as "no redirect", which
+// is how a page ends up full of failures that are not failures. HEAD cannot tell
+// them apart either — the evidence is in the body — so classifyPage() peeks at a
+// capped prefix of the response.
+//
+// Separately, a domain with no A record is NOT broken: its MX/SPF/DKIM are
+// untouched and it sends mail perfectly well. It simply has no website.
+const REDIRECT_PEEK_BYTES = 16384;
+
+function classifyMaskTarget(body) {
+  if (!body) return null;
+  const head = body.slice(0, REDIRECT_PEEK_BYTES);
+
+  const frame = head.match(/<frame[^>]+src\s*=\s*["']?([^"'\s>]+)/i);
+  if (frame) return { kind: 'frame', target: frame[1] };
+
+  const iframe = head.match(/<iframe[^>]+src\s*=\s*["']?(https?:\/\/[^"'\s>]+)/i);
+  if (iframe && /width\s*[:=]\s*["']?100%/i.test(head)) {
+    return { kind: 'iframe', target: iframe[1] };
+  }
+
+  const meta = head.match(
+    /<meta[^>]+http-equiv\s*=\s*["']?refresh["']?[^>]*content\s*=\s*["'][^"']*url\s*=\s*([^"'\s;]+)/i
+  );
+  if (meta) return { kind: 'meta_refresh', target: meta[1] };
+
+  return null;
+}
+
+// Does this 200 response carry a real site, or a parking/error page?
+// The <title> can sit hundreds of KB into a site-builder page, well past the
+// prefix we read, so its absence proves nothing — judge on the parking markers.
+function looksLikeRealSite(body) {
+  if (!body || body.length < 1000) return false;
+
+  // A parking page states what it is in the title far more reliably than in the
+  // body, and registrar defaults ("Parking Page") say nothing else that marks
+  // them out — so check the title separately and strictly.
+  const title = (body.match(/<title[^>]*>([^<]*)<\/title>/i) || [])[1] || '';
+  if (/^\s*(parking|parked|default|welcome|index of|untitled)\b/i.test(title)) return false;
+
+  return !/domain (is )?(for sale|parked)|parking page|buy this domain|coming soon|under construction|default web site page|account suspended|website is currently unavailable/i.test(
+    body.slice(0, 4000)
+  );
+}
+
+// Fetch a capped prefix of a page body, decompressing if needed. Hosts compress
+// by default; reading raw gzip/brotli bytes as text yields noise and every
+// content check silently fails.
+async function peekBody(url) {
+  try {
+    const resp = await fetch(url, {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(10000),
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (OttalyDomainCheck)',
+        Accept: 'text/html,application/xhtml+xml',
+      },
+    });
+    const text = await resp.text();
+    return text.slice(0, REDIRECT_PEEK_BYTES * 32);
+  } catch {
+    return '';
+  }
+}
+
 // Follow the domain root's HTTP redirect chain and report where it lands.
 // Reported, not scored — a sending domain usually 301/302s to the client's
 // real site; "no redirect" or a dead target is what we want visible.
@@ -9457,13 +9530,89 @@ async function checkRedirect(domain) {
   }
 }
 
+// checkRedirect() plus a verdict. `kind` is what the page should show:
+//
+//   redirect | masked | hosted   — working, nothing to do
+//   no_web                       — no website, but mail is unaffected
+//   broken | unreachable         — actually needs fixing
+//
+// Kept separate from checkRedirect() so the raw chain data it returns (and
+// everything already stored in the redirect column) is unchanged.
+async function checkRedirectClassified(domain) {
+  const r = await checkRedirect(domain);
+
+  if (!r.ok && r.error) {
+    // Distinguish "no website" from "website is broken" by asking DNS directly.
+    // Node's fetch collapses every transport failure into "fetch failed", so the
+    // error string cannot tell us which — and this is the single most misread
+    // case: no A record means no site, while MX/SPF/DKIM are untouched and the
+    // domain sends mail perfectly well.
+    let hasWeb = false;
+    try {
+      await dnsPromises.resolve(domain, 'A');
+      hasWeb = true;
+    } catch {
+      try {
+        await dnsPromises.resolve(domain, 'CNAME');
+        hasWeb = true;
+      } catch { /* genuinely no web record */ }
+    }
+    return hasWeb
+      ? { ...r, kind: 'unreachable', note: `Has DNS but no response (${r.error}).` }
+      : { ...r, kind: 'no_web', note: 'No website (no A record). Mail is unaffected.' };
+  }
+
+  const bare = String(domain).replace(/^www\./, '').toLowerCase();
+  let finalHost = '';
+  try {
+    finalHost = new URL(r.final_url).hostname.replace(/^www\./, '').toLowerCase();
+  } catch { /* leave blank */ }
+
+  if (finalHost && finalHost !== bare) {
+    return { ...r, kind: 'redirect', note: `Redirects to ${finalHost}.` };
+  }
+
+  // Landed on itself: either masking, the site hosted here, or a dead page.
+  // Only now is a body fetch worth the request.
+  const body = await peekBody(r.final_url || `http://${domain}`);
+  const mask = classifyMaskTarget(body);
+  if (mask) {
+    let target = mask.target;
+    try { target = new URL(mask.target, r.final_url).hostname; } catch { /* keep raw */ }
+    return {
+      ...r,
+      kind: 'masked',
+      mask_kind: mask.kind,
+      mask_target: target,
+      note: `Masked (${mask.kind}) to ${target}. URL bar keeps ${domain}.`,
+    };
+  }
+
+  if (r.status === 200 && looksLikeRealSite(body)) {
+    const title = (body.match(/<title[^>]*>([^<]*)<\/title>/i) || [])[1];
+    return {
+      ...r,
+      kind: 'hosted',
+      page_title: title ? title.trim() : null,
+      note: title ? `Serves the site directly: "${title.trim()}".` : 'Serves a website directly on this domain.',
+    };
+  }
+
+  return {
+    ...r,
+    ok: false,
+    kind: 'broken',
+    note: `Serves no usable page (HTTP ${r.status}) and does not redirect.`,
+  };
+}
+
 async function checkDomain(domain, ws) {
   const [spf, dkim, dmarc, mx, redirect] = await Promise.all([
     checkSpf(domain),
     checkDkim(domain),
     checkDmarc(domain),
     checkMx(domain),
-    checkRedirect(domain),
+    checkRedirectClassified(domain),
   ]);
   // Check the DOMAIN against domain-blacklists (DBLs), not MX IPs.
   // MX IPs point to the inbound mail provider (Outlook/Google) — they
@@ -9635,9 +9784,60 @@ function mailboxesToDomains(mailboxes) {
   return Array.from(map, ([domain, ws]) => ({ domain, ws }));
 }
 
+// Sending domains for the redirect check, sourced from PlusVibe.
+//
+// Deliberately NOT listSendingMailboxes(): that reads EmailBison, which Ottaly
+// no longer sends from, so the redirect page was reporting on a retired
+// platform's domain list. PlusVibe is the live sender.
+//
+// PlusVibe reports three mailbox statuses. ACTIVE and ALERT both mean the
+// domain is still sending (ALERT is a connection warning, not a dead mailbox),
+// so both count. A domain whose mailboxes are ALL ERROR is retired: checking it
+// only adds noise to the page, so it is excluded.
+async function listSendingDomainsFromPlusVibe() {
+  const raw = await pvFetch('/workspaces');
+  const workspaces = Array.isArray(raw) ? raw : (raw?.data || raw?.workspaces || []);
+  if (!workspaces.length) throw new Error('PlusVibe returned no workspaces');
+
+  const domains = new Map();
+
+  for (const ws of workspaces) {
+    const wsId = ws.id || ws._id;
+    if (!wsId) continue;
+
+    let accounts = [];
+    try {
+      const res = await pvFetch(`/account/list?workspace_id=${wsId}&limit=500`);
+      accounts = Array.isArray(res) ? res : (res?.accounts || res?.data || []);
+    } catch (err) {
+      // A workspace we cannot read (someone else's) must not sink the whole
+      // refresh — but log it, because its domains are missing from this run.
+      console.warn(`[domain-redirect] workspace ${ws.name || wsId} unreadable: ${err.message}`);
+      continue;
+    }
+
+    for (const acct of accounts) {
+      const email = acct.email || acct.from_email || '';
+      const at = email.indexOf('@');
+      if (at < 0) continue;
+      const domain = email.slice(at + 1).toLowerCase();
+      const status = String(acct.status || '').toUpperCase();
+
+      if (!domains.has(domain)) {
+        domains.set(domain, { live: 0, ws: { id: wsId, name: ws.name || '' } });
+      }
+      if (status === 'ACTIVE' || status === 'ALERT') domains.get(domain).live++;
+    }
+  }
+
+  return Array.from(domains)
+    .filter(([, d]) => d.live > 0)
+    .map(([domain, d]) => ({ domain, ws: d.ws }));
+}
+
 // Backwards-compat alias for the refresh loop below.
 async function listSendingDomains() {
-  return mailboxesToDomains(await listSendingMailboxes());
+  return listSendingDomainsFromPlusVibe();
 }
 
 let _domainHealthRunning = false;
@@ -9679,7 +9879,7 @@ async function refreshDomainHealth() {
       const batch = domains.slice(i, i + CONCURRENCY);
       await Promise.all(batch.map(async ({ domain, ws }) => {
         try {
-          const redirect = await checkRedirect(domain);
+          const redirect = await checkRedirectClassified(domain);
           await pgdb.updateDomainRedirect(domain, redirect, ws);
           done++;
         } catch (err) {
