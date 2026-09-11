@@ -10,6 +10,27 @@ const dnsPromises = require('dns').promises;
 const { DOMAIN_NORM_SQL } = require('./lib/adscheck/schema');
 const { DISQUALIFIER_TIERS, SNOOZE_MONTHS } = require('./scripts/extract-reply-facts');
 
+// Freshness is measured from `imported_at` and nothing else.
+//
+// `updated_at` is NOT a freshness signal: it moves whenever a row is touched
+// for any reason. A mass event on 2026-08-19 stamped 873,997 rows, 610,404 of
+// them created back in May, and routine work does it daily — on 2026-09-11,
+// 63,192 Apollo exports and 4,183 sends bumped updated_at on rows that received
+// no new data. Reading it made "updated in last 30 days" return all 1,474,026
+// contacts, i.e. the whole table.
+//
+// `imported_at` has no such problem: it is stamped only by an actual import,
+// on insert and update alike (Apollo re-confirming the same values is still a
+// check performed that day). So a real rolling window over it is correct, and
+// needs no epoch clamp — an earlier attempt to clamp this to the day we noticed
+// the bug stranded 25,177 rows imported 2026-07-14..2026-09-10, which were too
+// old to count as fresh yet too recently refreshed to be worth re-exporting.
+//
+// A NULL imported_at is never fresh: no stamp means no proof of a refresh.
+//
+// Current operating rule: use the 60-day window everywhere until the whole
+// base has been refreshed inside it, then move down to 30.
+
 // Dedicated resolver for high-volume MX enrichment. Routing these lookups through
 // public resolvers (Cloudflare / Google) instead of the server's default resolver
 // means our ~8k-per-run MX queries blend into global query volume rather than
@@ -2369,17 +2390,29 @@ class PostgresDatabase {
       clauses.push(`solar_max_kwp >= $${p++}`); params.push(n);
     });
     // Data age — filter by how fresh the contact is. "last N days" = recently
-    // touched; "staleN" = NOT touched in N days (or never). Uses the most recent of
-    // updated_at / created_at so a contact that's never been updated still sorts by
-    // when it was added.
+    // touched; "staleN" = NOT touched in N days (or never).
+    // "Recent" means imported_at — the only stamp that proves we received data.
+    // It used to read COALESCE(updated_at, created_at), which counted the
+    // 2026-08-19 mass update as a refresh and so returned all 1,474,026 rows
+    // for "last 30 days". The labels are unchanged; what they measure is now
+    // truthful. See the FRESHNESS note at the top of this file.
+    //
+    // "Stale" is the complement and deliberately still reads updated_at: a row
+    // touched recently by ANY means is not a re-scrape candidate, and a NULL or
+    // pre-epoch stamp makes it stale, which is correct either way.
     safe('updatedAge', () => {
       const v = filters.updatedAge;
       if (!v) return;
-      const recent = { '7':7, '30':30, '90':90, '180':180 };
+      const recent = { '7':7, '30':30, '60':60, '90':90, '180':180 };
       const stale  = { 'stale90':90, 'stale180':180, 'stale365':365 };
-      const age = `COALESCE(updated_at, created_at)`;
-      if (recent[v]) { clauses.push(`${age} >= now() - ($${p++}::int * interval '1 day')`); params.push(recent[v]); }
-      else if (stale[v]) { clauses.push(`(${age} IS NULL OR ${age} < now() - ($${p++}::int * interval '1 day'))`); params.push(stale[v]); }
+      if (recent[v]) {
+        clauses.push(`imported_at IS NOT NULL AND imported_at >= now() - ($${p++}::int * interval '1 day')`);
+        params.push(recent[v]);
+      } else if (stale[v]) {
+        const age = `COALESCE(updated_at, created_at)`;
+        clauses.push(`(${age} IS NULL OR ${age} < now() - ($${p++}::int * interval '1 day'))`);
+        params.push(stale[v]);
+      }
     });
     safe('worksRemote',    () => { if (filters.worksRemote === 'true')   clauses.push(`works_remote = true`); });
     safe('excludeRemote',  () => { if (filters.excludeRemote === 'true') clauses.push(`(works_remote IS NULL OR works_remote = false)`); });

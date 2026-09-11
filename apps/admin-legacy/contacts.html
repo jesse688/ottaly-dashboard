@@ -1345,10 +1345,11 @@
             <label style="display:flex;align-items:center;gap:5px;font-size:12px;" title="Only contacts whose estimated solar system is at least this many kWp.">
               ☀️ Min kWp <input type="number" id="solarMinKwp" min="0" step="10" placeholder="e.g. 100" style="width:70px;background:var(--card,#1a1a1a);color:inherit;border:1px solid var(--line,#333);border-radius:6px;padding:3px 6px;">
             </label>
-            <select id="updatedAge" title="Filter by data freshness — uses the most recent of updated/created date.">
+            <select id="updatedAge" title="Filter by data freshness — counts only contacts we have actually re-imported (import date), never a row merely touched by an export or a send. Windows start from 2026-09-11, the day trustworthy stamping began. Use 60 days until the whole base has been refreshed inside that window, then move down to 30.">
               <option value="">🕓 Data age — all</option>
               <option value="7">Updated in last 7 days</option>
               <option value="30">Updated in last 30 days</option>
+              <option value="60">Updated in last 60 days</option>
               <option value="90">Updated in last 90 days</option>
               <option value="180">Updated in last 6 months</option>
               <option value="stale90">Stale — 90+ days old</option>
