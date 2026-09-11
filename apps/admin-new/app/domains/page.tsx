@@ -39,6 +39,18 @@ interface Blacklist {
   ip?: string
 }
 
+// How the domain points at the client's site. redirect/masked/hosted are all
+// working setups — only no_web, broken and unreachable need anyone's attention.
+type RedirectKind = 'redirect' | 'masked' | 'hosted' | 'no_web' | 'broken' | 'unreachable'
+
+interface RedirectCheck {
+  kind?: RedirectKind
+  note?: string
+  final_url?: string | null
+  status?: number | null
+  error?: string | null
+}
+
 interface Domain {
   domain: string
   workspace_name: string
@@ -48,6 +60,7 @@ interface Domain {
   dkim: DkimCheck | null
   dmarc: DmarcCheck | null
   mx: MxCheck | null
+  redirect: RedirectCheck | null
   blacklists: Blacklist[]
   last_checked: string | null
   notes: string | null
@@ -63,6 +76,32 @@ interface CheckResult {
   score: number
   status: 'good' | 'warning' | 'critical'
   notes?: string
+}
+
+// A sending domain can point at the client's site three different ways, and
+// only one is a 301. Showing "no redirect" for the other two fills the page
+// with failures that are not failures, so each gets its own label.
+const REDIRECT_LABELS: Record<string, { text: string, cls: string }> = {
+  redirect:    { text: 'Redirects',  cls: 'bg-green-100 text-green-700' },
+  hosted:      { text: 'Hosted',     cls: 'bg-green-100 text-green-700' },
+  masked:      { text: 'Masked',     cls: 'bg-green-100 text-green-700' },
+  no_web:      { text: 'No website', cls: 'bg-yellow-100 text-yellow-800' },
+  broken:      { text: 'Broken',     cls: 'bg-red-100 text-red-700' },
+  unreachable: { text: 'No response', cls: 'bg-red-100 text-red-700' },
+}
+
+function RedirectCell({ redirect }: { redirect: RedirectCheck | null }) {
+  const kind = redirect?.kind
+  if (!kind) return <span className="text-gray-400 text-xs">—</span>
+  const label = REDIRECT_LABELS[kind] || { text: kind, cls: 'bg-gray-100 text-gray-600' }
+  return (
+    <span
+      className={`inline-block px-2 py-0.5 rounded text-xs font-bold ${label.cls}`}
+      title={redirect?.note || ''}
+    >
+      {label.text}
+    </span>
+  )
 }
 
 function CheckIcon({ state, title }: { state: boolean | 'warn' | null, title: string }) {
@@ -508,6 +547,7 @@ export default function DomainsPage() {
                   <TableHead className="text-center text-xs font-bold uppercase">DKIM</TableHead>
                   <TableHead className="text-center text-xs font-bold uppercase">DMARC</TableHead>
                   <TableHead className="text-center text-xs font-bold uppercase">MX</TableHead>
+                  <TableHead className="text-xs font-bold uppercase">Website</TableHead>
                   <TableHead className="text-xs font-bold uppercase">Blacklists</TableHead>
                   <TableHead className="text-right text-xs font-bold uppercase">Score</TableHead>
                   <TableHead className="text-xs font-bold uppercase">Status</TableHead>
@@ -537,6 +577,9 @@ export default function DomainsPage() {
                     </TableCell>
                     <TableCell className="text-center">
                       <CheckIcon state={d.mx?.present === true ? true : false} title={(d.mx?.hosts || []).join(', ')} />
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      <RedirectCell redirect={d.redirect} />
                     </TableCell>
                     <TableCell className="text-sm">
                       {d.blacklists.length > 0 ? (
