@@ -1107,6 +1107,26 @@ class PostgresDatabase {
         resolved_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )`,
 
+      // Blacklist listings over time.
+      //
+      // domain_health.blacklists holds only the CURRENT state and is overwritten
+      // on every scan, so a delisting used to erase all evidence a domain was
+      // ever listed. Delisting is the signal worth having: it separates "this
+      // domain is burned" from "it had a bad week and recovered".
+      //
+      // Append-only, one row per CHANGE (not per scan), written by diffing each
+      // scan against the stored state. No extra DNS lookups — it reuses the scan
+      // that already ran.
+      `CREATE TABLE IF NOT EXISTS domain_blacklist_events (
+        id          BIGSERIAL PRIMARY KEY,
+        domain      TEXT NOT NULL,
+        list        TEXT NOT NULL,
+        event       TEXT NOT NULL CHECK (event IN ('listed','delisted')),
+        detected_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_bl_events_domain ON domain_blacklist_events (domain, detected_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_bl_events_time   ON domain_blacklist_events (detected_at DESC)`,
+
       // ── Companies House bulk-data tables ──────────────────────────
       `CREATE TABLE IF NOT EXISTS ch_companies (
         company_number TEXT PRIMARY KEY,
@@ -4742,7 +4762,95 @@ class PostgresDatabase {
     return { stamped: result.rowCount || 0 };
   }
 
+  // Record listings that appeared or disappeared since the last scan.
+  //
+  // Called from upsertDomainHealth BEFORE the row is overwritten, because the
+  // stored value is the only record of the previous state.
+  //
+  // Writes only CHANGES, so a domain listed for a month produces one row, not
+  // one per scan. A scan that found nothing is ignored rather than treated as a
+  // mass delisting: an empty result is far more often a failed/rate-limited
+  // lookup than every domain clearing at once, and inventing delistings would
+  // poison exactly the history this table exists to provide.
+  async recordBlacklistChanges(domain, nextList) {
+    const next = new Set(
+      (Array.isArray(nextList) ? nextList : []).map(b => String(b.list || b)).filter(Boolean)
+    );
+
+    const prevRow = await this.query(
+      `SELECT blacklists FROM domain_health WHERE domain = $1`, [domain]
+    );
+    if (!prevRow.rows.length) {
+      // First time we have seen this domain: record current listings as the
+      // starting point, but there is nothing to compare against for delistings.
+      for (const list of next) {
+        await this.query(
+          `INSERT INTO domain_blacklist_events (domain, list, event) VALUES ($1, $2, 'listed')`,
+          [domain, list]
+        );
+      }
+      return { listed: next.size, delisted: 0 };
+    }
+
+    const rawPrev = prevRow.rows[0].blacklists;
+    const prevArr = typeof rawPrev === 'string' ? JSON.parse(rawPrev || '[]') : (rawPrev || []);
+    const prev = new Set(prevArr.map(b => String(b.list || b)).filter(Boolean));
+
+    // Guard: "was listed, now nothing at all" is the shape of a failed lookup.
+    // Only trust a delisting when the scan still returned SOME result, or when
+    // the domain had nothing before either.
+    const looksLikeFailedLookup = prev.size > 0 && next.size === 0;
+
+    let listed = 0, delisted = 0;
+    for (const list of next) {
+      if (!prev.has(list)) {
+        await this.query(
+          `INSERT INTO domain_blacklist_events (domain, list, event) VALUES ($1, $2, 'listed')`,
+          [domain, list]
+        );
+        listed++;
+      }
+    }
+    if (!looksLikeFailedLookup) {
+      for (const list of prev) {
+        if (!next.has(list)) {
+          await this.query(
+            `INSERT INTO domain_blacklist_events (domain, list, event) VALUES ($1, $2, 'delisted')`,
+            [domain, list]
+          );
+          delisted++;
+        }
+      }
+    }
+    return { listed, delisted, skippedDelist: looksLikeFailedLookup };
+  }
+
+  // Blacklist history. Defaults to changes only, newest first.
+  async listBlacklistEvents({ domain = null, days = 365, limit = 500 } = {}) {
+    const params = [];
+    let where = `WHERE detected_at > NOW() - ($${params.push(days)} || ' days')::interval`;
+    if (domain) where += ` AND domain = $${params.push(domain)}`;
+    const r = await this.query(
+      `SELECT domain, list, event, detected_at
+         FROM domain_blacklist_events
+         ${where}
+        ORDER BY detected_at DESC
+        LIMIT $${params.push(limit)}`,
+      params
+    );
+    return r.rows;
+  }
+
   async upsertDomainHealth(row) {
+    // Must run before the UPSERT: the stored row is the only record of the
+    // previous listing state, and the write below destroys it.
+    try {
+      await this.recordBlacklistChanges(row.domain, row.blacklists);
+    } catch (err) {
+      // History is valuable but not worth failing a health write over.
+      console.warn(`[blacklist-history] ${row.domain}: ${err.message}`);
+    }
+
     const sql = `
       INSERT INTO domain_health
         (domain, workspace_id, workspace_name, spf, dkim, dmarc, mx, blacklists, score, status, last_checked, notes, redirect, updated_at)
