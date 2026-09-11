@@ -10061,6 +10061,119 @@ app.get('/api/domains/health', requireSession, async (req, res) => {
   }
 });
 
+// ── Shareable domain report ───────────────────────────────
+// A read-only link for mailbox providers, so they can see what needs fixing
+// without an Ottaly login.
+//
+// Deliberately narrow, because this is the one surface an outsider can reach:
+//   * PROBLEM domains only — healthy ones are never included, so the link is a
+//     work list, not a map of the estate.
+//   * no scores, no notes fields, no workspace ids — just the domain, which
+//     checks fail, and any blacklist names.
+//   * optional client filter, so one provider can be sent only their own.
+//   * revocable: bumping DOMAIN_SHARE_EPOCH invalidates every link ever issued.
+//
+// The token is a JWT signed with SESSION_SECRET. It carries no expiry by
+// request, so revocation is the epoch, not time.
+const DOMAIN_SHARE_EPOCH = () => String(process.env.DOMAIN_SHARE_EPOCH || '1');
+
+// What the PROVIDER can actually fix: DNS records and the domain redirect.
+//
+// Blacklistings are deliberately excluded. A listing comes from sending
+// reputation — our copy, volume and list quality — not from anything the
+// mailbox provider configured, so putting it on their work list is noise and
+// invites an argument about whose fault it is.
+function isProblemDomain(row) {
+  const j = (v, d) => (typeof v === 'string' ? JSON.parse(v || d) : (v || JSON.parse(d)));
+  const spf      = j(row.spf, '{}');
+  const dkim     = j(row.dkim, '{}');
+  const dmarc    = j(row.dmarc, '{}');
+  const mx       = j(row.mx, '{}');
+  const redirect = j(row.redirect, '{}');
+
+  const issues = [];
+  if (!spf.present)    issues.push('SPF missing');
+  else if (!spf.valid) issues.push('SPF invalid');
+  if (!dkim.present)   issues.push('DKIM missing');
+  if (!dmarc.present)  issues.push('DMARC missing');
+  else if (dmarc.policy === 'reject' && !dkim.present) {
+    // p=reject with no DKIM is the dangerous combination: mail that fails SPF
+    // (any forward or relay) gets rejected outright, not just spam-foldered.
+    issues.push('DMARC p=reject but no DKIM — mail can be rejected');
+  }
+  if (!mx.present)     issues.push('MX missing');
+
+  // Website: redirect/hosted/masked all reach the client's site and are fine.
+  if (redirect.kind === 'broken')      issues.push('Website does not load');
+  else if (redirect.kind === 'unreachable') issues.push('Website does not respond');
+  else if (redirect.kind === 'no_web') issues.push('No website (no A record)');
+
+  return issues.length ? issues : null;
+}
+
+// Create a link. Admin only — issuing one exposes data outside Ottaly.
+app.post('/api/domains/share', requireAdmin, async (req, res) => {
+  try {
+    const client = (req.body && req.body.client) || null;
+    const token = jwt.sign(
+      { kind: 'domain-report', client, epoch: DOMAIN_SHARE_EPOCH() },
+      SESSION_SECRET
+    );
+    const base = process.env.PUBLIC_BASE_URL || `https://${req.headers.host}`;
+    res.json({ url: `${base}/domain-report?t=${token}`, client: client || 'all clients' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+function readShareToken(req) {
+  const t = String(req.query.t || '');
+  if (!t) return null;
+  try {
+    const p = jwt.verify(t, SESSION_SECRET);
+    if (p.kind !== 'domain-report') return null;
+    // Epoch mismatch = link was revoked.
+    if (String(p.epoch) !== DOMAIN_SHARE_EPOCH()) return null;
+    return p;
+  } catch {
+    return null;
+  }
+}
+
+// The data behind a share link. No session required — the token IS the auth.
+app.get('/api/domains/shared', async (req, res) => {
+  const claim = readShareToken(req);
+  if (!claim) return res.status(401).json({ error: 'This link is not valid or has been revoked.' });
+
+  try {
+    const pgdb = app.locals.pgDb;
+    if (!pgdb) return res.json({ rows: [], lastRun: null });
+
+    const all = await pgdb.listDomainHealth();
+    const rows = [];
+    for (const r of all) {
+      if (claim.client && r.workspace_name !== claim.client) continue;
+      const issues = isProblemDomain(r);
+      if (!issues) continue;
+      // Whitelist the fields that leave the building.
+      rows.push({
+        domain: r.domain,
+        client: r.workspace_name || null,
+        issues,
+        last_checked: r.last_checked,
+      });
+    }
+    rows.sort((a, b) => (a.client || '').localeCompare(b.client || '') || a.domain.localeCompare(b.domain));
+    res.json({ rows, client: claim.client, lastRun: all[0]?.last_checked || null });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/domain-report', (req, res) => {
+  res.sendFile(path.join(__dirname, 'domain-report.html'));
+});
+
 app.post('/api/domains/refresh', requireSession, async (req, res) => {
   // Manual only — kicks off a full re-check (SPF/DKIM/DMARC/MX/blacklists +
   // redirect) of every domain in the background. There is NO auto-refresh
