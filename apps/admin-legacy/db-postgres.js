@@ -2380,6 +2380,19 @@ class PostgresDatabase {
       else if (v === 'no') clauses.push(`(company_name IS NULL OR company_name = '')`);
     });
 
+    // Data freshness — opt-in, OFF by default. imported_at is stamped on every
+    // import (insert and update alike): any upload counts as fresh, because
+    // Apollo re-confirming the same values is still a check done today.
+    // NULL imported_at is never fresh — those are contacts we have no proof of
+    // a recent refresh for. Only 30 and 60 are accepted so a stray value can't
+    // silently widen the window.
+    safe('freshnessDays',  () => {
+      const days = parseInt(filters.freshnessDays, 10);
+      if (days === 30 || days === 60) {
+        clauses.push(`imported_at IS NOT NULL AND imported_at > NOW() - INTERVAL '${days} days'`);
+      }
+    });
+
     // Apollo export filter
     safe('notExportedToApollo', () => { if (filters.notExportedToApollo === 'true') clauses.push(`exported_to_apollo_at IS NULL`); });
     safe('exportedToApollo',    () => { if (filters.exportedToApollo === 'true')    clauses.push(`exported_to_apollo_at IS NOT NULL`); });
@@ -2937,7 +2950,22 @@ class PostgresDatabase {
           last_campaign_name  = COALESCE(NULLIF(EXCLUDED.last_campaign_name, ''), contacts.last_campaign_name),
           num_employees       = COALESCE(EXCLUDED.num_employees, contacts.num_employees),
           raw_data            = EXCLUDED.raw_data,
-          tags                = EXCLUDED.tags,
+          -- Merge, never replace. Tags are OURS (pv_* lead status, camp:*
+          -- campaign membership, replied/bounced) while the incoming set is
+          -- only whatever the CSV carried (typically just the ESP tag). A
+          -- straight EXCLUDED.tags wiped every non-CSV tag off 121,264
+          -- contacts on the 2026-09-11 Apollo import. DISTINCT keeps the
+          -- array from growing on repeat imports.
+          tags                = ARRAY(
+                                  SELECT DISTINCT UNNEST(
+                                    COALESCE(contacts.tags, '{}') || COALESCE(EXCLUDED.tags, '{}')
+                                  )
+                                ),
+          -- Stamp on UPDATE too, not just INSERT. This is "when did we last
+          -- receive data for this person" and it backs the send-only-fresh-
+          -- data rule; leaving it untouched on update left it NULL on 445k
+          -- contacts and made freshness unmeasurable.
+          imported_at         = CURRENT_TIMESTAMP,
           updated_at          = CURRENT_TIMESTAMP
         RETURNING (xmax = 0) AS inserted;
       `;
@@ -4250,26 +4278,42 @@ class PostgresDatabase {
   // Delete contacts whose email or apollo_id matches any in the given lists.
   // dryRun=true returns the would-delete count without modifying anything.
   // Used by the "delete-from-csv" flow when re-scraping stale Apollo data.
-  async deleteByCsvKeys({ emails = [], apolloIds = [], dryRun = false }) {
+  // `workspaceId` scopes the delete. It defaults to the shared prospect pool
+  // ('ottaly-global') because an unscoped delete matches the same person in
+  // every client workspace they were ever pushed to: a 14,508-row CSV
+  // resolved to 30,251 rows across 39 workspaces, taking each client's send
+  // history, reply counts and pushed_campaigns stamps with it. Pass null
+  // explicitly for the old cross-workspace behaviour.
+  async deleteByCsvKeys({ emails = [], apolloIds = [], dryRun = false, workspaceId = 'ottaly-global' }) {
     const cleanEmails = [...new Set(emails.map(e => (e || '').toString().trim().toLowerCase()).filter(Boolean))];
     const cleanApolloIds = [...new Set(apolloIds.map(a => (a || '').toString().trim()).filter(Boolean))];
     if (!cleanEmails.length && !cleanApolloIds.length) return { deleted: 0, matched: 0 };
 
-    const countSql = `
-      SELECT COUNT(*)::int AS n FROM contacts
-      WHERE ($1::text[] IS NOT NULL AND LOWER(email) = ANY($1::text[]))
-         OR ($2::text[] IS NOT NULL AND apollo_id = ANY($2::text[]))
+    // Never delete a contact that has ever replied. PV/unibox can hold a
+    // reply the contacts row doesn't know about (replies_count read 0 for
+    // 428 people who had in fact replied, 38 of them "interested" and 15
+    // already billed as leads), so the guard checks the reply tables too
+    // rather than trusting the denormalised counter.
+    const where = `
+      (($1::text[] IS NOT NULL AND LOWER(c.email) = ANY($1::text[]))
+        OR ($2::text[] IS NOT NULL AND c.apollo_id = ANY($2::text[])))
+      AND ($3::text IS NULL OR c.workspace_id = $3::text)
+      AND COALESCE(c.replies_count, 0) = 0
+      AND c.last_reply_at IS NULL
+      AND c.marked_as_lead_at IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM unibox_replies u WHERE LOWER(u.lead_email) = LOWER(c.email)
+      )
     `;
-    const { rows } = await this.query(countSql, [cleanEmails, cleanApolloIds]);
+    const params = [cleanEmails, cleanApolloIds, workspaceId || null];
+
+    const { rows } = await this.query(
+      `SELECT COUNT(*)::int AS n FROM contacts AS c WHERE ${where}`, params);
     const matched = rows[0]?.n || 0;
     if (dryRun || matched === 0) return { deleted: 0, matched };
 
-    const delSql = `
-      DELETE FROM contacts
-      WHERE ($1::text[] IS NOT NULL AND LOWER(email) = ANY($1::text[]))
-         OR ($2::text[] IS NOT NULL AND apollo_id = ANY($2::text[]))
-    `;
-    const result = await this.query(delSql, [cleanEmails, cleanApolloIds]);
+    const result = await this.query(
+      `DELETE FROM contacts AS c WHERE ${where}`, params);
     return { deleted: result.rowCount || 0, matched };
   }
 
@@ -4568,6 +4612,14 @@ class PostgresDatabase {
               || jsonb_build_object('last_sent', $3::text, 'pushed_at', $3::text),
             true
           ),
+          -- Keep the scalar in step with the JSONB. This used to stamp only
+          -- emailed_workspaces, so last_emailed_at stayed NULL on ~half of all
+          -- emailed contacts, and any "least recently contacted" ordering read
+          -- those as never-contacted — putting recently emailed people at the
+          -- FRONT of the next selection. GREATEST keeps it monotonic so a
+          -- replayed or out-of-order stamp can't walk the date backwards.
+          last_emailed_at = GREATEST(COALESCE(last_emailed_at, '-infinity'::timestamp), $3::timestamp),
+          email_count = COALESCE(email_count, 0) + 1,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ANY($4::uuid[])
     `;
