@@ -9840,6 +9840,21 @@ async function listSendingDomains() {
   return listSendingDomainsFromPlusVibe();
 }
 
+// Domains that carry no client name, hidden from the Domains page. Kept in a
+// data file rather than in code so the list can be edited without a deploy.
+// Read fresh each refresh so an edit takes effect on the next run.
+function loadGenericDomains() {
+  try {
+    return fs
+      .readFileSync(path.join(__dirname, 'generic-domains.txt'), 'utf8')
+      .split('\n')
+      .map(l => l.trim().toLowerCase())
+      .filter(l => l && !l.startsWith('#'));
+  } catch {
+    return []; // no file → nothing hidden, and anything hidden before comes back
+  }
+}
+
 let _domainHealthRunning = false;
 let _domainHealthStartedAt = 0;
 // Per-domain hard cap so one unresponsive DNS lookup can't freeze the whole
@@ -9876,6 +9891,14 @@ async function refreshDomainHealth() {
       console.warn('[domain-redirect] live domain list was empty — skipped the retire sync');
     } else if (sync.hidden || sync.restored) {
       console.log(`[domain-redirect] retired ${sync.hidden} domain(s), restored ${sync.restored}`);
+    }
+
+    // Hide domains carrying no client name. These still send — this only keeps
+    // the page readable — so they are marked with their own reason and are not
+    // touched by the retire sync above.
+    const genericSync = await pgdb.syncIgnoredGenericDomains(loadGenericDomains());
+    if (genericSync.hidden || genericSync.restored) {
+      console.log(`[domain-redirect] generic: hid ${genericSync.hidden}, restored ${genericSync.restored}`);
     }
 
     const ignored = new Set(await pgdb.listIgnoredDomains());
