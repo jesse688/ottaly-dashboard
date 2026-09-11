@@ -437,6 +437,11 @@ module.exports = (db) => {
       for (const key of ['staleDays', 'freshnessDays', 'notExportedToApollo']) {
         if (req.query[key]) base[key] = req.query[key];
       }
+      // Mirror the export's stale-by-default rule exactly, or the tier counts
+      // would promise more rows than the export actually produces.
+      if (!base.freshnessDays && req.query.staleDays !== '0') {
+        base.staleDays = base.staleDays || '60';
+      }
       const tiers = ['P1', 'P2', 'P3', 'P4', 'P5'];
       const out = {};
       // Sequential, not Promise.all: five uncached counts over ~1M rows in
@@ -1007,6 +1012,18 @@ module.exports = (db) => {
       }
       // The search box param is `q` on the wire but `search` in the filter builder.
       if (req.query.q) exportFilters.search = req.query.q;
+
+      // Stale-only is the DEFAULT for an Apollo export, not an opt-in.
+      // The whole point of the round trip is to refresh data we have not
+      // confirmed recently; including rows Apollo verified last week burns
+      // credits against a 500k/week ceiling to be told what we already know.
+      // A P1 export ran at 92,473 rows when only 69,925 were actually stale —
+      // ~22,500 wasted — because the box was simply not ticked.
+      // freshnessDays is the deliberate opposite, so it wins if explicitly set;
+      // staleDays=0 is the escape hatch for "really export everything".
+      if (!exportFilters.freshnessDays && req.query.staleDays !== '0') {
+        exportFilters.staleDays = exportFilters.staleDays || '60';
+      }
 
       // Count against the SAME clean guard the export paginates over, else
       // X-Has-More overshoots the real end and loops empty/wrong files.
