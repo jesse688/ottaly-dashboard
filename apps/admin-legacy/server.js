@@ -16610,6 +16610,26 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
 // from a bounce-driven DNC and impossible to undo selectively. Reading the
 // facts at push time keeps it reversible — delete the fact and the address is
 // live again.
+// Verification-status gating, shared by every push path so they cannot drift.
+//
+// A contact with no email_status has never been through the verifier. That is
+// not evidence of a bad address — measured over every contact we have emailed,
+// unverified bounces LESS than "safe" (0.49% vs 1.22%) and replies better
+// (4.26% interested vs 2.46%). Only 'invalid' is genuinely dangerous at 55.20%.
+// Treating NULL as unsendable also made it unfixable: those contacts could
+// never be pushed, so they could never be verified either.
+const UNVERIFIED = 'unverified';
+// Everything except 'invalid'. Callers can still narrow this via the modal.
+const DEFAULT_PUSHABLE_STATUSES = new Set([
+  'safe', 'safe_catchall', 'unknown', 'risky', UNVERIFIED,
+]);
+// NULL/'' collapses to the UNVERIFIED bucket so it can be selected explicitly
+// rather than silently failing every membership test.
+function statusBucket(status) {
+  const s = (status || '').toLowerCase().trim();
+  return s === '' ? UNVERIFIED : s;
+}
+
 let _departedCache = { at: 0, set: new Set() };
 async function getDepartedEmails(pgdb) {
   if (!pgdb) return new Set();
@@ -16654,17 +16674,25 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
     const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, verticalCollision: 0, burstGap: 0, densityCeiling: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
     const crossClientGuard = buildCrossClientGuard(workspace_id, req.body.workspace_name || '', overrideGuards);
     // Status gate. The user picks which verification-result buckets to push via
-    // the modal (allowed_statuses). Validate against the known vocabulary; default
-    // to the safe pair when absent so existing callers are unchanged. NULL/empty
-    // email_status is never pushable regardless of selection.
-    const KNOWN_STATUSES = ['safe', 'safe_catchall', 'unknown', 'risky', 'invalid'];
+    // the modal (allowed_statuses). Validate against the known vocabulary; the
+    // default now allows everything except 'invalid'.
+    //
+    // Measured bounce rate by status over every contact we have emailed:
+    //   never verified 0.49%   risky 0.55%   safe_catchall 1.10%
+    //   safe 1.22%             unknown 2.07%   invalid 55.20%
+    // Interested-reply rate tells the same story: never-verified 4.26% vs
+    // safe 2.46%. Only 'invalid' is actually dangerous, so defaulting to
+    // ('safe','safe_catchall') was withholding the best-performing segment —
+    // 39,542 contacts from a single day's import had no status at all and were
+    // therefore unreachable, which also meant they could never get verified.
+    const KNOWN_STATUSES = ['safe', 'safe_catchall', 'unknown', 'risky', 'invalid', UNVERIFIED];
     const reqStatuses = Array.isArray(req.body.allowed_statuses)
       ? req.body.allowed_statuses.map(s => String(s).toLowerCase()).filter(s => KNOWN_STATUSES.includes(s))
       : [];
-    const PUSHABLE_STATUSES = new Set(reqStatuses.length ? reqStatuses : ['safe', 'safe_catchall']);
+    const PUSHABLE_STATUSES = new Set(reqStatuses.length ? reqStatuses : DEFAULT_PUSHABLE_STATUSES);
     const departed = await getDepartedEmails(db);
     const contacts = allContacts.filter(c => {
-      if (!PUSHABLE_STATUSES.has((c.email_status || '').toLowerCase())) { skipped.unsafe++; return false; }
+      if (!PUSHABLE_STATUSES.has(statusBucket(c.email_status))) { skipped.unsafe++; return false; }
       if (c.do_not_contact) { skipped.dnc++; return false; }
       if (departed.has(String(c.email || '').toLowerCase())) { skipped.departed = (skipped.departed || 0) + 1; return false; }
       // Bison requires non-empty first_name AND last_name (422s otherwise), and a
@@ -17253,15 +17281,15 @@ function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName
   // Guard against the workspace actually being pushed to; cooldownWorkspaceId
   // is optional on this path, so fall back to it only when no target is given.
   const crossClientGuard = buildCrossClientGuard(pushWorkspaceId || cooldownWorkspaceId || '', workspaceName || '', overrideGuards);
-  // Caller-chosen verification buckets; default to the safe pair when absent.
-  const KNOWN_STATUSES = ['safe', 'safe_catchall', 'unknown', 'risky', 'invalid'];
+  // Caller-chosen verification buckets; defaults to everything but 'invalid'.
+  const KNOWN_STATUSES = ['safe', 'safe_catchall', 'unknown', 'risky', 'invalid', UNVERIFIED];
   const validStatuses = Array.isArray(allowedStatuses)
     ? allowedStatuses.map(s => String(s).toLowerCase()).filter(s => KNOWN_STATUSES.includes(s))
     : [];
-  const PUSHABLE_STATUSES = new Set(validStatuses.length ? validStatuses : ['safe', 'safe_catchall']);
+  const PUSHABLE_STATUSES = new Set(validStatuses.length ? validStatuses : DEFAULT_PUSHABLE_STATUSES);
   const contacts = allContacts.filter(c => {
     if (isFreeDomain(c.email)) { skipped.freeDomain++; return false; }
-    if (!PUSHABLE_STATUSES.has((c.email_status || '').toLowerCase())) { skipped.unsafe++; return false; }
+    if (!PUSHABLE_STATUSES.has(statusBucket(c.email_status))) { skipped.unsafe++; return false; }
     if (c.do_not_contact) { skipped.dnc++; return false; }
     if (departed.has(String(c.email || '').toLowerCase())) { skipped.departed = (skipped.departed || 0) + 1; return false; }
     // Bison requires non-empty first_name AND last_name (422s otherwise).
@@ -23638,12 +23666,12 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
     .split(',').map(s => s.trim()).filter(p => p && p !== 'unknown');
 
   // Which verification-result buckets to push (from the modal). Validate against
-  // the known vocabulary; default to the safe pair so older callers are unchanged.
-  const KNOWN_STATUSES = ['safe', 'safe_catchall', 'unknown', 'risky', 'invalid'];
+  // the known vocabulary; defaults to everything but 'invalid'.
+  const KNOWN_STATUSES = ['safe', 'safe_catchall', 'unknown', 'risky', 'invalid', UNVERIFIED];
   const reqStatuses = Array.isArray(req.body.allowed_statuses)
     ? req.body.allowed_statuses.map(s => String(s).toLowerCase()).filter(s => KNOWN_STATUSES.includes(s))
     : [];
-  const allowedStatuses = reqStatuses.length ? reqStatuses : ['safe', 'safe_catchall'];
+  const allowedStatuses = reqStatuses.length ? reqStatuses : [...DEFAULT_PUSHABLE_STATUSES];
 
   const sq = req.app.locals.sqliteDb;
   const jobId = require('crypto').randomUUID();
