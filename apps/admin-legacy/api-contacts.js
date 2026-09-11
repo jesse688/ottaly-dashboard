@@ -500,16 +500,30 @@ module.exports = (db) => {
       const dryRun = req.query.dryRun === '1' || req.query.dryRun === 'true';
 
       // How many of these do we actually hold, and how many are already marked?
+      //
+      // Match on `email`, NEVER `LOWER(email)`: there is a btree on the bare
+      // column but none on the lowered expression, so LOWER() falls through to
+      // the trigram index and scans 1.47M rows. That is what timed out the
+      // first real upload. Addresses are stored lowercase, and the CSV values
+      // are lowercased above, so the plain comparison is equivalent here.
       const emails = list.map(x => x.email);
-      const { rows: cnt } = await db.query(
-        `SELECT
-           (SELECT COUNT(DISTINCT LOWER(email))::int FROM contacts
-              WHERE LOWER(email) = ANY($1::text[]))                               AS in_database,
-           (SELECT COUNT(*)::int FROM contacts
-              WHERE LOWER(email) = ANY($1::text[]))                               AS contact_rows,
-           (SELECT COUNT(*)::int FROM stale_contacts
-              WHERE email = ANY($1::text[]) AND released_at IS NULL)              AS already_marked`,
-        [emails]);
+      // These three numbers are preview decoration. A slow count must never
+      // stop the marking itself, so fall back to nulls rather than 500.
+      let cnt = [{ in_database: null, contact_rows: null, already_marked: null }];
+      try {
+        const r = await db.query(
+          `SELECT
+             (SELECT COUNT(DISTINCT email)::int FROM contacts
+                WHERE email = ANY($1::text[]))                                    AS in_database,
+             (SELECT COUNT(*)::int FROM contacts
+                WHERE email = ANY($1::text[]))                                    AS contact_rows,
+             (SELECT COUNT(*)::int FROM stale_contacts
+                WHERE email = ANY($1::text[]) AND released_at IS NULL)            AS already_marked`,
+          [emails]);
+        cnt = r.rows;
+      } catch (e) {
+        console.warn('[mark-stale] preview counts failed (continuing):', e.message);
+      }
 
       if (dryRun) {
         return res.json({
