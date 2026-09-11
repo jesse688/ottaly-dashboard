@@ -173,6 +173,8 @@ export default function DomainsPage() {
   const [checkDomain, setCheckDomain] = useState('')
   const [checkResult, setCheckResult] = useState<CheckResult | null>(null)
   const [checkErr, setCheckErr] = useState('')
+  const [sharing, setSharing] = useState(false)
+  const [shareCopied, setShareCopied] = useState(false)
 
   const [selected, setSelected] = useState<DomainRow | null>(null)
 
@@ -253,6 +255,37 @@ export default function DomainsPage() {
       setBusy(false)
     }
   }, [checkDomain, busy, load])
+
+  // Create a read-only link for mailbox providers and copy it to the clipboard.
+  // Scoped to the client currently filtered, so sending one provider a link
+  // does not hand them every other client's domains.
+  const handleShare = useCallback(async () => {
+    if (sharing) return
+    setSharing(true); setErrMsg('')
+    try {
+      const r = await fetch('/api/domains/share', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client: wsFilter || null }),
+      })
+      const j = await r.json()
+      if (!r.ok || !j.url) throw new Error(j.error || `Could not create link (${r.status})`)
+
+      try {
+        await navigator.clipboard.writeText(j.url)
+        setShareCopied(true)
+        setTimeout(() => setShareCopied(false), 4000)
+      } catch {
+        // Clipboard can be blocked (permissions, non-secure context). The link
+        // still exists, so show it rather than losing it.
+        window.prompt('Share this link:', j.url)
+      }
+    } catch (e) {
+      setErrMsg((e as Error).message)
+    } finally {
+      setSharing(false)
+    }
+  }, [sharing, wsFilter])
 
   // Refresh-all kicks off the legacy sweep, then polls /health for `running`.
   const handleRefreshAll = useCallback(async () => {
@@ -393,7 +426,7 @@ export default function DomainsPage() {
   return (
     <PageShell
       title="Domains"
-      subtitle="SPF · DKIM · DMARC · MX · domain blacklists (Spamhaus DBL, SURBL, URIBL) across all sending domains. Auto-refreshed every 6 hours."
+      subtitle="SPF · DKIM · DMARC · MX · website · domain blacklists (Spamhaus DBL, SURBL, URIBL) across all sending domains. Refreshed manually — use Refresh all."
       freshness={{ table: 'domain_health', syncedAt: updatedAt }}
       actions={
         <div className="flex flex-wrap items-center gap-2">
@@ -410,6 +443,9 @@ export default function DomainsPage() {
               Check domain
             </Button>
           </div>
+          <Button variant="outline" size="sm" onClick={handleShare} disabled={sharing} title="Create a read-only link for mailbox providers">
+            {sharing ? 'Creating…' : shareCopied ? 'Link copied' : 'Share report'}
+          </Button>
           <Button size="sm" onClick={handleRefreshAll} disabled={busy}>
             <RefreshCw size={14} className={busy ? 'animate-spin' : undefined} />
             {busy ? 'Refreshing…' : 'Refresh all'}
