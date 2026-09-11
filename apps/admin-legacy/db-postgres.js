@@ -4823,6 +4823,46 @@ class PostgresDatabase {
     return { changed: r.rowCount || 0 };
   }
 
+  // Hide domains that no longer have a live mailbox in PlusVibe, and un-hide
+  // any that came back.
+  //
+  // The refresh only ever INSERTs or UPDATEs, so a domain that stops sending
+  // keeps its row and sits on the page forever with stale results. Rather than
+  // delete (history is worth keeping, and a domain can return), we drive the
+  // existing ignored_at flag the page already filters on.
+  //
+  // Only rows auto-hidden by this sync are auto-restored: a domain someone
+  // hid by hand in the UI stays hidden. That is what ignored_reason tracks.
+  async syncIgnoredFromLiveDomains(liveDomains) {
+    if (!Array.isArray(liveDomains) || liveDomains.length === 0) {
+      // An empty list almost certainly means the PlusVibe fetch failed. Hiding
+      // every domain on that basis would wipe the page, so refuse.
+      return { hidden: 0, restored: 0, skipped: true };
+    }
+
+    await this.query(
+      `ALTER TABLE domain_health ADD COLUMN IF NOT EXISTS ignored_reason TEXT`
+    );
+
+    const hid = await this.query(
+      `UPDATE domain_health
+          SET ignored_at = NOW(), ignored_reason = 'no_live_mailbox', updated_at = NOW()
+        WHERE ignored_at IS NULL
+          AND domain <> ALL($1::text[])`,
+      [liveDomains]
+    );
+
+    const back = await this.query(
+      `UPDATE domain_health
+          SET ignored_at = NULL, ignored_reason = NULL, updated_at = NOW()
+        WHERE ignored_reason = 'no_live_mailbox'
+          AND domain = ANY($1::text[])`,
+      [liveDomains]
+    );
+
+    return { hidden: hid.rowCount || 0, restored: back.rowCount || 0, skipped: false };
+  }
+
   async isDomainIgnored(domain) {
     const r = await this.query(`SELECT ignored_at FROM domain_health WHERE domain = $1`, [domain]);
     return !!(r.rows[0] && r.rows[0].ignored_at);
