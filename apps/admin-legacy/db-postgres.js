@@ -2406,6 +2406,34 @@ class PostgresDatabase {
       }
     });
 
+    // Apollo re-scrape priority tiers. Apollo caps uploads at 500k/week, so a
+    // 950k stale backlog has to be ordered by what our campaigns actually ask
+    // for. Derived from the 541 saved rows in campaign_filters:
+    //   numEmployeesRanges  504 uses  (21-50 x279, 11-20 x252, 1-10 x223, 51-100 x122)
+    //   companyCountry      423 uses  (United Kingdom in all but 2)
+    //   seniority           408 uses  (c_suite 404, director 377, manager 304, vp 274)
+    // P1-P4 are mutually exclusive and ordered by that demand; P5 is everything
+    // else. Selecting several ORs them together.
+    safe('priorityTiers',  () => {
+      const want = String(filters.priorityTiers || '')
+        .split(',').map(s => s.trim().toUpperCase())
+        .filter(s => ['P1','P2','P3','P4','P5'].includes(s));
+      if (!want.length) return;
+      const UK  = `LOWER(COALESCE(company_country, country, '')) LIKE '%united kingdom%'`;
+      const DM  = `LOWER(COALESCE(seniority,'')) IN ('c_suite','director','manager','vp','owner','founder')`;
+      const DEF = {
+        P1: `(${UK} AND ${DM} AND num_employees BETWEEN 11 AND 50)`,
+        P2: `(${UK} AND ${DM} AND num_employees BETWEEN 1 AND 10)`,
+        P3: `(${UK} AND ${DM} AND num_employees BETWEEN 51 AND 200)`,
+        // P4 is UK 1-200 that did NOT land in P1-P3, i.e. no decision-maker
+        // seniority. Written as NOT(DM) rather than by exclusion so each tier
+        // stands alone and the parts still sum to the whole.
+        P4: `(${UK} AND NOT (${DM}) AND num_employees BETWEEN 1 AND 200)`,
+        P5: `NOT (${UK} AND num_employees BETWEEN 1 AND 200)`,
+      };
+      clauses.push('(' + want.map(t => DEF[t]).join(' OR ') + ')');
+    });
+
     // Apollo export filter
     safe('notExportedToApollo', () => { if (filters.notExportedToApollo === 'true') clauses.push(`exported_to_apollo_at IS NULL`); });
     safe('exportedToApollo',    () => { if (filters.exportedToApollo === 'true')    clauses.push(`exported_to_apollo_at IS NOT NULL`); });
