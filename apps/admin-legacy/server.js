@@ -10050,6 +10050,35 @@ app.get('/api/domains/full-scan', requireSession, (req, res) => {
   res.json({ running: _fullScanRunning, progress: _fullScanProgress });
 });
 
+// Blacklist history: every listing and delisting observed since this shipped.
+// ?domain=x.co.uk to filter, ?days=90 to window, ?event=delisted for recoveries.
+app.get('/api/domains/blacklist-history', requireSession, async (req, res) => {
+  try {
+    const pgdb = app.locals.pgDb;
+    if (!pgdb) return res.json({ events: [], counts: { listed: 0, delisted: 0 } });
+
+    const events = await pgdb.listBlacklistEvents({
+      domain: req.query.domain || null,
+      days: Math.min(Number(req.query.days) || 365, 3650),
+      limit: Math.min(Number(req.query.limit) || 500, 5000),
+    });
+
+    const filtered = req.query.event
+      ? events.filter(e => e.event === req.query.event)
+      : events;
+
+    res.json({
+      events: filtered,
+      counts: {
+        listed: filtered.filter(e => e.event === 'listed').length,
+        delisted: filtered.filter(e => e.event === 'delisted').length,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/domains/health', requireSession, async (req, res) => {
   try {
     const pgdb = app.locals.pgDb;
