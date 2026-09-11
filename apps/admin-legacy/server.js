@@ -9867,6 +9867,17 @@ async function refreshDomainHealth() {
     const pgdb = app.locals.pgDb;
     if (!pgdb) return;
     const allDomains = await listSendingDomains();
+
+    // Retire rows for domains that no longer have a live PlusVibe mailbox (and
+    // bring back any that returned). Without this the page keeps showing every
+    // domain ever checked, because the refresh only ever inserts or updates.
+    const sync = await pgdb.syncIgnoredFromLiveDomains(allDomains.map(d => d.domain));
+    if (sync.skipped) {
+      console.warn('[domain-redirect] live domain list was empty — skipped the retire sync');
+    } else if (sync.hidden || sync.restored) {
+      console.log(`[domain-redirect] retired ${sync.hidden} domain(s), restored ${sync.restored}`);
+    }
+
     const ignored = new Set(await pgdb.listIgnoredDomains());
     const domains = allDomains.filter(d => !ignored.has(d.domain));
     console.log(`[domain-redirect] checking redirects for ${domains.length} domains (${ignored.size} ignored)…`);
