@@ -1364,6 +1364,15 @@
             <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;">
               <input type="checkbox" id="filterExcludeDNC" checked style="accent-color:#ef4444"> Exclude do-not-contact
             </label>
+            <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;" title="Only contacts we have re-imported within the window. Contacts never stamped with an import date are excluded.">
+              <input type="checkbox" id="filterFreshOnly" style="accent-color:#10b981"
+                     onchange="document.getElementById('filterFreshDays').disabled = !this.checked"> Fresh data only
+              <select id="filterFreshDays" disabled style="font-size:11px;padding:1px 3px;"
+                      onclick="event.stopPropagation()">
+                <option value="30">30 days</option>
+                <option value="60" selected>60 days</option>
+              </select>
+            </label>
             <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;">
               <input type="checkbox" id="filterNotExported" style="accent-color:#8b5cf6"> Not exported to Apollo
             </label>
@@ -3056,6 +3065,8 @@
         worksRemote: document.getElementById('filterRemote')?.checked ? 'true' : '',
         excludeRemote: document.getElementById('filterExcludeRemote')?.checked ? 'true' : '',
         excludeDNC: document.getElementById('filterExcludeDNC')?.checked ? 'true' : '',
+        freshnessDays: document.getElementById('filterFreshOnly')?.checked
+          ? (document.getElementById('filterFreshDays')?.value || '60') : '',
         notExportedToApollo: document.getElementById('filterNotExported')?.checked ? 'true' : '',
         exportedToApollo: document.getElementById('filterExportedOnly')?.checked ? 'true' : '',
         sentToPV: document.getElementById('filterSentToPV')?.checked ? 'true' : '',
@@ -3617,6 +3628,11 @@
         const el = document.getElementById(id);
         if (el && el.checked) params.append(id, '1');
       });
+      // Freshness carries a window, so it needs the value not just the flag.
+      if (document.getElementById('filterFreshOnly')?.checked) {
+        params.append('filterFreshOnly', '1');
+        params.append('filterFreshDays', document.getElementById('filterFreshDays')?.value || '60');
+      }
       _employeeSelected.forEach(v => params.append('emp', v));
       // SIC chips: code|label so the chip can be rebuilt with its description.
       _sicSelected.forEach(s => params.append('sic', s.code + '|' + s.label));
@@ -3713,7 +3729,8 @@
       Object.keys(filterDefs).forEach(k => { filterDefs[k].selected = []; filterDefs[k].excluded = []; });
       ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','hasName','hasCompany','solarStatus','solarStatusExclude','solarMinKwp','updatedAge',
        'companyAgeBand','chVerified'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
-      ['emailGoogle','emailOutlook','emailOther','emailUnknown','filterRemote','filterExcludeRemote','filterExcludeDNC','filterNotExported','filterExportedOnly','filterSentToPV','filterNotSentToPV','filterSentToPV','filterNotSentToPV'].forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
+      ['emailGoogle','emailOutlook','emailOther','emailUnknown','filterRemote','filterExcludeRemote','filterExcludeDNC','filterNotExported','filterExportedOnly','filterSentToPV','filterNotSentToPV','filterSentToPV','filterNotSentToPV','filterFreshOnly'].forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
+      { const s = document.getElementById('filterFreshDays'); if (s) s.disabled = true; }
       if (typeof applyFilterDefaults === 'function') applyFilterDefaults();
       window.location.hash = v.filters || '';
       restoreFiltersFromHash();
@@ -3757,6 +3774,12 @@
         const el = document.getElementById(id);
         if (el && params.get(id) === '1') { el.checked = true; any = true; }
       });
+      if (params.get('filterFreshOnly') === '1') {
+        const cb = document.getElementById('filterFreshOnly');
+        const sel = document.getElementById('filterFreshDays');
+        if (cb) { cb.checked = true; any = true; }
+        if (sel) { sel.value = params.get('filterFreshDays') || '60'; sel.disabled = false; }
+      }
       const emp = params.getAll('emp');
       if (emp.length) { _employeeSelected = new Set(emp); any = true; }
       renderEmployeeBuckets();
