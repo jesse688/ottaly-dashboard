@@ -4863,6 +4863,42 @@ class PostgresDatabase {
     return { hidden: hid.rowCount || 0, restored: back.rowCount || 0, skipped: false };
   }
 
+  // Hide domains that carry no client name ("generic").
+  //
+  // These DO still send — unlike the retired ones, they have live mailboxes —
+  // so this is purely about keeping the page readable. The list is reviewed by
+  // hand and lives in generic-domains.txt.
+  //
+  // Kept apart from the retire sync by using its own ignored_reason: that sync
+  // only restores rows marked 'no_live_mailbox', so the two never fight over
+  // the same domain. Removing a domain from the file un-hides it here.
+  async syncIgnoredGenericDomains(genericDomains) {
+    await this.query(
+      `ALTER TABLE domain_health ADD COLUMN IF NOT EXISTS ignored_reason TEXT`
+    );
+
+    const list = Array.isArray(genericDomains) ? genericDomains : [];
+
+    const hid = await this.query(
+      `UPDATE domain_health
+          SET ignored_at = NOW(), ignored_reason = 'generic', updated_at = NOW()
+        WHERE ignored_at IS NULL
+          AND domain = ANY($1::text[])`,
+      [list]
+    );
+
+    // Anything previously hidden as generic but no longer in the file comes back.
+    const back = await this.query(
+      `UPDATE domain_health
+          SET ignored_at = NULL, ignored_reason = NULL, updated_at = NOW()
+        WHERE ignored_reason = 'generic'
+          AND domain <> ALL($1::text[])`,
+      [list]
+    );
+
+    return { hidden: hid.rowCount || 0, restored: back.rowCount || 0 };
+  }
+
   async isDomainIgnored(domain) {
     const r = await this.query(`SELECT ignored_at FROM domain_health WHERE domain = $1`, [domain]);
     return !!(r.rows[0] && r.rows[0].ignored_at);
