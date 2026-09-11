@@ -2393,6 +2393,19 @@ class PostgresDatabase {
       }
     });
 
+    // The mirror image, for re-scraping: only contacts we have NOT refreshed
+    // inside the window. Re-exporting a contact Apollo confirmed last week
+    // spends credits to be told the same thing, so the export wants the
+    // complement of the freshness filter — never both at once.
+    // NULL imported_at IS stale here: no stamp means no proof of a refresh,
+    // and those are exactly the rows most worth re-scraping.
+    safe('staleDays',      () => {
+      const days = parseInt(filters.staleDays, 10);
+      if (days === 30 || days === 60) {
+        clauses.push(`(imported_at IS NULL OR imported_at <= NOW() - INTERVAL '${days} days')`);
+      }
+    });
+
     // Apollo export filter
     safe('notExportedToApollo', () => { if (filters.notExportedToApollo === 'true') clauses.push(`exported_to_apollo_at IS NULL`); });
     safe('exportedToApollo',    () => { if (filters.exportedToApollo === 'true')    clauses.push(`exported_to_apollo_at IS NOT NULL`); });
