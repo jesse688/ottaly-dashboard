@@ -1878,6 +1878,38 @@
               <div id="queueItems"></div>
             </div>
 
+            <!-- Mark stale from CSV — for Apollo "Job change" enrichment.
+                 Marking, not deleting: the contact row keeps its reply history
+                 and the address simply stops being pushed. Feeds the same
+                 getDepartedEmails() gate as a "no longer works here" reply. -->
+            <div style="margin-top:48px;border-top:1px solid #e5e7eb;padding-top:32px;">
+              <div style="font-weight:700;font-size:15px;color:#111827;margin-bottom:6px;">
+                Mark contacts stale from CSV
+                <span id="staleSummary" style="font-weight:500;font-size:12px;color:#6b7280;margin-left:8px;"></span>
+              </div>
+              <div style="font-size:13px;color:#6b7280;margin-bottom:16px;line-height:1.5;">
+                Upload an Apollo CSV from the <b>"Job change (Title and Company)"</b> enrichment filter. Those people have moved employer, so the address we hold is dead at the old company. They are <b>marked, not deleted</b> — the contact keeps its reply history, and is blocked from every push until fresh data arrives. Match is by Email.
+              </div>
+
+              <div id="staleCsvDropZone" onclick="document.getElementById('staleCsvFile').click()"
+                style="border:2px dashed #fcd34d;border-radius:12px;padding:32px 24px;text-align:center;cursor:pointer;transition:all .2s;background:#fffbeb;margin-bottom:16px;">
+                <div style="font-size:36px;margin-bottom:8px;">🚪</div>
+                <div style="font-weight:700;font-size:15px;color:#92400e;margin-bottom:4px;">Drop CSV to mark as stale</div>
+                <div style="font-size:12px;color:#9ca3af;">Or click to browse · Preview first, then confirm</div>
+              </div>
+              <input type="file" id="staleCsvFile" accept=".csv" style="display:none" onchange="previewStaleCsv(this.files[0])">
+
+              <div id="staleCsvPreview" style="display:none;background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px;">
+                <div style="font-weight:700;font-size:14px;color:#111827;margin-bottom:10px;" id="staleCsvFileName">file.csv</div>
+                <div id="staleCsvStats" style="font-size:13px;color:#374151;line-height:1.7;margin-bottom:12px;"></div>
+                <div id="staleCsvSample" style="font-size:12px;color:#6b7280;background:#f9fafb;border-radius:6px;padding:10px;margin-bottom:14px;font-family:ui-monospace,monospace;white-space:pre-wrap;word-break:break-all;"></div>
+                <div style="display:flex;gap:10px;">
+                  <button class="btn btn-secondary" onclick="cancelStaleCsv()">Cancel</button>
+                  <button class="btn" id="staleCsvConfirmBtn" onclick="confirmStaleCsv()" style="background:#d97706;color:#fff;font-weight:700;">Mark as stale</button>
+                </div>
+              </div>
+            </div>
+
             <!-- Delete from CSV — for Apollo "needs enrichment" re-scrape flow -->
             <div style="margin-top:48px;border-top:1px solid #e5e7eb;padding-top:32px;">
               <div style="font-weight:700;font-size:15px;color:#111827;margin-bottom:6px;">Delete contacts from CSV</div>
@@ -6033,7 +6065,7 @@
       document.getElementById('tabContacts').style.borderBottomColor = isContacts ? '#3b82f6' : 'transparent';
       document.getElementById('tabImport').style.color = !isContacts ? '#3b82f6' : '#6b7280';
       document.getElementById('tabImport').style.borderBottomColor = !isContacts ? '#3b82f6' : 'transparent';
-      if (!isContacts) { setupDropZone(); setupDeleteCsvDropZone(); }
+      if (!isContacts) { setupDropZone(); setupDeleteCsvDropZone(); setupStaleCsvDropZone(); loadStaleSummary(); }
     }
 
     function switchToImportTab() { switchTab('import'); }
@@ -6216,6 +6248,96 @@
     // Two-step: upload → dry-run preview → user confirms → real delete.
     // Apollo "needs enrichment" flow: download stale rows, delete, re-scrape.
     let _pendingDeleteCsv = null;
+
+    // ── Mark stale from CSV (Apollo "Job change" enrichment) ──────
+    let _pendingStaleCsv = null;
+
+    async function loadStaleSummary() {
+      const el = document.getElementById('staleSummary');
+      if (!el) return;
+      try {
+        const r = await fetch('/api/contacts/stale-summary');
+        if (!r.ok) return;
+        const d = await r.json();
+        el.textContent = d.total ? `· ${d.total.toLocaleString()} currently suppressed` : '';
+      } catch { /* a missing count is not worth an error toast */ }
+    }
+
+    async function previewStaleCsv(file) {
+      if (!file) return;
+      _pendingStaleCsv = file;
+      document.getElementById('staleCsvFile').value = '';
+      document.getElementById('staleCsvFileName').textContent = file.name;
+      document.getElementById('staleCsvStats').innerHTML = '<span style="color:#9ca3af;">Analyzing CSV…</span>';
+      document.getElementById('staleCsvSample').textContent = '';
+      document.getElementById('staleCsvPreview').style.display = 'block';
+      const btn = document.getElementById('staleCsvConfirmBtn');
+      btn.disabled = true; btn.style.opacity = '0.5';
+
+      try {
+        const csvText = await file.text();
+        const r = await fetch('/api/contacts/mark-stale-from-csv?dryRun=1', {
+          method: 'POST', headers: { 'Content-Type': 'text/csv' }, body: csvText });
+        const d = await r.json();
+        if (!r.ok) { showMessage('Preview failed: ' + (d.error || r.status), 'error'); cancelStaleCsv(); return; }
+
+        document.getElementById('staleCsvStats').innerHTML =
+          `CSV rows: <b>${d.csvRows.toLocaleString()}</b> · Unique emails: <b>${d.uniqueEmails.toLocaleString()}</b><br>` +
+          `Found in database: <b>${d.inDatabase.toLocaleString()}</b> people ` +
+          `(<b>${d.contactRows.toLocaleString()}</b> rows across workspaces)<br>` +
+          (d.alreadyMarked ? `Already marked stale: <b>${d.alreadyMarked.toLocaleString()}</b><br>` : '') +
+          `Will mark stale: <b style="color:#d97706;">${d.uniqueEmails.toLocaleString()}</b> addresses — blocked from all pushes`;
+
+        document.getElementById('staleCsvSample').textContent =
+          d.sampleEmails?.length ? 'Sample: ' + d.sampleEmails.join(', ') : '(no sample available)';
+
+        if (!d.uniqueEmails) { btn.textContent = 'Nothing to mark'; return; }
+        btn.disabled = false; btn.style.opacity = '1';
+        btn.textContent = `Mark ${d.uniqueEmails.toLocaleString()} as stale`;
+      } catch (err) {
+        showMessage('Preview failed: ' + err.message, 'error');
+        cancelStaleCsv();
+      }
+    }
+
+    async function confirmStaleCsv() {
+      if (!_pendingStaleCsv) return;
+      const btn = document.getElementById('staleCsvConfirmBtn');
+      btn.disabled = true; btn.textContent = 'Marking…';
+      try {
+        const csvText = await _pendingStaleCsv.text();
+        const r = await fetch('/api/contacts/mark-stale-from-csv', {
+          method: 'POST', headers: { 'Content-Type': 'text/csv' }, body: csvText });
+        const d = await r.json();
+        if (!r.ok) { showMessage('Mark failed: ' + (d.error || r.status), 'error'); btn.disabled = false; return; }
+        showMessage(`Marked ${d.marked.toLocaleString()} addresses as stale — they will not be pushed`, 'success');
+        cancelStaleCsv();
+        loadStaleSummary();
+      } catch (err) {
+        showMessage('Mark failed: ' + err.message, 'error');
+        btn.disabled = false; btn.textContent = 'Mark as stale';
+      }
+    }
+
+    function cancelStaleCsv() {
+      _pendingStaleCsv = null;
+      document.getElementById('staleCsvPreview').style.display = 'none';
+      document.getElementById('staleCsvFile').value = '';
+    }
+
+    function setupStaleCsvDropZone() {
+      const zone = document.getElementById('staleCsvDropZone');
+      if (!zone || zone._dropSetup) return;
+      zone._dropSetup = true;
+      zone.addEventListener('dragover', e => { e.preventDefault(); zone.style.background='#fef3c7'; zone.style.borderColor='#d97706'; });
+      zone.addEventListener('dragleave', () => { zone.style.background='#fffbeb'; zone.style.borderColor='#fcd34d'; });
+      zone.addEventListener('drop', e => {
+        e.preventDefault();
+        zone.style.background='#fffbeb'; zone.style.borderColor='#fcd34d';
+        const f = e.dataTransfer.files?.[0];
+        if (f) previewStaleCsv(f);
+      });
+    }
 
     async function previewDeleteCsv(file) {
       if (!file) return;

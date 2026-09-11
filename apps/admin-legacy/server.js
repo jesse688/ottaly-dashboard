@@ -16637,8 +16637,14 @@ async function getDepartedEmails(pgdb) {
   // 1k+ rows per path.
   if (Date.now() - _departedCache.at < 60000) return _departedCache.set;
   try {
+    // Two independent sources of "this person has gone":
+    //   reply_facts   — they told us, in a reply
+    //   stale_contacts — Apollo's job-change enrichment told us
+    // Either is sufficient to stop the push, so UNION rather than pick one.
     const r = await pgdb.query(
-      `SELECT DISTINCT LOWER(lead_email) AS email FROM reply_facts WHERE attribute = 'person_left'`
+      `SELECT DISTINCT LOWER(lead_email) AS email FROM reply_facts WHERE attribute = 'person_left'
+       UNION
+       SELECT DISTINCT LOWER(email) FROM stale_contacts WHERE released_at IS NULL`
     );
     _departedCache = { at: Date.now(), set: new Set(r.rows.map(x => x.email)) };
   } catch (err) {

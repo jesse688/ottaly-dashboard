@@ -417,6 +417,31 @@ class PostgresDatabase {
       // Serves the drain query: due rows first, fewest attempts first.
       `CREATE INDEX IF NOT EXISTS idx_verification_queue_due
          ON verification_queue (next_attempt_at, attempts)`,
+      // ── Stale contacts (job changes) ─────────────────────────────
+      // Apollo's "Job change" enrichment tells us a person has moved employer.
+      // That address is dead at the old company, so it must stop being pushed.
+      //
+      // This cannot live in reply_facts: that table FKs source_reply_id to
+      // unibox_replies, i.e. every fact must point at a real reply we received.
+      // A job change comes from Apollo, not from a reply, so it needs its own
+      // home. getDepartedEmails() unions the two, so both block a push.
+      //
+      // Keyed on email, not contact id: the same person appears once per
+      // workspace and all of those copies are equally dead.
+      `CREATE TABLE IF NOT EXISTS stale_contacts (
+        email        TEXT PRIMARY KEY,
+        reason       TEXT        NOT NULL DEFAULT 'job_change',
+        old_company  TEXT,
+        new_company  TEXT,
+        new_title    TEXT,
+        source       TEXT        NOT NULL DEFAULT 'apollo_csv',
+        marked_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+        released_at  TIMESTAMPTZ
+      )`,
+      // Partial index: the push gate only ever asks for rows still suppressed,
+      // and releasing one (fresh data arrived) drops it out of the index.
+      `CREATE INDEX IF NOT EXISTS idx_stale_contacts_active
+         ON stale_contacts (email) WHERE released_at IS NULL`,
       // ── Domain health table ──────────────────────────────────────
       // Free per-domain reputation snapshot built from DNS + blacklist
       // checks (no Google Postmaster account needed). Refreshed nightly

@@ -453,6 +453,120 @@ module.exports = (db) => {
     }
   });
 
+  // POST /api/contacts/mark-stale-from-csv
+  // Body: raw CSV (text/csv). Query: ?dryRun=1 to preview.
+  //
+  // For Apollo's "Job change (Title and Company)" enrichment export: those
+  // people have moved employer, so the address we hold is dead at the old
+  // company and must stop being pushed. Marking, not deleting — the row keeps
+  // its reply history, and the suppression lifts by itself when fresh data
+  // arrives for that address (see the release path below).
+  router.post('/contacts/mark-stale-from-csv', async (req, res) => {
+    try {
+      const csvText = typeof req.body === 'string' ? req.body : '';
+      if (!csvText.trim()) return res.status(400).json({ error: 'Empty CSV body' });
+
+      let rows;
+      try {
+        rows = parse(csvText, { columns: true, skip_empty_lines: true, relax_quotes: true, trim: true });
+      } catch (parseErr) {
+        return res.status(400).json({ error: `CSV parse failed: ${parseErr.message}` });
+      }
+      if (!rows.length) return res.status(400).json({ error: 'CSV has no data rows' });
+
+      // Apollo's column naming varies between export types, so accept the
+      // common spellings rather than failing on a header we didn't predict.
+      const pick = (row, names) => {
+        for (const n of names) {
+          if (row[n] != null && String(row[n]).trim() !== '') return String(row[n]).trim();
+        }
+        return '';
+      };
+      const seen = new Map();
+      for (const row of rows) {
+        const email = pick(row, ['Email', 'email', 'Primary Email', 'Work Email']).toLowerCase();
+        if (!email || !email.includes('@')) continue;
+        seen.set(email, {
+          email,
+          old_company: pick(row, ['Company Name for Emails', 'Company', 'Company Name', 'Previous Company']),
+          new_company: pick(row, ['New Company', 'Current Company', 'Job Change Company']),
+          new_title:   pick(row, ['New Title', 'Current Title', 'Job Change Title', 'Title', 'Job Title']),
+        });
+      }
+      const list = [...seen.values()];
+      if (!list.length) return res.status(400).json({ error: 'CSV has no usable Email column' });
+
+      const reason = String(req.query.reason || 'job_change').slice(0, 40);
+      const dryRun = req.query.dryRun === '1' || req.query.dryRun === 'true';
+
+      // How many of these do we actually hold, and how many are already marked?
+      const emails = list.map(x => x.email);
+      const { rows: cnt } = await db.query(
+        `SELECT
+           (SELECT COUNT(DISTINCT LOWER(email))::int FROM contacts
+              WHERE LOWER(email) = ANY($1::text[]))                               AS in_database,
+           (SELECT COUNT(*)::int FROM contacts
+              WHERE LOWER(email) = ANY($1::text[]))                               AS contact_rows,
+           (SELECT COUNT(*)::int FROM stale_contacts
+              WHERE email = ANY($1::text[]) AND released_at IS NULL)              AS already_marked`,
+        [emails]);
+
+      if (dryRun) {
+        return res.json({
+          dryRun: true, csvRows: rows.length, uniqueEmails: list.length,
+          inDatabase: cnt[0].in_database, contactRows: cnt[0].contact_rows,
+          alreadyMarked: cnt[0].already_marked,
+          sampleEmails: emails.slice(0, 5),
+        });
+      }
+
+      // Re-marking an address that was previously released must clear
+      // released_at, otherwise the partial index keeps ignoring it.
+      const CH = 1000;
+      let marked = 0;
+      for (let i = 0; i < list.length; i += CH) {
+        const b = list.slice(i, i + CH);
+        const r = await db.query(
+          `INSERT INTO stale_contacts (email, reason, old_company, new_company, new_title, source)
+           SELECT * FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[])
+           ON CONFLICT (email) DO UPDATE SET
+             reason      = EXCLUDED.reason,
+             old_company = COALESCE(NULLIF(EXCLUDED.old_company,''), stale_contacts.old_company),
+             new_company = COALESCE(NULLIF(EXCLUDED.new_company,''), stale_contacts.new_company),
+             new_title   = COALESCE(NULLIF(EXCLUDED.new_title,''),   stale_contacts.new_title),
+             marked_at   = now(),
+             released_at = NULL`,
+          [b.map(x => x.email), b.map(() => reason), b.map(x => x.old_company),
+           b.map(x => x.new_company), b.map(x => x.new_title), b.map(() => 'apollo_csv')]);
+        marked += r.rowCount || 0;
+      }
+
+      console.log(`[mark-stale] ${marked} marked (${reason}) from ${rows.length} CSV rows`);
+      res.json({
+        dryRun: false, csvRows: rows.length, uniqueEmails: list.length,
+        inDatabase: cnt[0].in_database, contactRows: cnt[0].contact_rows,
+        marked, sampleEmails: emails.slice(0, 5),
+      });
+    } catch (err) {
+      console.error('[mark-stale-from-csv]', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET /api/contacts/stale-summary — how many addresses are suppressed
+  router.get('/contacts/stale-summary', async (req, res) => {
+    try {
+      const { rows } = await db.query(
+        `SELECT reason, COUNT(*)::int AS n, MAX(marked_at) AS latest
+           FROM stale_contacts WHERE released_at IS NULL
+          GROUP BY reason ORDER BY n DESC`);
+      const total = rows.reduce((a, r) => a + r.n, 0);
+      res.json({ total, byReason: rows });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // POST /api/contacts/reset-apollo-exports — clear all exported_to_apollo_at stamps
   // Done in 5k-row chunks so live exports/webhooks don't deadlock with us
   // on the 200k-row update. Each chunk takes its own lock, releases it,
