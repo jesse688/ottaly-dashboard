@@ -4408,7 +4408,10 @@ class PostgresDatabase {
           END AS emp_bucket
         FROM contacts c
         WHERE c.do_not_contact IS NOT TRUE
-          AND c.email_status IN ('safe', 'safe_catchall')
+          -- Exclude only 'invalid' (55.20% bounce). Every other bucket, NULL
+          -- included, bounces between 0.49% and 2.07% — unverified is in fact
+          -- the LOWEST. Matches DEFAULT_PUSHABLE_STATUSES in server.js.
+          AND c.email_status IS DISTINCT FROM 'invalid'
           AND NOT EXISTS (
             SELECT 1 FROM jsonb_array_elements(COALESCE(c.pushed_campaigns,'[]'::jsonb)) pc
             WHERE pc->>'workspace_id' = $1
@@ -4531,7 +4534,8 @@ class PostgresDatabase {
       WHERE s.workspace_id = $1
         AND s.score >= $2
         AND c.do_not_contact IS NOT TRUE
-        AND c.email_status IN ('safe', 'safe_catchall')
+        -- Exclude only 'invalid'; see the note on the scoring query above.
+        AND c.email_status IS DISTINCT FROM 'invalid'
         AND NOT EXISTS (
           SELECT 1 FROM jsonb_array_elements(COALESCE(c.pushed_campaigns,'[]'::jsonb)) pc
           WHERE pc->>'workspace_id' = $1
