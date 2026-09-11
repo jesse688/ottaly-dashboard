@@ -9,7 +9,7 @@ export async function GET() {
     const res = await pool.query(
       `SELECT
          domain, workspace_id, workspace_name, score, status,
-         spf, dkim, dmarc, mx, blacklists,
+         spf, dkim, dmarc, mx, redirect, blacklists,
          last_checked, notes, ignored_at,
          pm_verified_at
        FROM domain_health

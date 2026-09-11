@@ -25,6 +25,19 @@ interface Blacklist { list: string; response?: string | number; target?: string;
 
 type DomainStatus = 'good' | 'warning' | 'critical' | 'unknown'
 
+// How the domain points at the client's site. A sending domain gets there
+// three legitimate ways and only one is a 301, so redirect/masked/hosted are
+// all passes; no_web means it has no website but still sends mail normally.
+type RedirectKind = 'redirect' | 'masked' | 'hosted' | 'no_web' | 'broken' | 'unreachable'
+
+interface RedirectCheck {
+  kind?: RedirectKind
+  note?: string
+  final_url?: string | null
+  status?: number | null
+  error?: string | null
+}
+
 interface DomainRow {
   domain: string
   workspace_id: string | null
@@ -35,6 +48,7 @@ interface DomainRow {
   dkim: DkimCheck | null
   dmarc: DmarcCheck | null
   mx: MxCheck | null
+  redirect: RedirectCheck | null
   blacklists: Blacklist[] | null
   last_checked: string | null
   notes: string | null
@@ -87,6 +101,20 @@ function dmarcTone(dmarc: DmarcCheck): { tone: StatusTone; label: string } {
 function mxTone(mx: MxCheck): { tone: StatusTone; label: string } {
   if (!mx.present) return { tone: 'error', label: 'MISSING' }
   return { tone: 'ok', label: 'PASS' }
+}
+
+// redirect/masked/hosted all mean the domain reaches the client's site — only
+// the route differs, so all three are passes. no_web is a warning rather than
+// an error: the domain has no website, but its mail records are untouched.
+function redirectTone(r: RedirectCheck | null): { tone: StatusTone; label: string } {
+  const kind = r?.kind
+  if (!kind) return { tone: 'neutral', label: '—' }
+  if (kind === 'redirect') return { tone: 'ok', label: 'REDIRECT' }
+  if (kind === 'hosted') return { tone: 'ok', label: 'HOSTED' }
+  if (kind === 'masked') return { tone: 'ok', label: 'MASKED' }
+  if (kind === 'no_web') return { tone: 'warn', label: 'NO SITE' }
+  if (kind === 'unreachable') return { tone: 'error', label: 'NO REPLY' }
+  return { tone: 'error', label: 'BROKEN' }
 }
 
 function formatAgo(ts: string | null): string {
@@ -300,6 +328,17 @@ export default function DomainsPage() {
       cell: d => { const s = mxTone(parseJson<MxCheck>(d.mx, {})); return <StatusBadge status={s.tone}>{s.label}</StatusBadge> },
     },
     {
+      key: 'redirect', header: 'Website',
+      sortValue: d => redirectTone(parseJson<RedirectCheck>(d.redirect, {})).label,
+      cell: d => {
+        const r = parseJson<RedirectCheck>(d.redirect, {})
+        const s = redirectTone(r)
+        // The note carries the detail (where it lands, why it failed) — hover
+        // it rather than widening the column for every row.
+        return <span title={r?.note || ''}><StatusBadge status={s.tone}>{s.label}</StatusBadge></span>
+      },
+    },
+    {
       key: 'blacklists', header: 'Blacklists',
       sortValue: d => parseJson<Blacklist[]>(d.blacklists, []).length,
       cell: d => {
@@ -349,6 +388,7 @@ export default function DomainsPage() {
   const selDmarc = sel ? parseJson<DmarcCheck>(sel.dmarc, {}) : {}
   const selMx = sel ? parseJson<MxCheck>(sel.mx, {}) : {}
   const selBl = sel ? parseJson<Blacklist[]>(sel.blacklists, []) : []
+  const selRedirect = sel ? parseJson<RedirectCheck>(sel.redirect, {}) : {}
 
   return (
     <PageShell
@@ -500,6 +540,13 @@ export default function DomainsPage() {
                 )}
                 {(selMx.ips?.length ?? 0) > 0 && (
                   <DetailRow label="IPs"><Raw>{(selMx.ips ?? []).join(', ')}</Raw></DetailRow>
+                )}
+
+                <SectionHead>Website</SectionHead>
+                <DetailRow label="Setup">{redirectTone(selRedirect).label}</DetailRow>
+                {selRedirect.note && <DetailRow label="Detail">{selRedirect.note}</DetailRow>}
+                {selRedirect.final_url && (
+                  <DetailRow label="Lands on"><Raw>{selRedirect.final_url}</Raw></DetailRow>
                 )}
 
                 <SectionHead>Domain blacklists</SectionHead>
