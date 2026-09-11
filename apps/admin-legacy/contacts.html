@@ -6165,7 +6165,7 @@
 
           // Create the job with first chunk
           const firstChunk = [header, ...dataLines.slice(0, CHUNK_SIZE)].join('\n');
-          const res = await fetch(`/api/import/csv?fileName=${encodeURIComponent(item.file.name)}&totalRows=${dataLines.length}`, {
+          const res = await fetch(`/api/import/csv?fileName=${encodeURIComponent(item.file.name)}&totalRows=${dataLines.length}&totalChunks=${totalChunks}`, {
             method: 'POST',
             headers: { 'Content-Type': 'text/csv' },
             body: firstChunk
@@ -6181,14 +6181,26 @@
 
           const { jobId } = await res.json();
 
-          // Send remaining chunks
+          // Send remaining chunks. Completion is now counted per chunk on the
+          // server, so a silently-dropped chunk would leave the job stuck at
+          // "processing" forever — retry each one twice before giving up, and
+          // tell the server to stop waiting on any chunk we truly can't send.
           for (let c = 1; c < totalChunks; c++) {
             const chunk = [header, ...dataLines.slice(c * CHUNK_SIZE, (c + 1) * CHUNK_SIZE)].join('\n');
-            await fetch(`/api/import/csv?fileName=${encodeURIComponent(item.file.name)}&jobId=${jobId}`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'text/csv' },
-              body: chunk
-            }).catch(() => {}); // fire-and-forget subsequent chunks
+            let sent = false;
+            for (let attempt = 0; attempt < 3 && !sent; attempt++) {
+              try {
+                const cr = await fetch(`/api/import/csv?fileName=${encodeURIComponent(item.file.name)}&jobId=${jobId}`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'text/csv' },
+                  body: chunk
+                });
+                sent = cr.ok;
+              } catch { /* network blip — retry */ }
+            }
+            if (!sent) {
+              await fetch(`/api/import/csv/abandon-chunk?jobId=${jobId}`, { method: 'POST' }).catch(() => {});
+            }
           }
 
           // Poll every 1500ms — 300ms was adding 3-4 req/s of pure overhead

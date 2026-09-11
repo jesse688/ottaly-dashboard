@@ -30,7 +30,25 @@ module.exports = (db) => {
   router.get('/import/jobs/:id', (req, res) => {
     const job = importJobs.get(req.params.id);
     if (!job) return res.status(404).json({ error: 'Job not found' });
+    // Safety net: a chunk that never arrives (tab closed, request dropped
+    // before the abandon call) must not leave the job polling forever.
+    if (job.status === 'processing' && Date.now() - job.lastChunkAt > 120000) {
+      job.status = 'done';
+      job.progress = 100;
+      job.incomplete = true;
+      console.log(`[Import] ${job.fileName}: TIMED OUT with ${job.chunksDone}/${job.expectedChunks} chunks — ${job.imported} new, ${job.duplicates} updated, ${job.errors} errors`);
+    }
     res.json(job);
+  });
+
+  // A chunk the client could not deliver after retries. Stop waiting on it,
+  // otherwise chunksDone never reaches expectedChunks.
+  router.post('/import/csv/abandon-chunk', (req, res) => {
+    const job = importJobs.get(req.query.jobId);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    job.expectedChunks = Math.max(1, (job.expectedChunks || 1) - 1);
+    job.incomplete = true;
+    res.json({ ok: true });
   });
 
   // POST /api/import/csv — chunked import (handles 120MB+ files)
@@ -44,6 +62,10 @@ module.exports = (db) => {
       const existingJobId = req.query.jobId;
       const fileName = req.query.fileName || 'import.csv';
       const totalRows = parseInt(req.query.totalRows || '0');
+      // How many chunks the client will send. Older clients don't send it, so
+      // fall back to 1 — that restores the previous single-chunk behaviour
+      // rather than leaving such a job stuck at "processing" forever.
+      const totalChunks = Math.max(1, parseInt(req.query.totalChunks || '1') || 1);
 
       // Get or create job
       let job = existingJobId ? importJobs.get(existingJobId) : null;
@@ -51,8 +73,9 @@ module.exports = (db) => {
         const jobId = require('crypto').randomUUID();
         job = {
           id: jobId, fileName,
-          status: 'processing', startedAt: Date.now(),
+          status: 'processing', startedAt: Date.now(), lastChunkAt: Date.now(),
           total: totalRows || 1,
+          expectedChunks: totalChunks, chunksDone: 0,
           imported: 0, duplicates: 0, errors: 0,
           processed: 0, progress: 0
         };
@@ -61,6 +84,7 @@ module.exports = (db) => {
         if (all.length > 50) all.slice(50).forEach(([id]) => importJobs.delete(id));
         res.json({ jobId: job.id, message: 'Import started' });
       } else {
+        job.lastChunkAt = Date.now();
         res.json({ jobId: job.id, message: 'Chunk received' });
       }
 
@@ -132,13 +156,22 @@ module.exports = (db) => {
               console.error('[Import] Batch error:', e.message.slice(0, 150));
             }
             job.processed += batch.length;
+            // Keep the watchdog fed while a slow chunk is still inserting.
+            job.lastChunkAt = Date.now();
             job.progress = job.total > 0
               ? Math.min(99, Math.round((job.processed / job.total) * 100))
               : 50;
           }
 
-          // Mark done when last chunk finishes
-          if (!existingJobId || job.processed >= job.total * 0.95) {
+          // Mark done only when every chunk has landed. The old test
+          // (`processed >= total * 0.95`) fired on the FIRST chunk of a
+          // single-chunk file and, worse, on every chunk past 95% of a big
+          // one — so a 47k-row import flipped to "done" with ~28k counted,
+          // the poller latched onto that snapshot and stopped, and the
+          // remaining chunks landed silently. The counts were never wrong in
+          // the DB; only the number shown to the user was.
+          job.chunksDone = (job.chunksDone || 0) + 1;
+          if (job.chunksDone >= job.expectedChunks) {
             job.status = 'done';
             job.progress = 100;
             console.log(`[Import] ${job.fileName}: ${job.imported} new, ${job.duplicates} updated, ${job.errors} errors`);
