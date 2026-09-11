@@ -6281,11 +6281,14 @@
         const d = await r.json();
         if (!r.ok) { showMessage('Preview failed: ' + (d.error || r.status), 'error'); cancelStaleCsv(); return; }
 
+        // in_database / contact_rows are decoration and may come back null if
+        // the count was too slow — the marking itself does not depend on them.
+        const n = v => (typeof v === 'number' ? v.toLocaleString() : '—');
         document.getElementById('staleCsvStats').innerHTML =
           `CSV rows: <b>${d.csvRows.toLocaleString()}</b> · Unique emails: <b>${d.uniqueEmails.toLocaleString()}</b><br>` +
-          `Found in database: <b>${d.inDatabase.toLocaleString()}</b> people ` +
-          `(<b>${d.contactRows.toLocaleString()}</b> rows across workspaces)<br>` +
-          (d.alreadyMarked ? `Already marked stale: <b>${d.alreadyMarked.toLocaleString()}</b><br>` : '') +
+          `Found in database: <b>${n(d.inDatabase)}</b> people ` +
+          `(<b>${n(d.contactRows)}</b> rows across workspaces)<br>` +
+          (d.alreadyMarked ? `Already marked stale: <b>${n(d.alreadyMarked)}</b><br>` : '') +
           `Will mark stale: <b style="color:#d97706;">${d.uniqueEmails.toLocaleString()}</b> addresses — blocked from all pushes`;
 
         document.getElementById('staleCsvSample').textContent =
