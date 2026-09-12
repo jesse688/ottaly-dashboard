@@ -10148,7 +10148,17 @@ app.post('/api/domains/share', requireAdmin, async (req, res) => {
       { kind: 'domain-report', client, epoch: DOMAIN_SHARE_EPOCH() },
       SESSION_SECRET
     );
-    const base = process.env.PUBLIC_BASE_URL || `https://${req.headers.host}`;
+    // req.headers.host is the INTERNAL container address behind EasyPanel
+    // ("ottaly_ottaly-stable:3000"), which no browser can reach — a link built
+    // from it is dead on arrival. Use the configured public host, and fall back
+    // to the known one rather than to something unusable. Only trust the
+    // request's own host when it actually looks public.
+    const reqHost = String(req.headers.host || '');
+    const hostIsPublic = reqHost.includes('.') && !reqHost.includes('_') && !/^localhost|^127\./.test(reqHost);
+    const base =
+      process.env.PUBLIC_BASE_URL ||
+      (hostIsPublic ? `https://${reqHost}` : 'https://admin.ottaly.co.uk');
+
     res.json({ url: `${base}/domain-report?t=${token}`, client: client || 'all clients' });
   } catch (err) {
     res.status(500).json({ error: err.message });
