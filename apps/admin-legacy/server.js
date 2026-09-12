@@ -10239,6 +10239,90 @@ app.get('/api/domains/shared', async (req, res) => {
   }
 });
 
+// Let a provider re-check the domains in their own report, so they can confirm
+// a fix landed without waiting for us.
+//
+// Two limits make this safe to expose publicly:
+//
+//  1. DNS ONLY. It re-runs SPF/DKIM/DMARC/MX and the redirect — the records the
+//     provider actually changed. It never touches Spamhaus/SURBL/URIBL: those
+//     are rate-limit sensitive, and an outside page must not be able to put our
+//     single IP into blocklist lookups on someone else's schedule.
+//
+//  2. Scoped and throttled. Only the domains in that link's own report, and at
+//     most once an hour per link. Re-checking a domain's DNS is cheap — it is
+//     the same handful of lookups any mail client makes — so an hour is
+//     generous; the limit exists to stop repeated clicks stacking overlapping
+//     sweeps, not because the lookups are risky.
+const SHARED_RESCAN_MIN_GAP_MS = 60 * 60 * 1000;
+const _sharedRescanAt = new Map(); // token fingerprint -> last run
+
+app.post('/api/domains/shared/rescan', async (req, res) => {
+  const claim = readShareToken(req);
+  if (!claim) return res.status(401).json({ error: 'This link is not valid or has been revoked.' });
+
+  // Key the throttle by the link, not the caller: one link, one sweep an hour,
+  // however many people open it.
+  const key = String(req.query.t || '').slice(-32);
+  const last = _sharedRescanAt.get(key) || 0;
+  const waited = Date.now() - last;
+  if (waited < SHARED_RESCAN_MIN_GAP_MS) {
+    const mins = Math.ceil((SHARED_RESCAN_MIN_GAP_MS - waited) / 60000);
+    return res.status(429).json({
+      error: `Already re-checked recently. Please try again in ${mins} minute${mins === 1 ? '' : 's'}.`,
+      retryInMinutes: mins,
+    });
+  }
+  _sharedRescanAt.set(key, Date.now());
+
+  try {
+    const pgdb = app.locals.pgDb;
+    if (!pgdb) return res.status(503).json({ error: 'Unavailable' });
+
+    const all = await pgdb.listDomainHealth();
+    const targets = all
+      .filter(r => !claim.client || r.workspace_name === claim.client)
+      .filter(r => isProblemDomain(r))
+      .map(r => ({ domain: r.domain, ws: { id: r.workspace_id, name: r.workspace_name } }));
+
+    res.json({ ok: true, checking: targets.length });
+
+    // Re-check in the background, paced like the internal sweep.
+    (async () => {
+      const CONCURRENCY = 4;
+      const GAP_MS = 750;
+      for (let i = 0; i < targets.length; i += CONCURRENCY) {
+        const batch = targets.slice(i, i + CONCURRENCY);
+        await Promise.all(batch.map(async ({ domain, ws }) => {
+          try {
+            // checkDomain runs blacklist lookups too, so build the row by hand
+            // from the DNS checks only and preserve the stored listings.
+            const [spf, dkim, dmarc, mx, redirect] = await Promise.all([
+              checkSpf(domain), checkDkim(domain), checkDmarc(domain),
+              checkMx(domain), checkRedirectClassified(domain),
+            ]);
+            const prev = all.find(r => r.domain === domain);
+            const blacklists = typeof prev?.blacklists === 'string'
+              ? JSON.parse(prev.blacklists || '[]') : (prev?.blacklists || []);
+            const { score, status, notes } = scoreDomain({ spf, dkim, dmarc, mx, blacklists });
+            await pgdb.upsertDomainHealth({
+              domain, workspace_id: ws.id, workspace_name: ws.name,
+              spf, dkim, dmarc, mx, blacklists, redirect,
+              score, status, notes: notes.join('; '),
+            });
+          } catch (err) {
+            console.warn(`[shared-rescan] ${domain}: ${err.message}`);
+          }
+        }));
+        if (i + CONCURRENCY < targets.length) await new Promise(r => setTimeout(r, GAP_MS));
+      }
+      console.log(`[shared-rescan] re-checked ${targets.length} domain(s) for ${claim.client || 'all clients'}`);
+    })().catch(err => console.error('[shared-rescan]', err.message));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/domain-report', (req, res) => {
   res.sendFile(path.join(__dirname, 'domain-report.html'));
 });

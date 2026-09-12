@@ -55,8 +55,9 @@
   <h1>Domain Setup Report</h1>
   <p class="sub">Domains whose DNS or website setup needs attention.</p>
   <div class="bar">
-    <button id="reload">Refresh</button>
+    <button id="reload" title="Re-check DNS for these domains">Re-check now</button>
     <span class="meta" id="meta" style="margin:0"></span>
+    <span class="meta" id="rescanNote" style="margin:0;color:var(--warn)"></span>
   </div>
   <div id="out"><div class="empty">Loading…</div></div>
   <div class="note" id="note" hidden>
@@ -80,13 +81,11 @@ function ago(ts){
 
 const token = new URLSearchParams(location.search).get('t') || '';
 
-// Re-reads the current results. Deliberately does NOT start a scan: the checks
-// query Spamhaus/SURBL/URIBL, and letting an outside page trigger those would
-// put our single IP into blocklist lookups on someone else's schedule.
-function load() {
+// Reads the current results.
+function load(label) {
   const btn = document.getElementById('reload');
   btn.disabled = true;
-  btn.textContent = 'Refreshing…';
+  btn.textContent = label || 'Loading…';
 
   return fetch('/api/domains/shared?t=' + encodeURIComponent(token))
   .then(r => r.json().then(j => ({ ok: r.ok, j })))
@@ -128,11 +127,47 @@ function load() {
   .finally(() => {
     const btn = document.getElementById('reload');
     btn.disabled = false;
-    btn.textContent = 'Refresh';
+    btn.textContent = 'Re-check now';
   });
 }
 
-document.getElementById('reload').addEventListener('click', load);
+// Re-check the DNS for these domains, then show the new result. The server
+// re-runs SPF/DKIM/DMARC/MX and the website check only — never the blacklists —
+// and allows one re-check per hour per link.
+async function rescan() {
+  const btn = document.getElementById('reload');
+  const note = document.getElementById('rescanNote');
+  btn.disabled = true;
+  btn.textContent = 'Re-checking…';
+  note.textContent = '';
+
+  try {
+    const r = await fetch('/api/domains/shared/rescan?t=' + encodeURIComponent(token), { method: 'POST' });
+    const j = await r.json();
+
+    if (r.status === 429) {
+      note.textContent = j.error || 'Please try again later.';
+      return load('Loading…');
+    }
+    if (!r.ok) {
+      note.textContent = j.error || 'Could not re-check right now.';
+      return load('Loading…');
+    }
+
+    // The sweep runs in the background; give it time, then re-read. Paced at
+    // ~4 domains per 750ms, plus headroom.
+    const waitMs = Math.min(60000, 3000 + (j.checking || 0) * 220);
+    note.textContent = `Re-checking ${j.checking} domain${j.checking === 1 ? '' : 's'}…`;
+    await new Promise(res => setTimeout(res, waitMs));
+    note.textContent = '';
+    return load('Loading…');
+  } catch {
+    note.textContent = 'Could not re-check right now.';
+    return load('Loading…');
+  }
+}
+
+document.getElementById('reload').addEventListener('click', rescan);
 load();
 </script>
 </body>
