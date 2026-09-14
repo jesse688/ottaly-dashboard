@@ -12,7 +12,8 @@ interface ProviderRow {
 interface ClientRow {
   workspace_id: string; client: string
   capacity: number; mailboxes: number; activeMailboxes: number
-  // Limit still locked behind PlusVibe slow ramp-up — not available today.
+  // Limit still locked behind PlusVibe COLD SENDING ramp-up — not available
+  // today. Not warmup email volume, which doesn't cap cold sends.
   rampingCapacity: number; rampingMailboxes: number
   sentToday: number
   pacePct: number; donePct: number; paceState: 'ahead' | 'on' | 'behind'
@@ -108,7 +109,7 @@ export default function CapacityPage() {
             <div style={{ fontSize: '1.5rem', fontWeight: 700, fontFamily: 'Genos, Inter, sans-serif' }}>Capacity</div>
             <div style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>
               Are we using all our sending resource? Per-client sendable-today limits vs what’s actually sending.
-              Boxes in warm-up count at the limit they’re allowed today, not their final limit.
+              Boxes in cold sending ramp-up count at the limit they’re allowed today, not their final limit.
               {data && <> · Now {data.ukTime} UK · sending day {data.dayFraction}% elapsed{data.pausedCount > 0 ? ` · ${data.pausedCount} paused (excluded)` : ''}</>}
             </div>
           </div>
@@ -133,7 +134,7 @@ export default function CapacityPage() {
                 label="Daily capacity"
                 val={num(data.summary.totalCapacity)}
                 sub={data.summary.totalRamping > 0
-                  ? `sendable today · +${num(data.summary.totalRamping)} still warming up`
+                  ? `sendable today · +${num(data.summary.totalRamping)} in cold ramp-up`
                   : 'max sends/day (active boxes)'}
                 accent={C.navy}
               />
@@ -189,9 +190,9 @@ export default function CapacityPage() {
                         {c.rampingCapacity > 0 && (
                           <div
                             style={{ fontSize: 10, color: C.muted }}
-                            title={`${c.rampingMailboxes} mailbox${c.rampingMailboxes === 1 ? '' : 'es'} still in warm-up ramp-up. Their full limit (+${num(c.rampingCapacity)}/day) unlocks as PlusVibe steps them up.`}
+                            title={`${c.rampingMailboxes} mailbox${c.rampingMailboxes === 1 ? '' : 'es'} in cold sending ramp-up. Their full limit (+${num(c.rampingCapacity)}/day) unlocks as PlusVibe steps them up. This is the cold-send ramp, not warmup email volume.`}
                           >
-                            +{num(c.rampingCapacity)} warming
+                            +{num(c.rampingCapacity)} ramping
                           </div>
                         )}
                       </td>
@@ -233,7 +234,7 @@ export default function CapacityPage() {
                                   </span>
                                 ))}
                                 {stalled.filter(s => !tighten.some(t => t.provider === s.provider)).map(p => (
-                                  <span key={p.provider} style={{ fontSize: 11.5, color: '#DC2626', whiteSpace: 'nowrap' }} title={`Interval (${p.currentIntervalMin ?? '?'}m) has headroom — sends aren't going out. Check campaign / leads / warmup.`}>
+                                  <span key={p.provider} style={{ fontSize: 11.5, color: '#DC2626', whiteSpace: 'nowrap' }} title={`Interval (${p.currentIntervalMin ?? '?'}m) has headroom — sends aren't going out. Check campaign / leads / cold sending ramp-up.`}>
                                     <span style={{ display: 'inline-block', minWidth: 62, fontWeight: 600, color: C.muted }}>{p.provider}</span>
                                     ⚠ stalled
                                   </span>
@@ -263,7 +264,7 @@ export default function CapacityPage() {
             </div>
 
             <div style={{ fontSize: 11, color: C.muted, marginTop: 14, lineHeight: 1.5 }}>
-              <b>Live pace</b> = sent so far ÷ where they should be by now (100% = exactly on pace right now — this is the real-time signal, not a forecast). <b>On target</b> = will they fill capacity by end of day at the current rate. <b>Speed to fix</b> (per provider): shows the ACTUAL sending interval, and “20m → 14m” only when the interval is genuinely the bottleneck. If a provider is behind but its interval has headroom (its daily limit is the real cap), it reads <b>⚠ stalled</b> — the sends just aren’t going out, so check the campaign / leads / warmup, not the interval. Capacity = Σ each ACTIVE mailbox’s daily limit (08:00–17:00 UK window). The <b>Pause</b> toggle excludes a client from the totals — a dashboard flag only, it does NOT change anything on PlusVibe.
+              <b>Live pace</b> = sent so far ÷ where they should be by now (100% = exactly on pace right now — this is the real-time signal, not a forecast). <b>On target</b> = will they fill capacity by end of day at the current rate. <b>Speed to fix</b> (per provider): shows the ACTUAL sending interval, and “20m → 14m” only when the interval is genuinely the bottleneck. If a provider is behind but its interval has headroom (its daily limit is the real cap), it reads <b>⚠ stalled</b> — the sends just aren’t going out, so check the campaign / leads / cold sending ramp-up, not the interval. Capacity = Σ what each ACTIVE mailbox may send TODAY (08:00–17:00 UK window) — for a box in PlusVibe <b>cold sending ramp-up</b> that is its current ramp step, not its final daily limit, because PV won’t let it send more than the step yet. (Cold sending ramp-up is separate from warmup email volume, which doesn’t cap cold sends.) Capacity still locked behind the ramp shows as “+N ramping”. The <b>Pause</b> toggle excludes a client from the totals — a dashboard flag only, it does NOT change anything on PlusVibe.
             </div>
           </>
         )}
