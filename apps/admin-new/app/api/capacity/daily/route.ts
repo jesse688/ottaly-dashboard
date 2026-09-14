@@ -3,7 +3,14 @@ import pool from '@/lib/db'
 
 // ── Daily Capacity / Utilisation ────────────────────────────────────────────
 // "Are the CMs using all our sending resource?" Per client, for TODAY:
-//   capacity  = Σ daily_limit of ACTIVE mailboxes (paused / limit-0 count as 0)
+//   capacity  = Σ EFFECTIVE limit of ACTIVE mailboxes (paused / limit-0 = 0)
+//
+// EFFECTIVE limit, not daily_limit. A mailbox in PlusVibe slow sending ramp-up
+// is throttled by PV to rampup_daily_limit + rampup_daily_inc × days_elapsed,
+// capped at daily_limit. Its daily_limit is a FUTURE ceiling it physically
+// cannot reach today, so counting it as today's capacity invents "wasted"
+// capacity that never existed and puts CMs on a chase they can't win.
+// 49% of active mailboxes carry this flag. See SQL_EFFECTIVE_LIMIT below.
 //   sentToday = today's sent from mailbox_daily_stats (updated intraday)
 //   projected = pace estimate: sentToday ÷ (fraction of the 08:00–17:00 UK
 //               sending day elapsed), capped at capacity
@@ -42,13 +49,40 @@ export async function GET() {
     // while paused at 0), that send is real and counts — "if it's sending,
     // include it". This keeps the page total in step with PV.
     const CAN_SEND = `daily_limit > 0`
+
+    // What this mailbox is ALLOWED to send today.
+    //  - not in slow ramp-up            -> daily_limit (the normal case)
+    //  - in slow ramp-up, clock known   -> start + inc × days, capped at daily_limit
+    //  - in slow ramp-up, clock unknown -> daily_limit (don't guess a throttle
+    //    downward off missing data; rampup_started_at backfills on next sync)
+    // GREATEST(...,0) guards a negative/absent rampup_daily_limit.
+    const SQL_EFFECTIVE_LIMIT = `
+      CASE
+        WHEN COALESCE((sending_rampup->>'is_slow_rampup')::bool, false)
+             AND rampup_started_at IS NOT NULL
+        THEN LEAST(
+               daily_limit,
+               GREATEST(
+                 COALESCE((sending_rampup->>'rampup_daily_limit')::int, 0)
+                 + COALESCE((sending_rampup->>'rampup_daily_inc')::int, 0)
+                   * GREATEST(CURRENT_DATE - rampup_started_at, 0),
+                 0)
+             )
+        ELSE daily_limit
+      END`
     const [capRes, sentRes, capProvRes, sentProvRes, histRes, pausedRes, todayRes] = await Promise.all([
       pool.query(`
         SELECT workspace_id,
           MAX(workspace_name) AS workspace_name,
           COUNT(*)::int AS mailboxes,
           COUNT(*) FILTER (WHERE status = 'ACTIVE')::int AS active_mailboxes,
-          COALESCE(SUM(daily_limit) FILTER (WHERE status = 'ACTIVE'), 0)::int AS capacity,
+          COALESCE(SUM(${SQL_EFFECTIVE_LIMIT}) FILTER (WHERE status = 'ACTIVE'), 0)::int AS capacity,
+          -- Ramp headroom: limit still locked behind ramp-up. Reported so the
+          -- page can say "not yet available" instead of hiding the difference.
+          COALESCE(SUM(daily_limit - ${SQL_EFFECTIVE_LIMIT}) FILTER (WHERE status = 'ACTIVE'), 0)::int AS ramping_capacity,
+          COUNT(*) FILTER (
+            WHERE status = 'ACTIVE' AND daily_limit > ${SQL_EFFECTIVE_LIMIT}
+          )::int AS ramping_mailboxes,
           AVG(sending_gap) FILTER (WHERE status = 'ACTIVE' AND sending_gap > 0) AS avg_gap_min
         FROM mailbox_full
         WHERE ignored_at IS NULL AND workspace_id IS NOT NULL AND status = 'ACTIVE' AND ${CAN_SEND}
@@ -61,7 +95,7 @@ export async function GET() {
       pool.query(`
         SELECT workspace_id, type AS provider,
           COUNT(*) FILTER (WHERE status = 'ACTIVE')::int AS active_boxes,
-          COALESCE(SUM(daily_limit) FILTER (WHERE status = 'ACTIVE'), 0)::int AS capacity,
+          COALESCE(SUM(${SQL_EFFECTIVE_LIMIT}) FILTER (WHERE status = 'ACTIVE'), 0)::int AS capacity,
           AVG(sending_gap) FILTER (WHERE status = 'ACTIVE' AND sending_gap > 0) AS avg_gap_min
         FROM mailbox_full
         WHERE ignored_at IS NULL AND workspace_id IS NOT NULL AND status = 'ACTIVE' AND ${CAN_SEND}
@@ -179,6 +213,9 @@ export async function GET() {
           workspace_id: r.workspace_id,
           client: r.workspace_name || r.workspace_id,
           capacity, mailboxes: r.mailboxes, activeMailboxes: activeBoxes,
+          // Capacity still behind slow ramp-up — real, but not available today.
+          rampingCapacity: r.ramping_capacity as number,
+          rampingMailboxes: r.ramping_mailboxes as number,
           sentToday,
           pacePct, donePct, paceState,
           projected, onTarget, wasted,
@@ -198,6 +235,8 @@ export async function GET() {
     const totalCapacity = active.reduce((s, c) => s + c.capacity, 0)
     const totalSentToday = active.reduce((s, c) => s + c.sentToday, 0)
     const totalProjected = active.reduce((s, c) => s + c.projected, 0)
+    const totalRamping = active.reduce((s, c) => s + c.rampingCapacity, 0)
+    const rampingMailboxes = active.reduce((s, c) => s + c.rampingMailboxes, 0)
 
     const history = histRes.rows.map(r => {
       const date = new Date(r.date).toISOString().slice(0, 10)
@@ -213,6 +252,8 @@ export async function GET() {
       summary: {
         totalCapacity, totalSentToday, totalProjected,
         totalWasted: Math.max(0, totalCapacity - totalProjected),
+        // Locked behind ramp-up: NOT wasted, just not available yet.
+        totalRamping, rampingMailboxes,
         // Projected utilisation (end-of-day forecast).
         usedPct: totalCapacity > 0 ? Math.round((totalProjected / totalCapacity) * 100) : 0,
         // LIVE pace right now: sent vs where they should be by this hour.

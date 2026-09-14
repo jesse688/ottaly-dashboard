@@ -12,6 +12,8 @@ interface ProviderRow {
 interface ClientRow {
   workspace_id: string; client: string
   capacity: number; mailboxes: number; activeMailboxes: number
+  // Limit still locked behind PlusVibe slow ramp-up — not available today.
+  rampingCapacity: number; rampingMailboxes: number
   sentToday: number
   pacePct: number; donePct: number; paceState: 'ahead' | 'on' | 'behind'
   projected: number; onTarget: boolean; wasted: number
@@ -21,7 +23,11 @@ interface ClientRow {
 }
 interface Capacity {
   ukTime: string; dayFraction: number; hasTodayData: boolean; pausedCount: number
-  summary: { totalCapacity: number; totalSentToday: number; totalProjected: number; totalWasted: number; usedPct: number; livePacePct: number; donePct: number }
+  summary: {
+    totalCapacity: number; totalSentToday: number; totalProjected: number; totalWasted: number
+    usedPct: number; livePacePct: number; donePct: number
+    totalRamping: number; rampingMailboxes: number
+  }
   clients: ClientRow[]
   history: { date: string; sent: number; wasted: number }[]
   error?: string
@@ -101,7 +107,8 @@ export default function CapacityPage() {
           <div>
             <div style={{ fontSize: '1.5rem', fontWeight: 700, fontFamily: 'Genos, Inter, sans-serif' }}>Capacity</div>
             <div style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>
-              Are we using all our sending resource? Per-client daily limits vs what’s actually sending.
+              Are we using all our sending resource? Per-client sendable-today limits vs what’s actually sending.
+              Boxes in warm-up count at the limit they’re allowed today, not their final limit.
               {data && <> · Now {data.ukTime} UK · sending day {data.dayFraction}% elapsed{data.pausedCount > 0 ? ` · ${data.pausedCount} paused (excluded)` : ''}</>}
             </div>
           </div>
@@ -122,11 +129,18 @@ export default function CapacityPage() {
 
             {/* Summary */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: '1rem', marginBottom: '1.25rem' }}>
-              <StatCard label="Daily capacity" val={num(data.summary.totalCapacity)} sub="max sends/day (active boxes)" accent={C.navy} />
+              <StatCard
+                label="Daily capacity"
+                val={num(data.summary.totalCapacity)}
+                sub={data.summary.totalRamping > 0
+                  ? `sendable today · +${num(data.summary.totalRamping)} still warming up`
+                  : 'max sends/day (active boxes)'}
+                accent={C.navy}
+              />
               <StatCard label="Sent so far today" val={num(data.summary.totalSentToday)} sub={`${data.summary.donePct}% of today’s capacity`} accent="#0EA5E9" />
               <StatCard label="Live pace (now)" val={data.summary.livePacePct + '%'} sub={`vs expected by ${data.ukTime} · ${data.summary.livePacePct >= 90 ? 'on/ahead' : 'behind'}`} accent={data.summary.livePacePct >= 90 ? '#16A34A' : '#DC2626'} />
               <StatCard label="Projected today" val={num(data.summary.totalProjected)} sub={`${data.summary.usedPct}% of capacity end-of-day`} accent={utilTone(data.summary.usedPct)} />
-              <StatCard label="Wasted (projected)" val={num(data.summary.totalWasted)} sub="capacity that won’t be used" accent="#DC2626" />
+              <StatCard label="Wasted (projected)" val={num(data.summary.totalWasted)} sub="sendable capacity that won’t be used" accent="#DC2626" />
             </div>
 
             {/* Daily sent vs wasted chart */}
@@ -168,7 +182,19 @@ export default function CapacityPage() {
                         {c.paused && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#92400E', background: '#FEF3C7', padding: '1px 6px', borderRadius: 20 }}>PAUSED · not counted</span>}
                       </td>
                       <td style={{ ...tdN, color: C.muted }}>{num(c.activeMailboxes)}{c.activeMailboxes !== c.mailboxes ? ` / ${num(c.mailboxes)}` : ''}</td>
-                      <td style={tdN}>{num(c.capacity)}</td>
+                      <td style={tdN}>
+                        {num(c.capacity)}
+                        {/* Say why capacity is below the configured total, so a low
+                            number doesn't look like a mistake or a missing box. */}
+                        {c.rampingCapacity > 0 && (
+                          <div
+                            style={{ fontSize: 10, color: C.muted }}
+                            title={`${c.rampingMailboxes} mailbox${c.rampingMailboxes === 1 ? '' : 'es'} still in warm-up ramp-up. Their full limit (+${num(c.rampingCapacity)}/day) unlocks as PlusVibe steps them up.`}
+                          >
+                            +{num(c.rampingCapacity)} warming
+                          </div>
+                        )}
+                      </td>
                       <td style={tdN}>{c.paused ? '—' : <>{num(c.sentToday)}<div style={{ fontSize: 10, color: C.muted }}>{c.donePct}% of cap</div></>}</td>
                       {/* Live pace (now) */}
                       <td style={tdN}>

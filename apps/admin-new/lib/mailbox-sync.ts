@@ -324,8 +324,18 @@ interface PvAccount {
     name?: { first_name?: string; last_name?: string }
     daily_limit?: number; sending_gap?: number
     warmup?: { limit?: number; reply_rate?: number }
+    // COLD-send ramp (distinct from payload.warmup_rampup, which ramps warmup
+    // volume). While is_slow_rampup is true the account may only send
+    // rampup_daily_limit + rampup_daily_inc × days_elapsed, capped at daily_limit.
+    sending_rampup?: { is_slow_rampup?: boolean; rampup_daily_limit?: number; rampup_daily_inc?: number }
     cmps?: Array<{ id?: string }>
   } | null
+}
+
+export interface SendingRampup {
+  is_slow_rampup: boolean
+  rampup_daily_limit: number | null
+  rampup_daily_inc: number | null
 }
 
 interface RawMailbox {
@@ -334,6 +344,7 @@ interface RawMailbox {
   status: string | null; warmup_status: string | null; provider: string | null
   name: string | null; daily_limit: number | null; sending_gap: number | null
   warmup_limit: number | null; warmup_reply_rate: number | null; warmup_enabled_at: string | null
+  sending_rampup: SendingRampup | null
   campaigns_count: number; campaign_ids: string[]
   created_at: string | null; updated_at: string | null
   tags: string[]                    // PlusVibe account tags (names), for tag→supplier rules
@@ -380,6 +391,15 @@ async function listSendingMailboxes(): Promise<RawMailbox[]> {
         warmup_limit: typeof warmup.limit === 'number' ? warmup.limit : null,
         warmup_reply_rate: typeof warmup.reply_rate === 'number' ? warmup.reply_rate : null,
         warmup_enabled_at: a.warmup_enb_dt || null,
+        sending_rampup: payload.sending_rampup
+          ? {
+              is_slow_rampup: payload.sending_rampup.is_slow_rampup === true,
+              rampup_daily_limit: typeof payload.sending_rampup.rampup_daily_limit === 'number'
+                ? payload.sending_rampup.rampup_daily_limit : null,
+              rampup_daily_inc: typeof payload.sending_rampup.rampup_daily_inc === 'number'
+                ? payload.sending_rampup.rampup_daily_inc : null,
+            }
+          : null,
         campaigns_count: Array.isArray(payload.cmps) ? payload.cmps.length : 0,
         campaign_ids: Array.isArray(payload.cmps) ? payload.cmps.map(c => c.id).filter(Boolean) as string[] : [],
         created_at: a.timestamp_created || null,
@@ -557,10 +577,14 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
              warmup_limit, warmup_reply_rate, warmup_enabled_at, campaigns_count, campaign_ids,
              type, type_auto, supplier, notes, billing_start_date, billing_day, ignored_at, unit_cost,
              attributed_sent, attributed_replies, attributed_bounces, reply_rate, bounce_rate,
-             auth, blacklist_count, domain_score, domain_notes, domain_status, attention, tags, synced_at
+             auth, blacklist_count, domain_score, domain_notes, domain_status, attention, tags, synced_at,
+             sending_rampup, rampup_started_at
            ) VALUES (
              $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,
-             $17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30::jsonb,$31,$32,$33,$34,$35::jsonb,$36::text[], now()
+             $17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30::jsonb,$31,$32,$33,$34,$35::jsonb,$36::text[], now(),
+             $37::jsonb,
+             -- First sighting in slow rampup starts the ramp clock today.
+             CASE WHEN ($37::jsonb->>'is_slow_rampup')::bool THEN CURRENT_DATE ELSE NULL END
            )
            ON CONFLICT (email) DO UPDATE SET
              account_id=EXCLUDED.account_id, domain=EXCLUDED.domain, workspace_id=EXCLUDED.workspace_id,
@@ -574,7 +598,17 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
              attributed_bounces=EXCLUDED.attributed_bounces, reply_rate=EXCLUDED.reply_rate, bounce_rate=EXCLUDED.bounce_rate,
              auth=EXCLUDED.auth, blacklist_count=EXCLUDED.blacklist_count, domain_score=EXCLUDED.domain_score,
              domain_notes=EXCLUDED.domain_notes, domain_status=EXCLUDED.domain_status, attention=EXCLUDED.attention,
-             tags=EXCLUDED.tags, synced_at=now()`,
+             tags=EXCLUDED.tags, synced_at=now(),
+             sending_rampup=EXCLUDED.sending_rampup,
+             -- The ramp clock must not restart on every sync, or a ramping box
+             -- would look like day 0 forever and its capacity would never grow.
+             -- Keep the stamp we already have while the ramp is on; stamp today
+             -- if the ramp has just been switched on; clear it once it's off.
+             rampup_started_at = CASE
+               WHEN (EXCLUDED.sending_rampup->>'is_slow_rampup')::bool
+                 THEN COALESCE(mailbox_full.rampup_started_at, CURRENT_DATE)
+               ELSE NULL
+             END`,
           [
             m.email, m.account_id, m.domain, m.workspace_id, m.workspace_name,
             m.status, m.warmup_status, m.provider, m.name, m.daily_limit, m.sending_gap,
@@ -583,6 +617,7 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
             m.attributed_sent, m.attributed_replies, m.attributed_bounces, m.reply_rate, m.bounce_rate,
             m.auth ? JSON.stringify(m.auth) : null, m.blacklist_count, m.domain_score, m.domain_notes, m.domain_status,
             JSON.stringify(m.attention), m.tags,
+            m.sending_rampup ? JSON.stringify(m.sending_rampup) : null,
           ]
         )
       }
