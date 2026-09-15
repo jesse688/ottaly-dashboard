@@ -483,8 +483,19 @@
       font-size: 13px;
     }
 
-    .selection-bar.visible {
+    .selection-bar.visible,
+    /* The action buttons live in this bar, so it is now always shown — see the
+       note on the element. `.visible` is kept so any other caller still works. */
+    .selection-bar.is-always-on {
       display: flex;
+    }
+
+    /* A selection is no longer required to push, so the bar sits on a neutral
+       ground and only turns blue when something IS ticked — the blue then means
+       "you have a selection", instead of being permanent chrome. */
+    .selection-bar.is-always-on:not(.has-selection) {
+      background: #f8fafc;
+      border-bottom-color: #e5e7eb;
     }
 
     .selection-count {
@@ -1624,16 +1635,16 @@
       <div id="mxResultPanel" style="display:none;margin:8px 0 0;padding:10px 14px;border:1px solid #e5e7eb;border-radius:8px;background:#fafafa;font-size:13px;"></div>
 
       <!-- Selection Action Bar -->
-      <div class="selection-bar" id="selectionBar">
-        <!-- Only visible once something is ticked (see updatePushButton), and
-             the selection still feeds FIVE actions, not just the PlusVibe push:
-             Solar, Ads Finder, Bison, and the push CSV all read _selectedIds.
-             So this bar stays — but trimmed to the two things it is for:
-             what is ticked, and how to change it. The "(N match)" total moved
-             out; it duplicated the header's own count and read as a second
-             number competing with the push's order. -->
-        <span class="selection-count"><span id="pushCount">0</span> ticked</span>
-        <div class="selection-divider"></div>
+      <!-- ALWAYS visible. The action buttons live in here, so hiding the whole
+           bar until something was ticked forced a selection before Push could
+           even be seen — filter, tick rows, THEN push, for a push that overrides
+           the selection anyway. Now: filter, Push, say how many.
+           The selection is still real and still required by the four actions
+           that have no order of their own (Solar, Ads Finder, Bison, push CSV),
+           so the ticked-count half appears only when there IS a selection. -->
+      <div class="selection-bar is-always-on" id="selectionBar">
+        <span class="selection-count" id="tickedWrap" style="display:none;"><span id="pushCount">0</span> ticked</span>
+        <div class="selection-divider" id="tickedDivider" style="display:none;"></div>
         <div style="position:relative;">
           <button class="btn btn-secondary" style="padding:5px 12px;font-size:12px;" id="selectBtn" onclick="toggleSelectPopover(event)">
             Choose rows…
@@ -4659,11 +4670,49 @@
 
     function updatePushButton() {
       const bar = document.getElementById('selectionBar');
-      const countEl = document.getElementById('pushCount');
-      countEl.textContent = _selectedIds.size.toLocaleString();
-      // The bar exists only while there IS a selection — it is not a permanent
-      // toolbar, so an empty page shows nothing to compete with the push order.
-      bar.classList.toggle('visible', _selectedIds.size > 0);
+      const n = _selectedIds.size;
+      document.getElementById('pushCount').textContent = n.toLocaleString();
+
+      // The bar itself is always shown (the actions live in it). Only the
+      // ticked-count half comes and goes, and the blue ground with it, so the
+      // colour means "there is a selection" rather than being permanent chrome.
+      const has = n > 0;
+      bar.classList.toggle('has-selection', has);
+      document.getElementById('tickedWrap').style.display = has ? '' : 'none';
+      document.getElementById('tickedDivider').style.display = has ? '' : 'none';
+
+      // The actions with no order of their own still need a selection. Disable
+      // rather than hide: a greyed button with a reason in the tooltip teaches
+      // the rule, a missing one just looks broken.
+      // (Bison's modal and the push CSV also read the selection, but neither
+      //  has a button on this bar — Bison has no trigger here at all, and the
+      //  CSV lives inside the push modal — so there is nothing to disable.)
+      const needsSelection = [
+        ['pushSolarBtn',  'Tick some contacts first — Solar takes exactly what you pick'],
+        ['pushAdsBtn',    'Tick some contacts first — Ads Finder takes exactly what you pick'],
+      ];
+      for (const [id, why] of needsSelection) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        el.disabled = !has;
+        el.style.opacity = has ? '' : '0.45';
+        el.style.cursor = has ? '' : 'not-allowed';
+        if (!has) el.title = why; else el.removeAttribute('title');
+      }
+
+      // PlusVibe is the exception: it carries an order and tops up from the
+      // filter, so it works with nothing ticked. Only a client is required.
+      const pushBtn = document.getElementById('pushBtn');
+      if (pushBtn) {
+        const hasClient = !!(document.getElementById('clientFilter') || {}).value;
+        pushBtn.disabled = !hasClient;
+        pushBtn.style.opacity = hasClient ? '' : '0.45';
+        pushBtn.style.cursor = hasClient ? '' : 'not-allowed';
+        pushBtn.title = hasClient
+          ? (has ? `Push — starts with your ${n.toLocaleString()} ticked, then tops up from the filter`
+                 : 'Push — you choose how many; they come from the current filter')
+          : 'Choose a client in "Filter for Client" first';
+      }
     }
 
     function deselectAll() {
@@ -5086,7 +5135,14 @@
     }
 
     async function openPushModal() {
-      if (_selectedIds.size === 0) { showMessage('Select contacts first', 'error'); return; }
+      // No selection required. The push carries an order and pulls ranked
+      // candidates from the current filter, so ticking rows first was a step
+      // that the order then overrode anyway. Ticked rows still count — they go
+      // first, and the order tops up from the filter behind them.
+      //
+      // A client IS still required: every guard (cooldown, cross-client
+      // spacing, already-in-campaign) is relative to one, and the filter alone
+      // does not say who this is for.
 
       // Require a client to be selected in the sidebar filter first
       const clientSel = document.getElementById('clientFilter');
@@ -5099,28 +5155,34 @@
 
       document.getElementById('pvWorkspace').value = wsId;
       document.getElementById('pvWorkspaceDisplay').textContent = wsName || wsId;
-      // Default the order to what is selected — the familiar behaviour — but
-      // it is now editable, and the job will top up to reach it rather than
-      // landing wherever the verifier leaves the selected list.
-      const tEl = document.getElementById('pushTargetCount');
-      tEl.value = _selectedIds.size;
-      // Say where the contacts come from. The ticked rows are the STARTING
-      // point, not the limit — when the verifier drops some, the job pulls more
-      // from the same filter to finish the order. Without saying so, a 100-row
-      // tick next to an order of 500 looks like a contradiction.
-      const src = document.getElementById('pushTargetSource');
+      const selected = _selectedIds.size;
       const matching = parseInt((document.getElementById('totalCount').textContent || '0').replace(/,/g, '')) || 0;
-      // Stashed so toggling "Verify emails" off and back on restores it rather
-      // than leaving the warning behind.
-      src.dataset.onText = matching > _selectedIds.size
-        ? ` Starts with your ${_selectedIds.size.toLocaleString()} ticked, then pulls more from the ${matching.toLocaleString()} matching this filter if needed.`
-        : '';
+      const sendable = _lastSendability?.sendableTotal;
+
+      // Default the order. With rows ticked, that count is the obvious intent.
+      // With none, the last order used is the best guess — a person pushing
+      // 1,500 on Monday usually wants 1,500 on Tuesday — falling back to the
+      // sendable pool (capped) so the box is never blank or absurdly large.
+      const tEl = document.getElementById('pushTargetCount');
+      const lastOrder = parseInt(localStorage.getItem('pvLastPushTarget'), 10) || 0;
+      tEl.value = selected > 0
+        ? selected
+        : Math.max(1, Math.min(lastOrder || 500, sendable || matching || 500));
+
+      // Say where the contacts come from — the two cases read differently.
+      const src = document.getElementById('pushTargetSource');
+      src.dataset.onText = selected > 0
+        ? (matching > selected
+            ? ` Starts with your ${selected.toLocaleString()} ticked, then pulls more from the ${matching.toLocaleString()} matching this filter if needed.`
+            : '')
+        : ` Taken from the ${matching.toLocaleString()} matching this filter — never-contacted first, one per company.`;
       src.textContent = src.dataset.onText;
+
       const note = document.getElementById('pushTargetNote');
-      if (_lastSendability && _lastSendability.sendableTotal != null) {
-        const avail = _lastSendability.sendableTotal;
-        note.textContent = ` About ${avail.toLocaleString()} sendable for this client.`;
-        note.style.display = avail < _selectedIds.size ? '' : 'none';
+      if (sendable != null) {
+        note.textContent = ` About ${sendable.toLocaleString()} sendable for this client.`;
+        // Warn when the order cannot be met from what is actually sendable.
+        note.style.display = sendable < (parseInt(tEl.value, 10) || 0) ? '' : 'none';
       } else {
         note.style.display = 'none';
       }
@@ -5301,8 +5363,35 @@
       if (!wsId) { errEl.textContent = 'Please select a workspace.'; errEl.style.display = ''; return; }
       if (!allowedStatuses.length) { errEl.textContent = 'Select at least one verification result to push.'; errEl.style.display = ''; return; }
 
-      const contactIds = [..._selectedIds];
+      let contactIds = [..._selectedIds];
       const wsName = pvWorkspaces.find(w => w._id === wsId)?.name || wsId;
+
+      // Pushing with nothing ticked: seed the first batch from the ranked pool.
+      // The server needs a non-empty contact_ids to start a job, and the job's
+      // own top-up then carries it the rest of the way. Asking for the order
+      // inflated by the expected yield keeps this to ONE query — the top-up
+      // handles any shortfall rather than us guessing bigger here.
+      if (!contactIds.length) {
+        const wantSeed = Math.max(1, parseInt(document.getElementById('pushTargetCount')?.value, 10) || 0);
+        if (!wantSeed) { errEl.textContent = 'Enter how many to push.'; errEl.style.display = ''; return; }
+        const seedBtn = document.getElementById('pushConfirmBtn');
+        const seedLabel = seedBtn ? seedBtn.innerHTML : '';
+        if (seedBtn) { seedBtn.innerHTML = '⏳ Finding contacts…'; seedBtn.disabled = true; }
+        try {
+          // Returns a Set of ids that survive every guard, in rank order
+          // (never-contacted first, one per company) — the same call the
+          // "sendable only" selection uses.
+          const ids = await fetchSendableIds(Math.ceil(wantSeed * 2));
+          contactIds = ids ? [...ids] : [];
+        } finally {
+          if (seedBtn) { seedBtn.innerHTML = seedLabel; seedBtn.disabled = false; }
+        }
+        if (!contactIds.length) {
+          errEl.textContent = 'No sendable contacts for this client with the current filter.';
+          errEl.style.display = '';
+          return;
+        }
+      }
 
       // Resolve the target campaign. For "new", create a Draft in PlusVibe first,
       // then push into it. Verification still runs either way (below).
@@ -5359,6 +5448,9 @@
       // target_filters is the live filter set — where the extra contacts come
       // from when the verifier drops some of the selected ones.
       const targetCount = Math.max(0, parseInt(document.getElementById('pushTargetCount')?.value, 10) || 0);
+      // Remembered so the next push with nothing ticked defaults to the same
+      // order — the usual case is pushing the same size batch again.
+      if (targetCount > 0) { try { localStorage.setItem('pvLastPushTarget', String(targetCount)); } catch {} }
 
       try {
         const endpoint = verifyFirst ? '/api/contacts/verify-and-push' : '/api/pv/push-contacts';
