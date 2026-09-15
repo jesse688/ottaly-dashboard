@@ -330,7 +330,7 @@ function ClientCard({
         onClick={() => setOpen(o => !o)}
         className={cn(
           'grid w-full cursor-pointer items-center gap-2 px-4 py-3 text-left',
-          'grid-cols-[minmax(0,1.6fr)_repeat(8,minmax(0,1fr))_24px]',
+          'grid-cols-[minmax(0,1.6fr)_repeat(10,minmax(0,1fr))_24px]',
           isAll && 'bg-accent/40',
         )}
       >
@@ -354,8 +354,19 @@ function ClientCard({
           <StatusBadge status={brTone(t.bounceRate)}>{pct(t.bounceRate)}</StatusBadge>
           <Lbl>Bounce</Lbl>
         </Cell>
-        {/* Split out so a bounce spike is immediately attributable: a bad list
-            (recipient) is a targeting fix, a rejected sender is an infra fix. */}
+        {/* Both halves shown so a bounce spike is immediately attributable: a bad
+            list (recipient) is a targeting fix, a rejected sender is an infra fix.
+            Recipient is usually the bigger number, so hiding it left the reader
+            subtracting sender from the total to find the real problem. */}
+        <Cell>
+          <span
+            className={cn('text-sm font-bold', t.recipientBounceRate == null ? 'text-muted-foreground' : 'text-foreground')}
+            title={t.recipientBounceRate == null ? 'PlusVibe has not classified this window yet' : undefined}
+          >
+            {t.recipientBounceRate == null ? '—' : pct(t.recipientBounceRate)}
+          </span>
+          <Lbl>Recipient bounce</Lbl>
+        </Cell>
         <Cell>
           <span
             className={cn(
@@ -663,9 +674,21 @@ export default function StatsPage() {
           loading={loading}
         />
         <KpiCard label="Bounce Rate" value={incomplete ? '—' : pct(agg?.totals.bounceRate ?? 0)} tone="red" loading={loading} />
-        {/* Sender bounce is the one that means OUR infrastructure is the problem
-            (mailbox/domain rejected) rather than a dirty list, so it earns a
-            headline card. A dash means PV hasn't classified this window. */}
+        {/* Both halves of the split get a card. Showing only sender meant the
+            larger number was the hidden one — recipient is typically most of the
+            bounce total — and left the reader subtracting to find it.
+            A dash means PV hasn't classified this window, NOT a measured 0%. */}
+        <KpiCard
+          label="Recipient Bounce"
+          value={
+            incomplete || agg?.totals.recipientBounceRate == null
+              ? '—'
+              : pct(agg.totals.recipientBounceRate)
+          }
+          sub={agg?.totals.recipientBounceRate == null ? 'not measured yet' : 'bad lead address'}
+          tone="yellow"
+          loading={loading}
+        />
         <KpiCard
           label="Sender Bounce"
           value={
@@ -711,11 +734,13 @@ export default function StatsPage() {
       {status === 'ok' && (
         <div className="flex flex-col gap-2">
           {/* Column legend (mirrors the per-card cells) */}
-          <div className="grid grid-cols-[minmax(0,1.6fr)_repeat(8,minmax(0,1fr))_24px] items-center gap-2 px-4 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <div className="grid grid-cols-[minmax(0,1.6fr)_repeat(10,minmax(0,1fr))_24px] items-center gap-2 px-4 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             <div>Client</div>
             <div className="text-right">Human RR</div>
             <div className="text-right">Reply Rate</div>
             <div className="text-right">Bounce</div>
+            <div className="text-right">Recipient</div>
+            <div className="text-right">Sender</div>
             <div className="text-right">RTL</div>
             <div className="text-right">LPT</div>
             <div className="text-right">Leads</div>
