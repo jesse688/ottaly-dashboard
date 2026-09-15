@@ -2092,9 +2092,20 @@
 
       <!-- Step 1: Configure -->
       <div id="pushStep1">
-        <p style="font-size:13px;color:#6b7280;margin-bottom:16px;">
-          Pushing <strong><span id="pushCountModal">0</span> contacts</strong>
-        </p>
+        <!-- The ORDER. This is the number that matters: the job keeps pulling
+             ranked candidates and verifying until this many are actually in
+             PlusVibe, rather than verifying a fixed list once and landing
+             wherever the verifier leaves it. -->
+        <div class="form-group">
+          <label>How many to push</label>
+          <input type="number" id="pushTargetCount" min="1" max="200000" step="50"
+                 style="padding:10px 12px;border:1px solid #e5e7eb;border-radius:7px;font-size:13px;width:140px;font-weight:600;">
+          <div style="font-size:11px;color:#6b7280;margin-top:6px;line-height:1.5;">
+            Keeps verifying and topping up until this many land in PlusVibe.
+            Stops early only if this client runs out of sendable contacts.
+            <span id="pushTargetNote" style="display:none;color:#d97706;"></span>
+          </div>
+        </div>
 
         <div class="form-group">
           <label>Client Workspace</label>
@@ -5096,7 +5107,19 @@
 
       document.getElementById('pvWorkspace').value = wsId;
       document.getElementById('pvWorkspaceDisplay').textContent = wsName || wsId;
-      document.getElementById('pushCountModal').textContent = _selectedIds.size.toLocaleString();
+      // Default the order to what is selected — the familiar behaviour — but
+      // it is now editable, and the job will top up to reach it rather than
+      // landing wherever the verifier leaves the selected list.
+      const tEl = document.getElementById('pushTargetCount');
+      tEl.value = _selectedIds.size;
+      const note = document.getElementById('pushTargetNote');
+      if (_lastSendability && _lastSendability.sendableTotal != null) {
+        const avail = _lastSendability.sendableTotal;
+        note.textContent = ` About ${avail.toLocaleString()} sendable for this client.`;
+        note.style.display = avail < _selectedIds.size ? '' : 'none';
+      } else {
+        note.style.display = 'none';
+      }
       document.getElementById('pushStep1').style.display = '';
       document.getElementById('pushConfirmBtn').style.display = '';
       document.getElementById('pushError').style.display = 'none';
@@ -5309,10 +5332,17 @@
       if (document.getElementById('emailOutlook').checked) pushProviders.push('email_outlook');
       if (document.getElementById('emailOther').checked)   pushProviders.push('email_other');
 
+      // The ORDER. Sent only on the verify path: topping up means verifying
+      // more contacts, so a straight push (no verification) has nothing to top
+      // up with and keeps its historic "push exactly this list" behaviour.
+      // target_filters is the live filter set — where the extra contacts come
+      // from when the verifier drops some of the selected ones.
+      const targetCount = Math.max(0, parseInt(document.getElementById('pushTargetCount')?.value, 10) || 0);
+
       try {
         const endpoint = verifyFirst ? '/api/contacts/verify-and-push' : '/api/pv/push-contacts';
         const body = verifyFirst
-          ? { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, workspace_name: wsName, campaign_name: campName, include_risky: false, max_age_days: 14, emailProviders: pushProviders.join(','), excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '', use_n2b: useN2b, allowed_statuses: allowedStatuses, override_send_rules: isSendRuleOverrideOn() }
+          ? { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, workspace_name: wsName, campaign_name: campName, include_risky: false, max_age_days: 14, emailProviders: pushProviders.join(','), excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '', use_n2b: useN2b, allowed_statuses: allowedStatuses, override_send_rules: isSendRuleOverrideOn(), target: targetCount, target_filters: (() => { const f = { ...getFilterValues(0) }; delete f.limit; delete f.offset; delete f.sortBy; delete f.sortDir; return f; })() }
           : { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, campaign_name: campName, workspace_name: wsName, excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '', allowed_statuses: allowedStatuses, override_send_rules: isSendRuleOverrideOn() };
 
         const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -5588,14 +5618,24 @@
 
           // ── Headline status text ─────────────────────────────
           let statusLabel;
+          // With an order, progress is "against the order" — "820/1,500" says
+          // far more than "820 pushed" when the job is still topping up.
+          const ofTarget = j.target > 0 ? `/${Number(j.target).toLocaleString()}` : '';
+          const roundNote = j.round > 1 ? ` · round ${j.round}` : '';
           if (j.status === 'verifying') {
-            statusLabel = j.verifyOnly ? `🔍 Verifying for CSV — ${j.verified||0}/${j.toVerify||0}` : `🔍 Verifying with Reacher — ${j.verified||0}/${j.toVerify||0}`;
+            statusLabel = j.verifyOnly ? `🔍 Verifying for CSV — ${j.verified||0}/${j.toVerify||0}` : `🔍 Verifying with Reacher — ${j.verified||0}/${j.toVerify||0}${roundNote}`;
           } else if (j.status === 'pushing') {
-            statusLabel = `🚀 Pushing to PlusVibe — ${j.pushed||0} sent`;
+            statusLabel = `🚀 Pushing to PlusVibe — ${(j.pushed||0).toLocaleString()}${ofTarget} sent${roundNote}`;
           } else if (j.status === 'n2b_verifying') {
             statusLabel = `🔬 No2Bounce validating ${j.n2bTotal||0} catch-all contacts…`;
           } else if (j.status === 'completed') {
-            statusLabel = j.verifyOnly ? `✅ Verified — ${j.safe_ids?.length||0} safe contacts ready` : `✅ Done — ${j.pushed||0} pushed`;
+            // A short order is a real finding — usually "this client is out of
+            // data" — so say it plainly instead of reporting a bare success.
+            statusLabel = j.verifyOnly
+              ? `✅ Verified — ${j.safe_ids?.length||0} safe contacts ready`
+              : (j.shortfall > 0
+                  ? `⚠️ ${(j.pushed||0).toLocaleString()}${ofTarget} pushed — ${Number(j.shortfall).toLocaleString()} short: ${j.shortfallReason || 'pool exhausted'}`
+                  : `✅ Done — ${(j.pushed||0).toLocaleString()}${ofTarget} pushed`);
           } else if (j.status === 'cancelled') {
             statusLabel = '⛔ Cancelled';
           } else if (j.status === 'pausing') {

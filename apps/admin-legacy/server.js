@@ -24208,13 +24208,71 @@ app.get('/api/debug/push-jobs', (req, res) => {
 });
 
 // POST starts job immediately, returns job ID — processing runs in background
+// Largest single refill round. Not a cap on TOTAL verification — the job keeps
+// going until the target is met or the pool is dry — just a bound on how much
+// one round may claim, so a big order still reports progress as it goes.
+const PUSH_TOPUP_MAX_BATCH = 5000;
+// Hard stop on how many refill rounds one order may run. NOT a cap on volume —
+// a healthy push fills its order in 1-2 rounds, and a thin pool ends itself by
+// running dry. This catches the case neither of those does: a persistently poor
+// but non-zero yield, where each round pushes a little, the stall check never
+// fires (yield isn't zero) and the job creeps forever burning credits. Verified
+// by simulation: at a steady 5% yield the loop ran unbounded without this.
+const PUSH_TOPUP_MAX_ROUNDS = 12;
+
+// Fetch the next slice of ranked, guard-passing candidates for a job that has
+// not filled its order. Reuses /api/contacts/sendability rather than querying
+// directly, for the same reason apSelectContacts does: that route runs the very
+// guards the push runs, so the two cannot drift apart. Contacts pushed in an
+// earlier round are already stamped, so they do not come back.
+async function pushTopUpCandidates(db, job, want) {
+  if (!job.targetFilters) return [];
+  try {
+    const r = await fetch(`http://127.0.0.1:${PORT}/api/contacts/sendability`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-admin-key': ADMIN_KEY },
+      body: JSON.stringify({
+        filters: job.targetFilters,
+        workspace_id: job.workspace_id,
+        workspace_name: job.workspace_name,
+        campaign_id: job.campaign_id,
+        campaign_name: job.campaign_name,
+        return_ids: true,
+        override_send_rules: job.overrideGuards,
+        sample: Math.max(1, Math.min(want, 20000)),
+      }),
+    });
+    if (!r.ok) {
+      console.warn(`[push] ${job.id} top-up query failed: HTTP ${r.status}`);
+      return [];
+    }
+    const out = await r.json();
+    const ids = Array.isArray(out.ids) ? out.ids : [];
+    // Never re-offer something this job already handled: the push stamp is
+    // written per contact, but a round can finish before every stamp lands, and
+    // re-verifying a contact we just pushed would spend credits for nothing.
+    const seen = job.seenIds || (job.seenIds = new Set());
+    const fresh = ids.filter(id => !seen.has(id));
+    fresh.forEach(id => seen.add(id));
+    return fresh;
+  } catch (e) {
+    console.warn(`[push] ${job.id} top-up query error: ${e.message}`);
+    return [];
+  }
+}
+
 app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
   // max_age_days: how old a stored verdict may be before we re-verify. Was 90,
   // so a "safe" from ten weeks earlier was pushed without re-checking. A batch
   // of 36 bounced with verdicts averaging 52 days old; re-running the same list
   // through the verifier returned 11 invalid. Mailboxes get disabled constantly,
   // so 14 days keeps the credit saving on genuinely recent checks only.
-  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 14, emailProviders, excludeMicrosoft, loose, skipVerify, use_n2b, override_send_rules } = req.body;
+  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 14, emailProviders, excludeMicrosoft, loose, skipVerify, use_n2b, override_send_rules, target, target_filters } = req.body;
+  // TARGET: "push 1,500" as an order rather than a batch size. With it, the job
+  // keeps pulling ranked candidates and verifying until 1,500 are actually in
+  // PlusVibe, the pool is empty, or the verifier stalls. Without it, behaviour
+  // is unchanged — verify this list once and push what survives.
+  const pushTarget = Math.max(0, Math.min(parseInt(target, 10) || 0, 200000));
   // The UI has always SENT use_n2b; the server never read it, so the "Use
   // No2Bounce to verify catch-alls" checkbox did nothing either way and its
   // help text ("if unchecked, catch-alls are skipped entirely") described
@@ -24276,6 +24334,20 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
     skipVerify: skipVerifyMode,
     excludeMicrosoft: excludeMicrosoft === 'true' || excludeMicrosoft === true,
     total: contact_ids.length,
+    // Order size + the filter to refill from. Both are needed: the target says
+    // when to stop, the filters say where more contacts come from. A target
+    // without filters can only ever push the list it was given.
+    target: pushTarget,
+    targetFilters: (target_filters && typeof target_filters === 'object') ? target_filters : null,
+    round: 1,
+    // Ids this job has already handled, so a refill never re-offers them.
+    // Only populated for a targeted job — an untargeted one never refills, and
+    // holding a Set of every id for the job's lifetime would be pure cost.
+    // Serializes to {} in the status JSON, which is harmless; the UI reads the
+    // counters, not this.
+    seenIds: pushTarget > 0 ? new Set(contact_ids) : null,
+    lastRoundPushed: 0, lastRoundVerified: 0, stallRounds: 0,
+    shortfall: null, shortfallReason: null,
     skipped: 0, verified: 0, safe: 0, risky: 0, invalid: 0, unknown: 0,
     pushed: 0, progress: 0,
     created_at: Date.now(),
@@ -24323,8 +24395,28 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
     await acquirePushSlot(job);
     if (job.cancelled) { job.status = 'cancelled'; releasePushSlot(job); return; }
     try {
-      const contacts = await db.getContactsById(contact_ids);
-      if (!contacts.length) { job.status = 'failed'; job.error = 'No contacts found'; return; }
+      // Each pass through here is one ROUND. A round verifies a batch and
+      // pushes what survives; if the job carries a target it has not met, the
+      // tail end sets job.topUpIds and we come round again with fresh stock.
+      // Without a target this loop runs exactly once — the historic behaviour.
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+      const roundIds = job.topUpIds || contact_ids;
+      job.topUpIds = null;
+      job.needsAnotherRound = false;
+      // Per-round counters. The yield that sizes the next refill must come from
+      // the round just run, not the job's running totals — those blend a good
+      // first round with a bad later one and mis-size both.
+      const pushedBeforeRound = job.pushed;
+      const verifiedBeforeRound = job.verified;
+
+      const contacts = await db.getContactsById(roundIds);
+      if (!contacts.length) {
+        // A later round finding nothing means the pool ran dry, not a failure:
+        // the first round already proved these ids resolve.
+        if ((job.round || 1) > 1) { job.status = 'completed'; job.progress = 100; break; }
+        job.status = 'failed'; job.error = 'No contacts found'; return;
+      }
 
       // Domain-MX pre-pass: fill mx_provider for any contact whose domain is
       // already known in the cache, before we verify anything. MX is a domain
@@ -24883,6 +24975,10 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       }
 
       job.skipped = skipped;
+      // What THIS round achieved — drives the next refill's sizing and the
+      // stall check. Must be computed before the completion branches below.
+      job.lastRoundPushed = job.pushed - pushedBeforeRound;
+      job.lastRoundVerified = job.verified - verifiedBeforeRound;
       const breakdown = {
         safe:         Object.values(verifyResults).filter(s => s === 'safe').length,
         safe_catchall:Object.values(verifyResults).filter(s => s === 'safe_catchall').length,
@@ -24901,13 +24997,84 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
           } catch {}
         }
         // Keep status as 'paused' — do not mark completed/cancelled
+        break;
+      } else if (!job.cancelled && job.target > 0 && job.pushed < job.target) {
+        // ── Top-up ────────────────────────────────────────────────────────
+        // "Push 1,500" is an ORDER, not a batch size. Selection can only
+        // guarantee 1,500 survive the DATABASE guards; the verifier then drops
+        // whatever the mail servers reject, so a fixed list always lands short
+        // — 81 of 200 (40%) on a measured top-up. Rather than report the gap,
+        // refill from the same ranked pool and verify again until the order is
+        // filled or the pool is genuinely empty.
+        //
+        // No cap on total verification: the operator asked for a number and
+        // wants that number. The stall guard below is NOT a cap — it is the
+        // difference between "this pool is thin" (keep going, that is the job)
+        // and "the verifier is broken" (stop, or we burn credits all night
+        // rejecting everything for a reason that has nothing to do with data).
+        const short = job.target - job.pushed;
+        const yieldRate = job.lastRoundVerified > 0
+          ? job.lastRoundPushed / job.lastRoundVerified
+          : AP_DEFAULT_YIELD;
+        // A round that pushed nothing at all, having verified a real batch, is
+        // the broken-verifier signature. One is bad luck on a thin slice; two
+        // in a row is a fault, and continuing would spend credits to learn
+        // nothing.
+        if (job.lastRoundVerified >= 50 && job.lastRoundPushed === 0) {
+          job.stallRounds = (job.stallRounds || 0) + 1;
+        } else {
+          job.stallRounds = 0;
+        }
+
+        if (job.stallRounds >= 2 || (job.round || 1) >= PUSH_TOPUP_MAX_ROUNDS) {
+          job.status = 'completed';
+          job.progress = 100;
+          job.shortfall = short;
+          job.shortfallReason = job.stallRounds >= 2
+            ? 'verifier returning nothing — stopped rather than spend more credits'
+            : `stopped after ${PUSH_TOPUP_MAX_ROUNDS} rounds — this list is verifying too poorly to fill the order`;
+          console.warn(`[push] ${job.id} STALLED — ${job.pushed}/${job.target} after ${job.round || 1} rounds, verifier yielded 0 twice`);
+          if (sq) { try { sq.prepare(`DELETE FROM paused_push_jobs WHERE id = ?`).run(job.id); } catch {} }
+          recordPushHistory(sq, job);
+          break;
+        } else {
+          // Size the refill to the MEASURED yield of the round just finished,
+          // so a cold list pulls proportionally more than a warm one instead of
+          // creeping toward the target a fixed batch at a time.
+          const refill = Math.min(
+            Math.ceil(short / Math.max(yieldRate, AP_MIN_YIELD)),
+            PUSH_TOPUP_MAX_BATCH
+          );
+          // Already-pushed contacts are stamped, so the ranked query will not
+          // return them again — each round reaches genuinely new stock.
+          const more = await pushTopUpCandidates(db, job, refill);
+          if (!more.length) {
+            job.status = 'completed';
+            job.progress = 100;
+            job.shortfall = short;
+            job.shortfallReason = 'no sendable contacts left for this client';
+            console.log(`[push] ${job.id} pool exhausted — ${job.pushed}/${job.target} after ${job.round || 1} rounds`);
+            if (sq) { try { sq.prepare(`DELETE FROM paused_push_jobs WHERE id = ?`).run(job.id); } catch {} }
+            recordPushHistory(sq, job);
+            break;
+          } else {
+            job.round = (job.round || 1) + 1;
+            job.status = 'verifying';
+            job.topUpIds = more;
+            console.log(`[push] ${job.id} round ${job.round}: ${job.pushed}/${job.target} pushed, refilling ${more.length}`);
+            continue; // another round over job.topUpIds
+          }
+        }
       } else {
         // Completed or cancelled — delete from SQLite
         if (sq) { try { sq.prepare(`DELETE FROM paused_push_jobs WHERE id = ?`).run(job.id); } catch {} }
         job.status = job.cancelled ? 'cancelled' : 'completed';
         job.progress = 100;
+        if (job.target > 0 && job.pushed >= job.target) job.shortfall = 0;
         recordPushHistory(sq, job);
+        break;
       }
+      } // end round loop
     } catch (err) {
       job.status = 'failed';
       job.error = err.message;
