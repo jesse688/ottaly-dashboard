@@ -24229,12 +24229,23 @@ async function pushTopUpCandidates(db, job, want) {
   // Spend the selection's untouched tail first. Those contacts are already
   // chosen and already ranked, so using them costs no query and respects the
   // operator's selection before reaching for anything new.
+  //
+  // TOPPING UP FROM THE RESERVE IS NOT A FULL ANSWER. This used to `return
+  // take` whenever the reserve had anything at all, so a reserve holding 8 ids
+  // against a want of 128 returned 8 and never queried for the other 120. The
+  // job then crawled — refilling 8, then 2 — and called "pool exhausted" with
+  // 174,072 sendable contacts still available for that client. Take what the
+  // reserve has, then TOP IT UP from the query rather than returning short.
+  const fromReserve = [];
   if (job.reserveIds && job.reserveIds.length) {
     const take = job.reserveIds.splice(0, want);
     if (job.seenIds) take.forEach(id => job.seenIds.add(id));
-    if (take.length) return take;
+    fromReserve.push(...take);
+    if (fromReserve.length >= want) return fromReserve;
   }
-  if (!job.targetFilters) return [];
+  // Only the remainder needs querying.
+  want = want - fromReserve.length;
+  if (!job.targetFilters) return fromReserve;
   try {
     const r = await fetch(`http://127.0.0.1:${PORT}/api/contacts/sendability`, {
       method: 'POST',
@@ -24248,12 +24259,20 @@ async function pushTopUpCandidates(db, job, want) {
         return_ids: true,
         override_send_rules: job.overrideGuards,
         one_per_company: job.onePerCompany !== false,
-        sample: Math.max(1, Math.min(want, 20000)),
+        // Ask for MORE than `want`, scaled by how much this job has already
+        // consumed. The route returns the TOP `sample` ranked ids, and every id
+        // this job has already handled is filtered out by seenIds below — so
+        // asking for exactly `want` returns the same head of the list each time
+        // and yields nothing new. That is what made a job with 174,072 sendable
+        // contacts left refill 8, then 2, then declare the pool exhausted.
+        sample: Math.max(1, Math.min(want + (job.seenIds ? job.seenIds.size : 0) + 100, 20000)),
       }),
     });
     if (!r.ok) {
       console.warn(`[push] ${job.id} top-up query failed: HTTP ${r.status}`);
-      return [];
+      // Still hand back whatever the reserve gave — losing it here would turn a
+      // transient query failure into a premature "pool exhausted".
+      return fromReserve;
     }
     const out = await r.json();
     const ids = Array.isArray(out.ids) ? out.ids : [];
@@ -24261,12 +24280,16 @@ async function pushTopUpCandidates(db, job, want) {
     // written per contact, but a round can finish before every stamp lands, and
     // re-verifying a contact we just pushed would spend credits for nothing.
     const seen = job.seenIds || (job.seenIds = new Set());
-    const fresh = ids.filter(id => !seen.has(id));
+    // Trimmed to `want`: the query deliberately over-asked to see PAST the ids
+    // this job already used, but verifying the whole tail would spend credits
+    // on contacts this round never needed. Still in rank order, so the trim
+    // drops the weakest.
+    const fresh = ids.filter(id => !seen.has(id)).slice(0, want);
     fresh.forEach(id => seen.add(id));
-    return fresh;
+    return fromReserve.concat(fresh);
   } catch (e) {
     console.warn(`[push] ${job.id} top-up query error: ${e.message}`);
-    return [];
+    return fromReserve;
   }
 }
 
