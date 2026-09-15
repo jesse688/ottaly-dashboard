@@ -24226,6 +24226,14 @@ const PUSH_TOPUP_MAX_ROUNDS = 12;
 // guards the push runs, so the two cannot drift apart. Contacts pushed in an
 // earlier round are already stamped, so they do not come back.
 async function pushTopUpCandidates(db, job, want) {
+  // Spend the selection's untouched tail first. Those contacts are already
+  // chosen and already ranked, so using them costs no query and respects the
+  // operator's selection before reaching for anything new.
+  if (job.reserveIds && job.reserveIds.length) {
+    const take = job.reserveIds.splice(0, want);
+    if (job.seenIds) take.forEach(id => job.seenIds.add(id));
+    if (take.length) return take;
+  }
   if (!job.targetFilters) return [];
   try {
     const r = await fetch(`http://127.0.0.1:${PORT}/api/contacts/sendability`, {
@@ -24239,6 +24247,7 @@ async function pushTopUpCandidates(db, job, want) {
         campaign_name: job.campaign_name,
         return_ids: true,
         override_send_rules: job.overrideGuards,
+        one_per_company: job.onePerCompany !== false,
         sample: Math.max(1, Math.min(want, 20000)),
       }),
     });
@@ -24267,7 +24276,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
   // of 36 bounced with verdicts averaging 52 days old; re-running the same list
   // through the verifier returned 11 invalid. Mailboxes get disabled constantly,
   // so 14 days keeps the credit saving on genuinely recent checks only.
-  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 14, emailProviders, excludeMicrosoft, loose, skipVerify, use_n2b, override_send_rules, target, target_filters } = req.body;
+  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 14, emailProviders, excludeMicrosoft, loose, skipVerify, use_n2b, override_send_rules, target, target_filters, one_per_company } = req.body;
   // TARGET: "push 1,500" as an order rather than a batch size. With it, the job
   // keeps pulling ranked candidates and verifying until 1,500 are actually in
   // PlusVibe, the pool is empty, or the verifier stalls. Without it, behaviour
@@ -24339,13 +24348,21 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
     // without filters can only ever push the list it was given.
     target: pushTarget,
     targetFilters: (target_filters && typeof target_filters === 'object') ? target_filters : null,
+    // Rides with the order, not the selection: the push decides how many go
+    // out, so the push is what must not mail four people at one company.
+    onePerCompany: one_per_company !== false,
     round: 1,
-    // Ids this job has already handled, so a refill never re-offers them.
-    // Only populated for a targeted job — an untargeted one never refills, and
-    // holding a Set of every id for the job's lifetime would be pure cost.
+    // Ids this job has already VERIFIED, so a refill never re-offers them.
+    // Starts empty and is filled per round: the first round may use only a
+    // slice of a large selection, and marking the untouched remainder as seen
+    // would strand exactly the contacts a top-up should reach first.
+    // Only allocated for a targeted job — an untargeted one never refills.
     // Serializes to {} in the status JSON, which is harmless; the UI reads the
     // counters, not this.
-    seenIds: pushTarget > 0 ? new Set(contact_ids) : null,
+    seenIds: pushTarget > 0 ? new Set() : null,
+    // The untouched tail of the selection. A top-up prefers these — they are
+    // already chosen and ranked — before querying for more.
+    reserveIds: null,
     lastRoundPushed: 0, lastRoundVerified: 0, stallRounds: 0,
     shortfall: null, shortfallReason: null,
     skipped: 0, verified: 0, safe: 0, risky: 0, invalid: 0, unknown: 0,
@@ -24401,7 +24418,29 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       // Without a target this loop runs exactly once — the historic behaviour.
       // eslint-disable-next-line no-constant-condition
       while (true) {
-      const roundIds = job.topUpIds || contact_ids;
+      // Round 1 works from the selection, later rounds from the refill.
+      //
+      // The selection is now "everything matching the filter" — often tens of
+      // thousands — while the order may be 100. Verifying the whole selection
+      // to push 100 would spend thousands of Reacher credits for nothing, so
+      // the first round takes only as many as the order plausibly needs,
+      // inflated by the default yield. Later rounds size themselves from the
+      // yield actually measured, and the pool is still there if this is short.
+      let roundIds = job.topUpIds;
+      if (!roundIds) {
+        if (job.target > 0) {
+          const firstBatch = Math.min(
+            contact_ids.length,
+            Math.max(job.target, Math.ceil(job.target / AP_DEFAULT_YIELD)));
+          roundIds = contact_ids.slice(0, firstBatch);
+          // Everything the operator selected but this round did not touch.
+          // Spent before any new query: already chosen, already ranked.
+          job.reserveIds = contact_ids.slice(firstBatch);
+        } else {
+          roundIds = contact_ids;
+        }
+      }
+      if (job.seenIds) roundIds.forEach(id => job.seenIds.add(id));
       job.topUpIds = null;
       job.needsAnotherRound = false;
       // Per-round counters. The yield that sizes the next refill must come from
@@ -24668,6 +24707,15 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       };
 
       const pushLeads = async (batch) => {
+        // An order is a ceiling as well as a floor. A round is sized for the
+        // EXPECTED yield, so a batch that verifies better than expected would
+        // otherwise overshoot — an order of 100 sized at 200 for a 50% yield
+        // pushes all 200 when they all pass. Trim to what is still owed.
+        if (job.target > 0) {
+          const remaining = job.target - job.pushed;
+          if (remaining <= 0) return;
+          if (batch.length > remaining) batch = batch.slice(0, remaining);
+        }
         for (let i = 0; i < batch.length; i += 100) {
           if (job.cancelled || job.paused) return;
           const slice = batch.slice(i, i + 100);
