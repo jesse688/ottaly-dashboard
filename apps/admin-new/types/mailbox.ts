@@ -44,6 +44,15 @@ export interface Mailbox {
   attributed_bounces: number
   reply_rate: number
   bounce_rate: number
+  // PlusVibe rolling health scores, percentages 0..100. null = PV had no data
+  // (it reports -1). The recipient/sender split only exists from 14 Sep 2026,
+  // so null there means "not classified yet", NOT a measured 0%.
+  bounce_rate_3d: number | null
+  recipient_bounce_rate_3d: number | null
+  sender_bounce_rate_3d: number | null
+  warmup_health_7d: number | null
+  google_warmup_health_7d: number | null
+  ms_warmup_health_7d: number | null
   auth: MailboxAuth | null
   blacklist_count: number
   domain_score: number | null

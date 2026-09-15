@@ -18,6 +18,9 @@ interface DayData {
   bounces: number
   contacted: number
   leads: number
+  // null before PlusVibe began classifying bounces — a gap, not a zero.
+  recipientBounces: number | null
+  senderBounces: number | null
 }
 interface WsTotals {
   sent: number
@@ -34,6 +37,14 @@ interface WsTotals {
   lpt: number  // LPT = contacts per lead (contacted ÷ leads)
   sendsPerDay: number
   repliesPerDay: number
+  // Recipient = bad lead address (list quality). Sender = our mailbox/domain
+  // was rejected (reputation). Rates are null when the window has no days
+  // PlusVibe classified, which must render as "not measured", never 0%.
+  recipientBounces: number
+  senderBounces: number
+  splitSent: number
+  recipientBounceRate: number | null
+  senderBounceRate: number | null
 }
 interface Workspace {
   workspace_id: string
@@ -68,12 +79,14 @@ interface ProvidersResponse {
 }
 
 // ── Series config (matches legacy stats.html) ────────────────────────────────
-type SeriesKey = 'humanRR' | 'oooRR' | 'bounceRate' | 'rtl' | 'sent' | 'leads'
-const ALL_SERIES: SeriesKey[] = ['humanRR', 'oooRR', 'bounceRate', 'rtl', 'sent', 'leads']
+type SeriesKey = 'humanRR' | 'oooRR' | 'bounceRate' | 'recipientBounceRate' | 'senderBounceRate' | 'rtl' | 'sent' | 'leads'
+const ALL_SERIES: SeriesKey[] = ['humanRR', 'oooRR', 'bounceRate', 'recipientBounceRate', 'senderBounceRate', 'rtl', 'sent', 'leads']
 const SERIES_LABEL: Record<SeriesKey, string> = {
   humanRR: 'Human RR',
   oooRR: 'OOO RR',
   bounceRate: 'Bounce Rate',
+  recipientBounceRate: 'Recipient Bounce',
+  senderBounceRate: 'Sender Bounce',
   rtl: 'RTL',
   sent: 'Sent',
   leads: 'Leads',
@@ -84,12 +97,18 @@ const SERIES_COLOR: Record<SeriesKey, string> = {
   humanRR: '#2563EB',    // blue — the primary metric
   oooRR: '#F59E0B',      // amber/yellow — OOO/auto
   bounceRate: '#DC2626', // red — bounce
+  // The split shares the bounce family: recipient (list quality, our own lists)
+  // is the milder pink; sender (our sending reputation burning) is the darker,
+  // more alarming crimson — it is the one that means stop and rest accounts.
+  recipientBounceRate: '#F472B6', // pink — bad lead address
+  senderBounceRate: '#991B1B',    // dark red — our mailbox rejected
   rtl: '#7C3AED',        // purple — reply-to-lead
   sent: '#64748B',       // slate/grey — volume
   leads: '#16A34A',      // green — the win
 }
 const isPercent = (s: SeriesKey) =>
-  s === 'humanRR' || s === 'oooRR' || s === 'bounceRate'  // RTL is a per-1000 count, not %
+  s === 'humanRR' || s === 'oooRR' || s === 'bounceRate' ||
+  s === 'recipientBounceRate' || s === 'senderBounceRate'  // RTL is a per-1000 count, not %
 
 function seriesValue(s: SeriesKey, d: DayData): number | null {
   const sent = d.sent || 0
@@ -105,6 +124,16 @@ function seriesValue(s: SeriesKey, d: DayData): number | null {
       return sent > 0 ? +((ooo / sent) * 100).toFixed(2) : null
     case 'bounceRate':
       return sent > 0 ? +(((d.bounces || 0) / sent) * 100).toFixed(2) : null
+    // null (not 0) on days PlusVibe never classified, so the line starts at the
+    // cutover instead of running along the axis as a false clean reading.
+    case 'recipientBounceRate':
+      return sent > 0 && d.recipientBounces != null
+        ? +((d.recipientBounces / sent) * 100).toFixed(2)
+        : null
+    case 'senderBounceRate':
+      return sent > 0 && d.senderBounces != null
+        ? +((d.senderBounces / sent) * 100).toFixed(2)
+        : null
     case 'rtl':
       // Replies-To-Lead: HUMAN replies needed per lead (human ÷ leads, OOO excl).
       return (d.leads || 0) > 0 ? +((human / (d.leads || 1))).toFixed(1) : null
@@ -137,7 +166,10 @@ const brTone = (br: number): 'ok' | 'warn' | 'error' => (br >= 0.05 ? 'error' : 
 // Build the synthetic "All Workspaces" aggregate row (legacy buildAllWorkspaces).
 function buildAllWorkspaces(list: Workspace[]): Workspace | null {
   if (!list.length) return null
-  const t = { sent: 0, replies: 0, posReplies: 0, oooReplies: 0, bounces: 0, contacted: 0, leads: 0 }
+  const t = {
+    sent: 0, replies: 0, posReplies: 0, oooReplies: 0, bounces: 0, contacted: 0, leads: 0,
+    recipientBounces: 0, senderBounces: 0, splitSent: 0,
+  }
   const byDate: Record<string, DayData> = {}
   let nDays = 0
   for (const w of list) {
@@ -146,6 +178,11 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
     t.posReplies += w.totals.posReplies
     t.oooReplies += w.totals.oooReplies
     t.bounces += w.totals.bounces
+    // splitSent accumulates only each workspace's own classified sends, so the
+    // agency-wide split rate keeps numerator and denominator on the same days.
+    t.recipientBounces += w.totals.recipientBounces ?? 0
+    t.senderBounces += w.totals.senderBounces ?? 0
+    t.splitSent += w.totals.splitSent ?? 0
     // Reply-rate denominator, summed across workspaces. A workspace owns its
     // own leads, so these do not overlap and summing keeps the agency headline
     // on the same basis as each row.
@@ -164,6 +201,10 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
           bounces: 0,
           contacted: 0,
           leads: 0,
+          // Starts null so a date no workspace classified stays a gap. The
+          // first classified contribution promotes it to a number.
+          recipientBounces: null,
+          senderBounces: null,
         })
       e.sent += d.sent
       e.replies += d.replies
@@ -172,6 +213,8 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
       e.bounces += d.bounces
       e.contacted += d.contacted
       e.leads += d.leads
+      if (d.recipientBounces != null) e.recipientBounces = (e.recipientBounces ?? 0) + d.recipientBounces
+      if (d.senderBounces != null) e.senderBounces = (e.senderBounces ?? 0) + d.senderBounces
     }
   }
   const series = Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date))
@@ -195,6 +238,9 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
       lpt: t.leads > 0 ? t.contacted / t.leads : 0,
       sendsPerDay: t.sent / days,
       repliesPerDay: t.replies / days,
+      // Divides by splitSent, not t.sent — see the note in lib/pv-range.ts.
+      recipientBounceRate: t.splitSent > 0 ? t.recipientBounces / t.splitSent : null,
+      senderBounceRate: t.splitSent > 0 ? t.senderBounces / t.splitSent : null,
     },
     series,
   }
@@ -250,8 +296,13 @@ function ClientCard({
   isAll: boolean
 }) {
   const [open, setOpen] = useState(false)
+  // The recipient/sender split starts OFF: the combined Bounce Rate line already
+  // covers the common case, and switching two more lines on by default would
+  // change every existing card. Toggle them on to diagnose a bounce spike.
   const [toggles, setToggles] = useState<Record<SeriesKey, boolean>>(() =>
-    Object.fromEntries(ALL_SERIES.map(s => [s, true])) as Record<SeriesKey, boolean>,
+    Object.fromEntries(
+      ALL_SERIES.map(s => [s, s !== 'recipientBounceRate' && s !== 'senderBounceRate']),
+    ) as Record<SeriesKey, boolean>,
   )
   // Rolling-average smoothing window in days. Default 3; 1 = raw (no smoothing).
   const [smooth, setSmooth] = useState(3)
@@ -302,6 +353,24 @@ function ClientCard({
         <Cell>
           <StatusBadge status={brTone(t.bounceRate)}>{pct(t.bounceRate)}</StatusBadge>
           <Lbl>Bounce</Lbl>
+        </Cell>
+        {/* Split out so a bounce spike is immediately attributable: a bad list
+            (recipient) is a targeting fix, a rejected sender is an infra fix. */}
+        <Cell>
+          <span
+            className={cn(
+              'text-sm font-bold',
+              t.senderBounceRate == null
+                ? 'text-muted-foreground'
+                : t.senderBounceRate >= 0.01
+                  ? 'text-red-600'
+                  : 'text-foreground',
+            )}
+            title={t.senderBounceRate == null ? 'PlusVibe has not classified this window yet' : undefined}
+          >
+            {t.senderBounceRate == null ? '—' : pct(t.senderBounceRate)}
+          </span>
+          <Lbl>Sender bounce</Lbl>
         </Cell>
         <Cell>
           <span className={cn('text-sm font-bold', t.rtl > 0 && t.rtl <= 20 ? 'text-emerald-500' : 'text-foreground')}>
@@ -594,6 +663,20 @@ export default function StatsPage() {
           loading={loading}
         />
         <KpiCard label="Bounce Rate" value={incomplete ? '—' : pct(agg?.totals.bounceRate ?? 0)} tone="red" loading={loading} />
+        {/* Sender bounce is the one that means OUR infrastructure is the problem
+            (mailbox/domain rejected) rather than a dirty list, so it earns a
+            headline card. A dash means PV hasn't classified this window. */}
+        <KpiCard
+          label="Sender Bounce"
+          value={
+            incomplete || agg?.totals.senderBounceRate == null
+              ? '—'
+              : pct(agg.totals.senderBounceRate)
+          }
+          sub={agg?.totals.senderBounceRate == null ? 'not measured yet' : 'our mailbox rejected'}
+          tone="red"
+          loading={loading}
+        />
         <KpiCard label="Leads" value={num(agg?.totals.leads ?? 0)} sub="in range" tone="green" loading={loading} />
         <KpiCard label="RTL" value={!incomplete && agg && agg.totals.leads > 0 ? dec(agg.totals.rtl, 1) : '—'} sub="replies / lead" tone="yellow" loading={loading} />
         <KpiCard label="LPT" value={!incomplete && agg && agg.totals.leads > 0 ? dec(agg.totals.lpt, 0) : '—'} sub="contacts / lead" tone="green" loading={loading} />

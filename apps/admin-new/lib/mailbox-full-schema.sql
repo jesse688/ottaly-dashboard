@@ -94,3 +94,18 @@ ALTER TABLE mailbox_supplier_daily ADD COLUMN IF NOT EXISTS total_bounces   INTE
 ALTER TABLE mailbox_supplier_daily ADD COLUMN IF NOT EXISTS total_contacted INTEGER DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_mbsd_dim_key_day ON mailbox_supplier_daily (dimension, key, day);
 
+-- PlusVibe per-mailbox rolling health scores, read straight off /account/list
+-- (payload.analytics.health_scores) so they cost no extra API calls.
+-- Percentages 0..100. NULL = PV had no data (it reports -1, normalised on read).
+-- The recipient/sender split only has data from 14 Sep 2026 onward; NULL there
+-- means "not classified yet", NOT a measured 0%.
+ALTER TABLE mailbox_full ADD COLUMN IF NOT EXISTS bounce_rate_3d           NUMERIC;
+ALTER TABLE mailbox_full ADD COLUMN IF NOT EXISTS recipient_bounce_rate_3d NUMERIC;
+ALTER TABLE mailbox_full ADD COLUMN IF NOT EXISTS sender_bounce_rate_3d    NUMERIC;
+ALTER TABLE mailbox_full ADD COLUMN IF NOT EXISTS warmup_health_7d         NUMERIC;
+ALTER TABLE mailbox_full ADD COLUMN IF NOT EXISTS google_warmup_health_7d  NUMERIC;
+ALTER TABLE mailbox_full ADD COLUMN IF NOT EXISTS ms_warmup_health_7d      NUMERIC;
+-- Finding the mailboxes whose OWN reputation is burning is the common query.
+CREATE INDEX IF NOT EXISTS idx_mailbox_full_sender_bounce
+  ON mailbox_full (sender_bounce_rate_3d DESC NULLS LAST);
+

@@ -198,6 +198,9 @@ export default function MailboxesPage() {
         case 'sent': return m.attributed_sent
         case 'reply': return m.reply_rate
         case 'bounce': return m.bounce_rate
+        // -1 sorts unmeasured mailboxes below every real rate, including 0%, so
+        // sorting desc surfaces genuinely burning senders rather than dashes.
+        case 'senderBounce': return m.sender_bounce_rate_3d ?? -1
         case 'score': return m.domain_score ?? -1
         case 'bl': return m.blacklist_count
         case 'cost': return m.unit_cost ?? -1
@@ -364,6 +367,11 @@ export default function MailboxesPage() {
                     <th style={{ ...th, textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('sent')}>Sent{sortInd('sent')}</th>
                     <th style={{ ...th, textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('reply')}>Reply{sortInd('reply')}</th>
                     <th style={{ ...th, textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('bounce')}>Bounce{sortInd('bounce')}</th>
+                    <th
+                      style={{ ...th, textAlign: 'right', cursor: 'pointer' }}
+                      onClick={() => toggleSort('senderBounce')}
+                      title="PlusVibe 3-day sender bounce: THIS mailbox or its domain was rejected (reputation). High here means rest the account — a bad list shows up as recipient bounce instead."
+                    >Sender 3d{sortInd('senderBounce')}</th>
                     <th style={{ ...th, textAlign: 'right' }}>Daily</th>
                     <th style={{ ...th, textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('cost')}>$/mo{sortInd('cost')}</th><th style={th}>Attn</th>
                   </tr>
@@ -397,6 +405,12 @@ export default function MailboxesPage() {
                         <td style={tdNum}>{num(m.attributed_sent)}</td>
                         <td style={tdNum}>{m.attributed_sent ? <b>{pct(m.reply_rate)}</b> : <span style={{ color: C.muted }}>—</span>}</td>
                         <td style={tdNum}>{m.attributed_sent ? <span style={{ color: m.bounce_rate > 0.05 ? '#DC2626' : 'inherit', fontWeight: m.bounce_rate > 0.05 ? 700 : 400 }}>{pct(m.bounce_rate)}</span> : <span style={{ color: C.muted }}>—</span>}</td>
+                        {/* PV gives this as a percentage already (0..100), unlike
+                            bounce_rate above which is a 0..1 fraction. null = PV
+                            hasn't classified this mailbox yet, so show a dash. */}
+                        <td style={tdNum}>{m.sender_bounce_rate_3d == null
+                          ? <span style={{ color: C.muted }} title="PlusVibe has not classified this mailbox yet">—</span>
+                          : <span style={{ color: m.sender_bounce_rate_3d >= 1 ? '#DC2626' : 'inherit', fontWeight: m.sender_bounce_rate_3d >= 1 ? 700 : 400 }}>{m.sender_bounce_rate_3d.toFixed(2)}%</span>}</td>
                         <td style={tdNum}>{m.daily_limit == null ? <span style={{ color: C.muted }}>—</span> : num(m.daily_limit)}</td>
                         <td style={{ ...tdNum, color: C.muted }}>{money(m.unit_cost)}</td>
                         <td style={td}>{m.attention.length === 0 ? <span style={{ color: '#16A34A' }}>✓</span> : <span style={{ color: '#DC2626', fontWeight: 600 }} title={m.attention.map(a => a.msg).join(', ')}>● {m.attention.length}</span>}</td>
