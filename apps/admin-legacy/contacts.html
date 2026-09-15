@@ -1625,15 +1625,18 @@
 
       <!-- Selection Action Bar -->
       <div class="selection-bar" id="selectionBar">
-        <!-- STATUS, not an input. These read as a count competing with the
-             push's order, so they say what they are: how many rows are ticked,
-             and how deep the pool behind them is. The number that governs a
-             push is typed once, in the push dialog. -->
+        <!-- Only visible once something is ticked (see updatePushButton), and
+             the selection still feeds FIVE actions, not just the PlusVibe push:
+             Solar, Ads Finder, Bison, and the push CSV all read _selectedIds.
+             So this bar stays — but trimmed to the two things it is for:
+             what is ticked, and how to change it. The "(N match)" total moved
+             out; it duplicated the header's own count and read as a second
+             number competing with the push's order. -->
         <span class="selection-count"><span id="pushCount">0</span> ticked</span>
         <div class="selection-divider"></div>
         <div style="position:relative;">
           <button class="btn btn-secondary" style="padding:5px 12px;font-size:12px;" id="selectBtn" onclick="toggleSelectPopover(event)">
-            Choose rows… <span style="opacity:.6;">(<span id="selectAllCount">0</span> match)</span>
+            Choose rows…
           </button>
           <!-- Apollo-style popover anchored to the Select button -->
           <div id="selectPopover" style="display:none;position:absolute;top:calc(100% + 6px);left:0;width:340px;background:white;border:1px solid #e5e7eb;border-radius:10px;box-shadow:0 10px 32px rgba(0,0,0,.14);z-index:300;padding:14px 14px 12px;">
@@ -4331,8 +4334,6 @@
         document.getElementById('totalCount').textContent = totalResults.toLocaleString();
         const plus = document.getElementById('totalCountPlus');
         if (plus) plus.textContent = totalCapped ? '+' : '';
-        const sac = document.getElementById('selectAllCount');
-        if (sac) sac.textContent = totalResults.toLocaleString() + (totalCapped ? '+' : '');
         updatePushButton();
         refreshSendability();
       } catch (err) {
@@ -4659,13 +4660,9 @@
     function updatePushButton() {
       const bar = document.getElementById('selectionBar');
       const countEl = document.getElementById('pushCount');
-      const totalEl = document.getElementById('totalCount');
-      const selectAllCount = document.getElementById('selectAllCount');
-      const total = parseInt((totalEl.textContent || '0').replace(/,/g, '')) || 0;
-
       countEl.textContent = _selectedIds.size.toLocaleString();
-      if (selectAllCount) selectAllCount.textContent = total.toLocaleString();
-
+      // The bar exists only while there IS a selection — it is not a permanent
+      // toolbar, so an empty page shows nothing to compete with the push order.
       bar.classList.toggle('visible', _selectedIds.size > 0);
     }
 
