@@ -1625,11 +1625,15 @@
 
       <!-- Selection Action Bar -->
       <div class="selection-bar" id="selectionBar">
-        <span class="selection-count"><span id="pushCount">0</span> selected</span>
+        <!-- STATUS, not an input. These read as a count competing with the
+             push's order, so they say what they are: how many rows are ticked,
+             and how deep the pool behind them is. The number that governs a
+             push is typed once, in the push dialog. -->
+        <span class="selection-count"><span id="pushCount">0</span> ticked</span>
         <div class="selection-divider"></div>
         <div style="position:relative;">
           <button class="btn btn-secondary" style="padding:5px 12px;font-size:12px;" id="selectBtn" onclick="toggleSelectPopover(event)">
-            Select… <span style="opacity:.6;">(of <span id="selectAllCount">0</span>)</span>
+            Choose rows… <span style="opacity:.6;">(<span id="selectAllCount">0</span> match)</span>
           </button>
           <!-- Apollo-style popover anchored to the Select button -->
           <div id="selectPopover" style="display:none;position:absolute;top:calc(100% + 6px);left:0;width:340px;background:white;border:1px solid #e5e7eb;border-radius:10px;box-shadow:0 10px 32px rgba(0,0,0,.14);z-index:300;padding:14px 14px 12px;">
@@ -2099,6 +2103,7 @@
                  style="padding:10px 12px;border:1px solid #e5e7eb;border-radius:7px;font-size:13px;width:140px;font-weight:600;">
           <div style="font-size:11px;color:#6b7280;margin-top:6px;line-height:1.5;">
             Keeps verifying and topping up until this many land in PlusVibe.
+            <span id="pushTargetSource"></span>
             Stops early only if this client runs out of sendable contacts.
             <span id="pushTargetNote" style="display:none;color:#d97706;"></span>
           </div>
@@ -5102,6 +5107,18 @@
       // landing wherever the verifier leaves the selected list.
       const tEl = document.getElementById('pushTargetCount');
       tEl.value = _selectedIds.size;
+      // Say where the contacts come from. The ticked rows are the STARTING
+      // point, not the limit — when the verifier drops some, the job pulls more
+      // from the same filter to finish the order. Without saying so, a 100-row
+      // tick next to an order of 500 looks like a contradiction.
+      const src = document.getElementById('pushTargetSource');
+      const matching = parseInt((document.getElementById('totalCount').textContent || '0').replace(/,/g, '')) || 0;
+      // Stashed so toggling "Verify emails" off and back on restores it rather
+      // than leaving the warning behind.
+      src.dataset.onText = matching > _selectedIds.size
+        ? ` Starts with your ${_selectedIds.size.toLocaleString()} ticked, then pulls more from the ${matching.toLocaleString()} matching this filter if needed.`
+        : '';
+      src.textContent = src.dataset.onText;
       const note = document.getElementById('pushTargetNote');
       if (_lastSendability && _lastSendability.sendableTotal != null) {
         const avail = _lastSendability.sendableTotal;
@@ -5252,6 +5269,23 @@
       // is off — the system can't classify a contact without verifying it.
       const note = document.getElementById('bucketVerifyNote');
       if (note) note.style.display = verify ? 'none' : '';
+      // Topping up means verifying more contacts, so it only exists on the
+      // verify path. With verify OFF the push sends the ticked rows once and
+      // stops — the order cannot be met, and saying nothing would make it look
+      // like the number was simply ignored.
+      const tEl = document.getElementById('pushTargetCount');
+      const src = document.getElementById('pushTargetSource');
+      if (tEl) {
+        tEl.disabled = !verify;
+        tEl.style.opacity = verify ? '1' : '0.5';
+        if (!verify) tEl.value = _selectedIds.size;
+      }
+      if (src) {
+        src.style.color = verify ? '' : '#d97706';
+        src.textContent = verify
+          ? src.dataset.onText || ''
+          : ' Topping up needs verification — with it off, this pushes only your ticked rows.';
+      }
     }
 
     let pushQueueTimer = null;
