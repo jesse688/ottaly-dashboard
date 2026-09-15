@@ -2624,6 +2624,106 @@ class PostgresDatabase {
     return result.rows;
   }
 
+  // Ranked candidate selection for a PUSH.
+  //
+  // searchContacts answers "who matches this filter" and deliberately has no
+  // ORDER BY, so it returns rows in heap order. Selection used to call it with
+  // limit = the number wanted, run the push guards in JS, and keep whatever
+  // survived. Two things went wrong with that, both measured on the UK
+  // owner/c_suite/director filter (181,447 rows):
+  //
+  //   1. No headroom. Asking for 1,500 looked at exactly 1,500 rows and kept
+  //      209 — 190 after one-per-company. A ~13% yield presented as a 1,500
+  //      selection, which is the "I select 1500 and most don't push" report.
+  //   2. Heap order is the WORST slice. The first 5,000 rows are 80.1%
+  //      already-pushed against 69.1% across the whole filter: the selector
+  //      kept re-scraping the stale head of the table while ~47k never-pushed
+  //      contacts across ~26k companies sat behind it, unreachable.
+  //
+  // So the exclusions move into SQL — every row returned is already a
+  // candidate, not something to be filtered down afterwards — and the order
+  // becomes an explicit ranking rather than an accident of physical layout:
+  //
+  //   never pushed  >  longest since last contact  >  most recently imported
+  //
+  // then ONE per company. The cross-client guards (vertical collision, burst
+  // gap, density ceiling) still run in JS afterwards because they need shared
+  // state SQL cannot see — which is why the caller oversamples (see the
+  // OVERSAMPLE constant on the route) rather than asking for exactly N.
+  //
+  // DELIBERATELY NOT re-checked here: do_not_contact, the per-client cooldown
+  // and the vertical snooze. When those UI toggles are on they are already
+  // _buildFilterClauses clauses, so the rows are gone before this runs; when
+  // they are off the operator has switched them off on purpose. Re-applying
+  // them would silently override that choice.
+  //
+  // Shape note: DISTINCT ON beats ROW_NUMBER() here — 3.7s vs 9.8s measured on
+  // the same filter, because it never materialises a rank for rows it will
+  // discard. The inner LIMIT bounds the sort: without it Postgres orders all
+  // 170k matching rows to hand back 4,500.
+  async selectPushCandidates(workspaceId, filters = {}, limit = 1000, opts = {}) {
+    const { clauses, params } = this._buildFilterClauses(filters);
+    const where = clauses.length ? ' AND ' + clauses.join(' AND ') : '';
+    const onePerCompany = opts.onePerCompany !== false;
+    // How deep to look before ranking: the sort's input size, so it is the
+    // main cost lever. `limit` already arrives oversampled by the caller, so
+    // 2x on top is enough slack for one-per-company to collapse duplicates
+    // without sorting rows nothing will ever read. The floor keeps small
+    // selections from scanning too shallow a slice to dedupe well.
+    const scan = Math.min(Math.max(limit * 2, 8000), 40000);
+
+    // Rows the push can never accept, as SQL. Mirrors the route's JS gates:
+    // invalid address, hard-bounced, no first name (copy greets nobody), and
+    // the enrichment gate — blank keywords/industry blocks the send because
+    // the copy personalises on those fields, except for engine-sourced rows
+    // which never carry them. Keeping this in step with the route is the whole
+    // point; if one moves, the other must.
+    const nameOptional = filters.hasName === '' || filters.hasName === 'no';
+    const gates = `
+      AND COALESCE(LOWER(email_status),'') <> 'invalid'
+      AND COALESCE(LOWER(bounce_type),'') <> 'hard'
+      AND email LIKE '%@%'
+      ${nameOptional ? '' : `AND COALESCE(TRIM(first_name),'') <> ''`}
+      AND (source = 'engine' OR (COALESCE(TRIM(keywords::text),'') <> ''
+                             AND COALESCE(TRIM(industry),'') <> ''))`;
+
+    // jsonb_array_length, not `pushed_campaigns::text = '[]'`: the text form
+    // casts the whole blob per row and misses '[ ]' / null spellings.
+    const neverPushed = `(pushed_campaigns IS NULL
+      OR jsonb_array_length(COALESCE(pushed_campaigns, '[]'::jsonb)) = 0)`;
+    // NULLS FIRST is load-bearing: last_emailed_at IS NULL means never
+    // contacted, which must sort as the LONGEST gap, not the shortest.
+    const rank = `${neverPushed} DESC, last_emailed_at ASC NULLS FIRST, imported_at DESC NULLS LAST`;
+
+    const p = params.length + 2;
+    const sql = `
+      WITH cand AS (
+        -- Exactly the columns the route's guard loop and crossClientGuard read,
+        -- nothing more. The wide select this replaced shipped raw JSONB blobs
+        -- for 12k rows and cost ~8s of transfer on top of a ~5s query.
+        SELECT id, email, first_name, last_name, company_name,
+               email_status, source, industry, keywords,
+               do_not_contact, snoozed_verticals, emailed_workspaces,
+               last_campaign_name, pushed_campaigns, last_emailed_at,
+               imported_at, ${neverPushed} AS never_pushed
+        FROM contacts
+        WHERE workspace_id = $1${where}${gates}
+        ORDER BY ${rank}
+        LIMIT $${p}
+      )${onePerCompany ? `,
+      dedup AS (
+        SELECT DISTINCT ON (LOWER(COALESCE(company_name, email))) *
+        FROM cand
+        ORDER BY LOWER(COALESCE(company_name, email)), ${rank}
+      )` : ''}
+      SELECT * FROM ${onePerCompany ? 'dedup' : 'cand'}
+      ORDER BY ${rank}
+      LIMIT $${p + 1}`;
+
+    const result = await this.query(sql, [workspaceId, ...params, scan, limit]);
+    return result.rows;
+  }
+
   // Lightweight export query — only the 6 columns Apollo needs.
   // Bypasses searchContacts to avoid ORDER BY + raw_data overhead on large
   // filtered sets (company_region filter on 267k rows was timing out).
