@@ -16950,6 +16950,17 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
   // actual ids that pass — otherwise "select all" re-selects the blocked ones
   // and the push silently discards them again.
   const wantIds = body.return_ids === true;
+  // One-per-company is the default for a SELECTION: mailing four people at the
+  // same company in one push is what makes a domain look like a list blast.
+  // Callers may opt out, and the counting path never applies it — the badge
+  // answers "how many could go", not "how many would this particular push take".
+  const onePerCompany = wantIds && body.one_per_company !== false;
+  // The JS guards below (cross-client spacing, departed, already-in-campaign)
+  // need shared state SQL cannot see, so they still reject rows after the
+  // query. Ask for more than we need so those rejections come out of slack
+  // instead of out of the order. 3x is measured headroom, not a guess: the
+  // post-SQL guards were rejecting ~2/3 of an unranked slice.
+  const OVERSAMPLE = 3;
 
   try {
     // NB: searchContacts' first arg is the contacts-DB TENANT scope, NOT the
@@ -16964,7 +16975,21 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
     // filter is the expensive half of the request and its only use is the
     // "estimated" flag. Skip it and take the row count as the total, which is
     // exact whenever the sample covered everything.
-    const contacts = await db.searchContacts(tenantId, filters, SAMPLE_CAP, 0);
+    // Selection RANKS; counting SAMPLES.
+    //
+    // The id path is choosing who to mail, so it must hand back the BEST rows,
+    // not the first ones the heap happens to yield: never-pushed first, then
+    // longest since last contact, one per company. It oversamples so the JS
+    // guards below have slack to reject from — asking for exactly N and then
+    // filtering is what turned a 1,500 selection into 190 contacts.
+    //
+    // The count path keeps the bounded unordered sample on purpose: it runs on
+    // every keystroke, and it is reporting a RATE. Ranking it would bias that
+    // rate upward (the best rows first) and the badge would read high — the
+    // same class of lie as the heap-order slice reading low.
+    const contacts = wantIds
+      ? await db.selectPushCandidates(tenantId, filters, SAMPLE_CAP * OVERSAMPLE, { onePerCompany })
+      : await db.searchContacts(tenantId, filters, SAMPLE_CAP, 0);
     const total = wantIds && contacts.length < SAMPLE_CAP
       ? contacts.length
       : await db.getContactsCount(tenantId, filters);
@@ -16972,7 +16997,7 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
     const skipped = {
       unsafe: 0, dnc: 0, departed: 0, missingName: 0, alreadyInCampaign: 0,
       cooldownWorkspace: 0, verticalCollision: 0, burstGap: 0, densityCeiling: 0,
-      snoozed: 0,
+      snoozed: 0, missingEnrichment: 0,
     };
 
     // Mirror the push's override so the "sendable" badge and the Select-N
@@ -17043,6 +17068,21 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
         skipped.alreadyInCampaign++; continue;
       }
 
+      // Enrichment gate. MUST mirror the push worker's, or the badge counts
+      // contacts the push then drops as missingEnrichment — the exact split
+      // that showed 1,731 verified-safe against 4 actually pushed.
+      //
+      // Keyed on source==='engine' ONLY, deliberately NOT on this route's
+      // `loose`. The two flags are false friends: the push's job.loose is an
+      // explicit engine-push flag, while sendability's loose defaults to TRUE
+      // and means "count unverified as sendable". Mirroring `loose` here would
+      // bypass the gate for every normal push and re-inflate the badge.
+      if (c.source !== 'engine'
+          && ((!c.keywords || String(c.keywords).trim() === '')
+           || (!c.industry || String(c.industry).trim() === ''))) {
+        skipped.missingEnrichment++; continue;
+      }
+
       // Same-client cooloff.
       if (workspaceId && cooloffDate) {
         let emailed = {};
@@ -17077,17 +17117,50 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
     // `estimated` = the sample rate applied to the true total. Flagged so the
     // UI can show "~" rather than implying an exact count it did not measure.
     const rate = checked > 0 ? sendable / checked : 0;
-    const estimated = checked < total;
+    // Only the SAMPLING path may extrapolate. The ranked path deliberately
+    // returns the best rows rather than a representative slice, so its rate is
+    // not the population's — multiplying it up would overstate the pool.
+    const estimated = !wantIds && checked < total;
+
+    // Guards the FILTER already applied, so the operator can see they are
+    // doing work even though they can only ever score ~0 in `reasons`.
+    // do_not_contact, the per-client cooldown and the vertical snooze are
+    // _buildFilterClauses clauses when their toggles are on: those rows never
+    // reach the loop, so counting them as "blocked" here double-counted an
+    // exclusion the filter had already made and made the breakdown read as if
+    // the guards had rejected far more than they had.
+    // Both keys come straight off the contacts UI: excludeDNC is the
+    // "Exclude do-not-contact" box, and cooldownWorkspace carries the selected
+    // client — which drives BOTH the 30-day cooldown clause and the vertical
+    // snooze clause, so picking a client pre-filters both.
+    const preFiltered = [];
+    if (filters.excludeDNC === 'true') preFiltered.push('dnc');
+    if (filters.cooldownWorkspace) preFiltered.push('cooldownWorkspace', 'snoozed');
+
+    // On the ranked path `sendable` counted every survivor of an oversampled
+    // query, so it could exceed the ids actually returned. Report the number
+    // the caller can really act on — a count that disagrees with its own id
+    // list is the same kind of quiet lie this endpoint exists to remove.
+    const returnedIds = wantIds ? sendableIds.slice(0, SAMPLE_CAP) : null;
+    const sendableOut = wantIds ? returnedIds.length : sendable;
 
     res.json({
       total,
       checked,
-      sendable,
+      sendable: sendableOut,
       blocked: checked - sendable,
-      sendableTotal: estimated ? Math.round(total * rate) : sendable,
+      sendableTotal: estimated ? Math.round(total * rate) : sendableOut,
       estimated,
+      ranked: wantIds,
+      onePerCompany: wantIds ? onePerCompany : false,
+      preFiltered,
       reasons: skipped,
-      ...(wantIds ? { ids: sendableIds } : {}),
+      // Trimmed back to what the caller asked for. The query deliberately
+      // fetched OVERSAMPLE x that so the guards above had slack to reject
+      // from; handing the surplus back would let a caller that slices by
+      // position (the autopilot does) push more than it intended. Still in
+      // rank order, so the trim drops the weakest rows, not arbitrary ones.
+      ...(wantIds ? { ids: returnedIds } : {}),
     });
   } catch (e) {
     console.error('[sendability]', e);
@@ -19007,8 +19080,12 @@ async function apSelectContacts(bucket, want, cfg, state) {
       // without it we keep re-offering contacts PlusVibe already holds.
       campaign_id: state.campaign_id,
       return_ids: true,
-      // Sample only as many as we intend to push; the guards run per row, so
-      // asking for 20k to use 200 is pure cost.
+      // `sample` is the SQL limit; the route oversamples it for the JS guards.
+      // This used to pass `want` exactly, on the reasoning that asking for 20k
+      // to use 200 is pure cost — but that left the guards no slack at all, so
+      // a 1,500 order came back as ~190 contacts and the campaign ran dry. The
+      // route now ranks (never-pushed first, longest-since-contact next, one
+      // per company) and oversamples, so `want` here is a genuine floor.
       sample: Math.max(1, Math.min(want, 20000)),
       ...(cfg.allowedStatuses ? { allowedStatuses: cfg.allowedStatuses } : {}),
       ...(cfg.loose === true ? { loose: true } : {}),

@@ -4445,10 +4445,16 @@
         });
         const d = await res.json();
         if (!res.ok || !Array.isArray(d.ids)) return null;
-        // The guard checks a bounded sample. If it could not cover everything
-        // being selected, filtering would drop contacts it simply never looked
-        // at — worse than not filtering. Bail out and let the caller select all.
-        if (d.estimated) return null;
+        // Only the SAMPLING path can be incomplete. There, filtering would drop
+        // contacts the guards never looked at — worse than not filtering — so
+        // bail out and let the caller select all.
+        //
+        // The ranked path (return_ids, `d.ranked`) always reports estimated
+        // false: it is not a sample that fell short, it is a deliberate
+        // best-N list — never-pushed first, longest-since-contact next, one per
+        // company. Returning null there would throw that ranking away and
+        // re-select the unranked rows this was built to stop.
+        if (d.estimated && !d.ranked) return null;
         const set = new Set(d.ids);
         _sendableIdCache = { key, ids: set };
         return set;
@@ -4475,9 +4481,17 @@
         ? `Checked a ${d.checked.toLocaleString()} sample of ${d.total.toLocaleString()}; figures below are scaled.`
         : `Checked all ${d.checked.toLocaleString()}.`;
       const mode = '\nUnverified contacts count as sendable — they get verified during a push with "Verify emails before pushing" on. Cooldown, do-not-contact and spacing rules still apply.';
+      // Guards the FILTER already applied. Their rows never reach the check, so
+      // they always score ~0 in `reasons` and used to vanish from this list —
+      // reading as "that rule did nothing" when it had in fact already removed
+      // the contacts upstream. Name them instead of showing a silent zero.
+      const pre = Array.isArray(d.preFiltered) && d.preFiltered.length
+        ? '\nAlready excluded by the filter (not counted again below): '
+          + d.preFiltered.map(k => (typeof SKIP_LABELS !== 'undefined' && SKIP_LABELS[k]) || k).join(' · ')
+        : '';
       showMessage(
         `${d.sendableTotal.toLocaleString()} sendable of ${d.total.toLocaleString()}. ${head}\n` +
-        (rows.length ? 'Blocked by — ' + rows.join(' · ') : 'Nothing blocked.') + mode,
+        (rows.length ? 'Blocked by — ' + rows.join(' · ') : 'Nothing blocked.') + pre + mode,
         d.sendableTotal === 0 ? 'error' : 'success'
       );
     }
