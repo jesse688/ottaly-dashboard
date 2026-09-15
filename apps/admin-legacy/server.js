@@ -24897,13 +24897,44 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       let _consecutiveBadBatches = 0;
       for (let i = 0; i < needsVerify.length; i += VERIFY_THEN_PUSH) {
         if (job.cancelled || job.paused) break;
+        // Order already met — stop before spending anything on this chunk.
+        if (job.target > 0 && job.pushed >= job.target) break;
         const chunk = needsVerify.slice(i, i + VERIFY_THEN_PUSH);
         const batchUpdates = [];
+        // Running count of contacts in THIS chunk that could be pushed, kept in
+        // step as each concurrency group lands so the early-stop check is O(1).
+        let _chunkPassable = 0;
+        const _allowedSet = (Array.isArray(job.allowedStatuses) && job.allowedStatuses.length)
+          ? job.allowedStatuses : ['safe', 'safe_catchall'];
 
         job.status = 'verifying';
         for (let j = 0; j < chunk.length; j += CONCURRENCY) {
           if (job.cancelled || job.paused) break;
+          // Stop the moment the order can be filled from what is ALREADY
+          // verified in this chunk. A chunk is 100 contacts and the order is
+          // met somewhere inside it, so without this the remainder is verified
+          // and then thrown away by the push ceiling — paying Reacher for
+          // contacts that were never going to be sent.
+          //
+          // Checked at the CONCURRENCY boundary, never inside it: the in-flight
+          // group always finishes. Nothing is cancelled mid-request and no
+          // request is delayed, so verification runs at exactly the speed it
+          // did before — this only ever stops earlier, never slower.
+          // Counted from verifyResults directly, NOT via passesFilter: that
+          // helper increments skipped.* as a side effect, so calling it here
+          // would double-count every rejection in the breakdown.
+          if (job.target > 0 && job.pushed + _chunkPassable >= job.target) break;
           await Promise.all(chunk.slice(j, j + CONCURRENCY).map(c => verifyOne(c, batchUpdates)));
+          // Tally the group just finished, so the check above stays O(1) rather
+          // than rescanning the chunk at every boundary.
+          if (job.target > 0) {
+            for (const c of chunk.slice(j, j + CONCURRENCY)) {
+              const v = verifyResults[c.id];
+              if (v === undefined) continue;
+              const looseHere = job.loose || c.source === 'engine';
+              if (looseHere ? v !== 'invalid' : _allowedSet.includes(v)) _chunkPassable++;
+            }
+          }
         }
         if (job.cancelled || job.paused) break;
 
