@@ -73,6 +73,13 @@ async function uiFetch(path: string): Promise<unknown> {
 // breakdown in the same payload, so the chart series comes from it too.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// PlusVibe started classifying every bounce as recipient (the lead's address is
+// bad) or sender (our mailbox/domain was rejected) on this date. Anything
+// earlier reports the whole total as recipient with sender pinned at 0, so a
+// pre-cutover day is NOT evidence that sender bounces were genuinely zero.
+// Callers must gate on `splitSent` rather than trusting a 0 here.
+export const BOUNCE_SPLIT_FROM = '2026-09-14'
+
 export interface PvDay {
   date: string
   sent: number
@@ -81,10 +88,16 @@ export interface PvDay {
   oooReplies: number
   bounces: number
   contacted: number
+  // Only meaningful on days >= BOUNCE_SPLIT_FROM; 0 before that.
+  recipientBounces: number
+  senderBounces: number
 }
 
 export interface PvRange {
-  totals: Omit<PvDay, 'date'>
+  // splitSent = sends on days PlusVibe actually classified, i.e. the only valid
+  // denominator for the recipient/sender rates. It is NOT the same as `sent`
+  // whenever the range starts before BOUNCE_SPLIT_FROM.
+  totals: Omit<PvDay, 'date'> & { splitSent: number }
   series: PvDay[]
 }
 
@@ -97,6 +110,9 @@ interface PvChartRow {
   total_bounce_count?: number
   total_contacted_count?: number
   total_pos_reply_count?: number
+  // Present from 14 Sep 2026; absent (not zero) on earlier days.
+  recipient_bounce_count?: number
+  sender_bounce_count?: number
 }
 
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
@@ -167,10 +183,31 @@ export async function fetchPvRange(
       oooReplies: num(d.total_ooo_reply_count),
       bounces: num(d.total_bounce_count),
       contacted: num(d.total_contacted_count),
+      recipientBounces: num(d.recipient_bounce_count),
+      senderBounces: num(d.sender_bounce_count),
     }))
     .sort((a, b) => a.date.localeCompare(b.date))
 
-  return { totals, series }
+  // The bounce split is summed from the DAILY rows, not taken from the header.
+  // The header covers the whole requested range, which for any window starting
+  // before the cutover mixes classified and unclassified days — the split would
+  // then be divided by a denominator containing days PV never classified, and
+  // sender bounce would read artificially low. Summing only qualifying days
+  // keeps numerator and denominator over the same window.
+  let recipientBounces = 0
+  let senderBounces = 0
+  let splitSent = 0
+  for (const d of series) {
+    if (d.date < BOUNCE_SPLIT_FROM) continue
+    recipientBounces += d.recipientBounces
+    senderBounces += d.senderBounces
+    splitSent += d.sent
+  }
+
+  return {
+    totals: { ...totals, recipientBounces, senderBounces, splitSent },
+    series,
+  }
 }
 
 /**
@@ -250,6 +287,30 @@ export interface CachedRange {
   stale: boolean
 }
 
+/**
+ * Backfill fields onto a cached row written before the bounce split existed.
+ *
+ * Rows already in pv_range_cache have no recipient/sender counts and no
+ * splitSent. Left undefined they would flow into arithmetic as NaN; defaulted
+ * naively to 0 with splitSent = sent they would render a confident "0.00%
+ * sender bounce" for a window PV never classified. splitSent = 0 is the honest
+ * value: it makes hasSplit false, so the UI shows a dash until the background
+ * refresh replaces the row with real data.
+ */
+function migrateRange(r: PvRange): PvRange {
+  const t = r?.totals
+  if (!t || typeof t.splitSent === 'number') return r
+  return {
+    ...r,
+    totals: { ...t, recipientBounces: 0, senderBounces: 0, splitSent: 0 },
+    series: (r.series ?? []).map(d => ({
+      ...d,
+      recipientBounces: d.recipientBounces ?? 0,
+      senderBounces: d.senderBounces ?? 0,
+    })),
+  }
+}
+
 /** Read cached ranges for many workspaces in one query. Never throws. */
 export async function readRangeCache(
   wsIds: string[],
@@ -270,7 +331,7 @@ export async function readRangeCache(
     for (const r of res.rows as Array<{ ws_id: string; data: PvRange; saved_at: string | number }>) {
       const savedAt = Number(r.saved_at) || 0
       out.set(String(r.ws_id), {
-        range: r.data,
+        range: migrateRange(r.data),
         savedAt,
         stale: now - savedAt > RANGE_TTL_MS,
       })

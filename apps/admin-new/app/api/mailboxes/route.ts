@@ -89,6 +89,15 @@ export async function GET() {
       attributed_bounces: r.attributed_bounces ?? 0,
       reply_rate: r.reply_rate != null ? Number(r.reply_rate) : 0,
       bounce_rate: r.bounce_rate != null ? Number(r.bounce_rate) : 0,
+      // node-postgres returns NUMERIC as a string, so coerce. These stay null
+      // when PlusVibe hasn't measured them — null must survive to the UI as a
+      // dash, so they default to null rather than 0 (unlike the rates above).
+      bounce_rate_3d: r.bounce_rate_3d != null ? Number(r.bounce_rate_3d) : null,
+      recipient_bounce_rate_3d: r.recipient_bounce_rate_3d != null ? Number(r.recipient_bounce_rate_3d) : null,
+      sender_bounce_rate_3d: r.sender_bounce_rate_3d != null ? Number(r.sender_bounce_rate_3d) : null,
+      warmup_health_7d: r.warmup_health_7d != null ? Number(r.warmup_health_7d) : null,
+      google_warmup_health_7d: r.google_warmup_health_7d != null ? Number(r.google_warmup_health_7d) : null,
+      ms_warmup_health_7d: r.ms_warmup_health_7d != null ? Number(r.ms_warmup_health_7d) : null,
       auth: r.auth ?? null,
       blacklist_count: r.blacklist_count ?? 0,
       domain_score: r.domain_score,

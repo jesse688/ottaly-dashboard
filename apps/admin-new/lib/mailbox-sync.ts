@@ -329,8 +329,27 @@ interface PvAccount {
     // rampup_daily_limit + rampup_daily_inc × days_elapsed, capped at daily_limit.
     sending_rampup?: { is_slow_rampup?: boolean; rampup_daily_limit?: number; rampup_daily_inc?: number }
     cmps?: Array<{ id?: string }>
+    // PlusVibe's own rolling health scores, already per-mailbox — no extra API
+    // call needed. Percentages (0-100), with -1 meaning "not enough data".
+    // The recipient/sender bounce split only exists from 14 Sep 2026.
+    analytics?: {
+      health_scores?: {
+        '3d_bounce_rate'?: number
+        '3d_recipient_bounce_rate'?: number
+        '3d_sender_bounce_rate'?: number
+        '7d_overall_warmup_health'?: number
+        '7d_google_warmup_health'?: number
+        '7d_microsoft_warmup_health'?: number
+      }
+    }
   } | null
 }
+
+// PV reports -1 for "not enough data yet". Mapping that to null keeps a missing
+// measurement distinct from a real 0% — rendering -1 would show a negative rate,
+// and coercing it to 0 would claim a clean result PV never measured.
+const score = (v: unknown): number | null =>
+  typeof v === 'number' && v >= 0 ? v : null
 
 export interface SendingRampup {
   is_slow_rampup: boolean
@@ -348,6 +367,13 @@ interface RawMailbox {
   campaigns_count: number; campaign_ids: string[]
   created_at: string | null; updated_at: string | null
   tags: string[]                    // PlusVibe account tags (names), for tag→supplier rules
+  // Per-mailbox rolling health from PV. null = not measured (see `score`).
+  bounce_rate_3d: number | null
+  recipient_bounce_rate_3d: number | null
+  sender_bounce_rate_3d: number | null
+  warmup_health_7d: number | null
+  google_warmup_health_7d: number | null
+  ms_warmup_health_7d: number | null
 }
 
 // Fetch all sending mailboxes across all workspaces (mirror of legacy's
@@ -405,6 +431,12 @@ async function listSendingMailboxes(): Promise<RawMailbox[]> {
         created_at: a.timestamp_created || null,
         updated_at: a.timestamp_updated || null,
         tags: resolveTags(extractTags(a as unknown as Record<string, unknown>), tagMap),
+        bounce_rate_3d: score(payload.analytics?.health_scores?.['3d_bounce_rate']),
+        recipient_bounce_rate_3d: score(payload.analytics?.health_scores?.['3d_recipient_bounce_rate']),
+        sender_bounce_rate_3d: score(payload.analytics?.health_scores?.['3d_sender_bounce_rate']),
+        warmup_health_7d: score(payload.analytics?.health_scores?.['7d_overall_warmup_health']),
+        google_warmup_health_7d: score(payload.analytics?.health_scores?.['7d_google_warmup_health']),
+        ms_warmup_health_7d: score(payload.analytics?.health_scores?.['7d_microsoft_warmup_health']),
       })
     }
   }
@@ -456,6 +488,19 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
   // running_since column has to exist before the UPDATE below can set it.
   await pool.query(`ALTER TABLE mailbox_full ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}'`).catch(() => {})
   await pool.query(`ALTER TABLE mailbox_sync_state ADD COLUMN IF NOT EXISTS running_since TIMESTAMPTZ`).catch(() => {})
+  // PlusVibe per-mailbox health scores (payload.analytics.health_scores). These
+  // MUST exist before the upsert below writes $38-$43, and the .sql file is only
+  // applied by hand — so add them here too rather than depending on a psql run.
+  // NOT .catch(()=>{}): if these fail the upsert fails on every row, so let it throw.
+  await pool.query(`
+    ALTER TABLE mailbox_full
+      ADD COLUMN IF NOT EXISTS bounce_rate_3d           NUMERIC,
+      ADD COLUMN IF NOT EXISTS recipient_bounce_rate_3d NUMERIC,
+      ADD COLUMN IF NOT EXISTS sender_bounce_rate_3d    NUMERIC,
+      ADD COLUMN IF NOT EXISTS warmup_health_7d         NUMERIC,
+      ADD COLUMN IF NOT EXISTS google_warmup_health_7d  NUMERIC,
+      ADD COLUMN IF NOT EXISTS ms_warmup_health_7d      NUMERIC
+  `)
   await pool.query(
     `UPDATE mailbox_sync_state SET running = TRUE, running_since = now() WHERE id = 1`
   ).catch(() => {})
@@ -578,11 +623,15 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
              type, type_auto, supplier, notes, billing_start_date, billing_day, ignored_at, unit_cost,
              attributed_sent, attributed_replies, attributed_bounces, reply_rate, bounce_rate,
              auth, blacklist_count, domain_score, domain_notes, domain_status, attention, tags, synced_at,
-             sending_rampup, rampup_started_at
+             sending_rampup,
+             bounce_rate_3d, recipient_bounce_rate_3d, sender_bounce_rate_3d,
+             warmup_health_7d, google_warmup_health_7d, ms_warmup_health_7d,
+             rampup_started_at
            ) VALUES (
              $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,
              $17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30::jsonb,$31,$32,$33,$34,$35::jsonb,$36::text[], now(),
              $37::jsonb,
+             $38,$39,$40,$41,$42,$43,
              -- First sighting in slow rampup starts the ramp clock today.
              CASE WHEN ($37::jsonb->>'is_slow_rampup')::bool THEN CURRENT_DATE ELSE NULL END
            )
@@ -600,6 +649,12 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
              domain_notes=EXCLUDED.domain_notes, domain_status=EXCLUDED.domain_status, attention=EXCLUDED.attention,
              tags=EXCLUDED.tags, synced_at=now(),
              sending_rampup=EXCLUDED.sending_rampup,
+             bounce_rate_3d=EXCLUDED.bounce_rate_3d,
+             recipient_bounce_rate_3d=EXCLUDED.recipient_bounce_rate_3d,
+             sender_bounce_rate_3d=EXCLUDED.sender_bounce_rate_3d,
+             warmup_health_7d=EXCLUDED.warmup_health_7d,
+             google_warmup_health_7d=EXCLUDED.google_warmup_health_7d,
+             ms_warmup_health_7d=EXCLUDED.ms_warmup_health_7d,
              -- The ramp clock must not restart on every sync, or a ramping box
              -- would look like day 0 forever and its capacity would never grow.
              -- Keep the stamp we already have while the ramp is on; stamp today
@@ -618,6 +673,8 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
             m.auth ? JSON.stringify(m.auth) : null, m.blacklist_count, m.domain_score, m.domain_notes, m.domain_status,
             JSON.stringify(m.attention), m.tags,
             m.sending_rampup ? JSON.stringify(m.sending_rampup) : null,
+            m.bounce_rate_3d, m.recipient_bounce_rate_3d, m.sender_bounce_rate_3d,
+            m.warmup_health_7d, m.google_warmup_health_7d, m.ms_warmup_health_7d,
           ]
         )
       }

@@ -7,6 +7,7 @@ import {
   readRangeCache,
   writeRangeCache,
   refreshRangeInBackground,
+  BOUNCE_SPLIT_FROM,
   type PvDay,
   type PvRange,
 } from '@/lib/pv-range'
@@ -20,6 +21,10 @@ interface DayData {
   bounces: number
   contacted: number
   leads: number
+  // Bounce split — null before PlusVibe started classifying (BOUNCE_SPLIT_FROM),
+  // so the chart draws a gap rather than a flat, untrue 0%.
+  recipientBounces: number | null
+  senderBounces: number | null
 }
 
 interface Workspace {
@@ -40,6 +45,13 @@ interface Workspace {
     lpt: number
     sendsPerDay: number
     repliesPerDay: number
+    // Split rates are null when the window contains no classified days, which
+    // the page must render as "not measured" rather than 0%.
+    recipientBounces: number
+    senderBounces: number
+    splitSent: number
+    recipientBounceRate: number | null
+    senderBounceRate: number | null
   }
   series: DayData[]
 }
@@ -222,6 +234,10 @@ export async function GET(req: NextRequest) {
 
       const series: DayData[] = dates.map(date => {
         const d = byDate.get(date)
+        // Before the cutover PV reported no split at all, so emit null (a gap in
+        // the chart) instead of 0 — a flat 0% sender line would read as a
+        // measured clean result rather than an absence of data.
+        const classified = date >= BOUNCE_SPLIT_FROM
         return {
           date,
           sent: d?.sent ?? 0,
@@ -231,6 +247,8 @@ export async function GET(req: NextRequest) {
           bounces: d?.bounces ?? 0,
           contacted: d?.contacted ?? 0,
           leads: 0, // leads are a window total from esp_leads, not per-day
+          recipientBounces: classified ? d?.recipientBounces ?? 0 : null,
+          senderBounces: classified ? d?.senderBounces ?? 0 : null,
         }
       })
 
@@ -288,6 +306,15 @@ export async function GET(req: NextRequest) {
           lpt: leads > 0 ? t.contacted / leads : 0,
           sendsPerDay: t.sent / days,
           repliesPerDay: t.replies / days,
+          // Split rates divide by splitSent (sends on classified days only), NOT
+          // t.sent — dividing by the full window would understate both rates on
+          // any range that reaches back before the cutover. null when the window
+          // has no classified days at all.
+          recipientBounces: t.recipientBounces,
+          senderBounces: t.senderBounces,
+          splitSent: t.splitSent,
+          recipientBounceRate: t.splitSent > 0 ? t.recipientBounces / t.splitSent : null,
+          senderBounceRate: t.splitSent > 0 ? t.senderBounces / t.splitSent : null,
         },
         series,
       }
