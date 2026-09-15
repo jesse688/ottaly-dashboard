@@ -103,6 +103,36 @@ export async function POST() {
         const order = raw.map((v, i) => [v - floors[i], i] as [number, number]).sort((a, b) => b[0] - a[0])
         const parts = [...floors]
         for (let k = 0; k < rem && k < order.length; k++) parts[order[k][1]]++
+        // Retire any bucket this write does NOT cover, before re-inserting.
+        //
+        // An upsert alone is not enough: we apportion one PV workspace total
+        // across the buckets that exist RIGHT NOW, and that key set shifts as
+        // mailboxes change type/supplier. A bucket present in an earlier write
+        // but absent from this one keeps its old `sent` forever — nothing
+        // targets it — so summing the date double-counts the same sends across
+        // two different partitions of them.
+        //
+        // Measured 2026-09-15: 09-14 read 11,553 against PV's 8,425. ButterflyEco
+        // held 7 rows totalling 1,436 where PV said 967 — a 2-bucket partition
+        // from one run plus a 5-bucket partition from a later one, all buckets
+        // live. After this change the date holds exactly one partition, so the
+        // sum can only ever equal the PV total we just apportioned.
+        // Zero the buckets we are NOT about to write, rather than deleting them:
+        // another writer (outside this app) owns `replied`/`bounced` on these
+        // same rows, and a plain DELETE would discard real reply/bounce counts.
+        // Zeroing `sent` retires the stale partition's contribution to the total
+        // while leaving those columns intact.
+        // Separator must not be chr(0) - Postgres text cannot hold a NUL byte
+        // ("null character not permitted"), and it must match the SQL below
+        // exactly or nothing is ever zeroed. Neither field contains '|'.
+        const keep = buckets.map(b => `${b.provider}|${b.supplier}`)
+        await client.query(
+          `UPDATE mailbox_daily_stats
+              SET sent = 0, updated_at = NOW()
+            WHERE workspace_id = $1 AND date = $2::date
+              AND sent <> 0
+              AND (provider || '|' || COALESCE(supplier,'')) <> ALL($3::text[])`,
+          [ws, date, keep])
         for (let bi = 0; bi < buckets.length; bi++) {
           const b = buckets[bi]
           await client.query(`
