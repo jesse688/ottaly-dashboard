@@ -4437,7 +4437,9 @@
     // Ids that survive the push guards, for the current filter. Returns a Set,
     // or null if the check could not run — callers must treat null as "unknown"
     // and select everything rather than silently selecting nothing.
-    async function fetchSendableIds(sample) {
+    // `exact` = take `sample` literally instead of applying the 5,000 floor.
+    // The push seed needs this; the selection callers must not use it.
+    async function fetchSendableIds(sample, exact = false) {
       const workspaceId = (document.getElementById('clientFilter') || {}).value || '';
       if (!workspaceId) return null;
       try {
@@ -4453,7 +4455,9 @@
         // (already-in-this-campaign contacts are excluded), so switching campaign
         // must not serve the previous campaign's answer.
         const campForKey = (document.getElementById('pvCampaign') || {}).value || '';
-        const key = workspaceId + '|' + JSON.stringify(f) + '|' + sample + '|' + override + '|' + campForKey;
+        // `exact` belongs in the key: sample 500 with the floor returns 5,000
+        // ids and without it returns 500, so the two must not share an entry.
+        const key = workspaceId + '|' + JSON.stringify(f) + '|' + sample + '|' + exact + '|' + override + '|' + campForKey;
         if (_sendableIdCache.key === key && _sendableIdCache.ids) return _sendableIdCache.ids;
         const res = await fetch('/api/contacts/sendability', {
           method: 'POST',
@@ -4470,7 +4474,16 @@
             campaign_id: (document.getElementById('pvCampaign') || {}).value || '',
             campaign_name: (document.getElementById('pvCampaign')?.selectedOptions?.[0]?.textContent || '').trim(),
             // Cover at least what is being selected, within the server cap.
-            sample: Math.min(Math.max(parseInt(sample, 10) || 5000, 5000), 20000),
+            //
+            // The 5,000 FLOOR is for the selection callers, which filter a list
+            // they already hold and must not have it truncated by a short
+            // answer. The push seed is the opposite case: it asks for exactly
+            // the order, and a floor turned an order of 500 into 5,000 ids —
+            // which the server then sized a 1,000-contact verify round from.
+            // exact:true opts out of the floor; the cap still applies.
+            sample: exact
+              ? Math.min(Math.max(parseInt(sample, 10) || 1, 1), 20000)
+              : Math.min(Math.max(parseInt(sample, 10) || 5000, 5000), 20000),
           }),
         });
         const d = await res.json();
@@ -5381,7 +5394,18 @@
           // Returns a Set of ids that survive every guard, in rank order
           // (never-contacted first, one per company) — the same call the
           // "sendable only" selection uses.
-          const ids = await fetchSendableIds(Math.ceil(wantSeed * 2));
+          //
+          // Ask for the ORDER, not a multiple of it. This used to request
+          // wantSeed * 2 so the first round had slack, but the SERVER already
+          // inflates by the expected yield when it sizes round 1
+          // (target / AP_DEFAULT_YIELD). The two stacked: an order of 500
+          // fetched 1,000 ids and then verified all 1,000 — twice the Reacher
+          // spend needed, for a push still capped at 500.
+          //
+          // The server takes what it needs from this list and keeps the rest as
+          // a reserve for the top-up, so a plain `wantSeed` is not a shortfall:
+          // anything missing is pulled by the top-up itself.
+          const ids = await fetchSendableIds(wantSeed, true);
           contactIds = ids ? [...ids] : [];
         } finally {
           if (seedBtn) { seedBtn.innerHTML = seedLabel; seedBtn.disabled = false; }
