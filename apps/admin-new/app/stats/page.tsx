@@ -344,12 +344,48 @@ function ClientCard({
   const allrr = t.allReplyRate
 
   const labels = w.series.map(d => d.date.slice(5))
-  const chartSeries: LineSeries[] = ALL_SERIES.filter(s => toggles[s]).map(s => ({
+  const shown = ALL_SERIES.filter(s => toggles[s])
+  const chartSeries: LineSeries[] = shown.map(s => ({
     label: SERIES_LABEL[s],
     data: rollingAvg(w.series.map(d => seriesValue(s, d)), smooth),
     color: SERIES_COLOR[s],
     percent: isPercent(s),
   }))
+
+  // Average reference line. ONE line only: with several series shown, a dashed
+  // average for each is unreadable, so it tracks the single visible series and
+  // hides itself when more than one is on.
+  //
+  // The mean is over the raw daily values, NOT the smoothed ones. Smoothing is
+  // a trailing window, so its first days average fewer points and would drag
+  // the mean. Days with no value (null) are skipped, not counted as zero — the
+  // same rule RTL and LPT already use for zero-lead days.
+  const soloKey = shown.length === 1 ? shown[0] : null
+  const soloRaw = soloKey ? w.series.map(d => seriesValue(soloKey, d)) : []
+  const soloVals = soloRaw.filter((v): v is number => v != null)
+  const soloAvg = soloVals.length
+    ? soloVals.reduce((a, b) => a + b, 0) / soloVals.length
+    : null
+  // Compare the LAST day that actually has a value, so a trailing null (a
+  // zero-lead day on RTL/LPT) does not read as "no verdict".
+  const soloLast = soloVals.length ? soloVals[soloVals.length - 1] : null
+  if (soloKey && soloAvg != null) {
+    // Bound to locals so the narrowing survives into the closure below.
+    const k = soloKey
+    const avg = soloAvg
+    chartSeries.push({
+      label: `${SERIES_LABEL[k]} avg`,
+      data: labels.map(() => +avg.toFixed(isPercent(k) ? 2 : 1)),
+      color: SERIES_COLOR[k],
+      percent: isPercent(k),
+      dashed: true,
+    })
+  }
+  const fmtVal = (v: number, k: SeriesKey) =>
+    isPercent(k) ? `${v.toFixed(2)}%` : v.toLocaleString(undefined, { maximumFractionDigits: 1 })
+  // Bounces are the one metric where below-average is the good outcome.
+  const lowerIsBetter = (k: SeriesKey) =>
+    k === 'bounceRate' || k === 'recipientBounceRate' || k === 'senderBounceRate'
 
   return (
     <div
@@ -492,11 +528,56 @@ function ClientCard({
               <span>{smooth <= 1 ? 'days (raw)' : 'day avg'}</span>
             </label>
           </div>
+          {soloKey && soloAvg != null && (
+            <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+              <span className="flex items-center gap-1.5 text-muted-foreground">
+                <span
+                  aria-hidden
+                  className="inline-block h-0 w-4 border-t-[1.5px] border-dashed"
+                  style={{ borderColor: SERIES_COLOR[soloKey] }}
+                />
+                <span>
+                  Avg{' '}
+                  <span className="font-semibold tabular-nums text-foreground">
+                    {fmtVal(soloAvg, soloKey)}
+                  </span>{' '}
+                  over {soloVals.length} day{soloVals.length === 1 ? '' : 's'}
+                </span>
+              </span>
+              {soloLast != null && (() => {
+                const diff = soloLast - soloAvg
+                // A hair either side of the mean is noise, not a verdict. When
+                // the average is 0 a relative threshold collapses to 0 and every
+                // tiny value would read as a swing, so compare exactly instead.
+                const flat =
+                  soloAvg === 0 ? diff === 0 : Math.abs(diff) < Math.abs(soloAvg) * 0.005
+                const good = lowerIsBetter(soloKey) ? diff < 0 : diff > 0
+                return (
+                  <span
+                    className={cn(
+                      'font-semibold',
+                      flat ? 'text-muted-foreground' : good ? 'text-emerald-600' : 'text-red-600',
+                    )}
+                    title={`Latest day (${fmtVal(soloLast, soloKey)}) vs the window average (${fmtVal(soloAvg, soloKey)}).${lowerIsBetter(soloKey) ? ' Lower is better for bounces.' : ''}`}
+                  >
+                    {flat
+                      ? 'latest: on average'
+                      : `latest ${fmtVal(soloLast, soloKey)} · ${diff > 0 ? '▲' : '▼'} ${fmtVal(Math.abs(diff), soloKey)} ${diff > 0 ? 'above' : 'below'}`}
+                  </span>
+                )
+              })()}
+            </div>
+          )}
           {chartSeries.length ? (
             <LineChart labels={labels} series={chartSeries} height={220} />
           ) : (
             <div className="py-8 text-center text-xs text-muted-foreground">
               Toggle a series to show the chart.
+            </div>
+          )}
+          {!soloKey && chartSeries.length > 1 && (
+            <div className="mt-1.5 text-[10px] text-muted-foreground">
+              Show one metric on its own to get its average line.
             </div>
           )}
         </div>

@@ -17,6 +17,8 @@ export interface LineSeries {
   /** explicit color (hex/css) — overrides tone. Use for semantic series colors. */
   color?: string
   percent?: boolean
+  /** Render as a flat dashed reference line with no points — used for averages. */
+  dashed?: boolean
 }
 
 /**
@@ -58,9 +60,13 @@ export function LineChart({
             data: s.data,
             borderColor: col,
             backgroundColor: col + '22',
-            borderWidth: 2,
-            pointRadius: labels.length <= 14 ? 3 : 1,
-            tension: 0.3,
+            // The average is a reference, not data: thinner, dashed, no points
+            // and no curve, so it never reads as a measured series.
+            borderWidth: s.dashed ? 1.5 : 2,
+            borderDash: s.dashed ? [5, 4] : undefined,
+            pointRadius: s.dashed ? 0 : labels.length <= 14 ? 3 : 1,
+            pointHoverRadius: s.dashed ? 0 : undefined,
+            tension: s.dashed ? 0 : 0.3,
             spanGaps: true,
             fill: false,
             yAxisID: s.percent ? 'yPct' : 'yCount',
