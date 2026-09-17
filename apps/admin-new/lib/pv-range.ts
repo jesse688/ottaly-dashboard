@@ -304,6 +304,27 @@ export interface CachedRange {
  * value: it makes hasSplit false, so the UI shows a dash until the background
  * refresh replaces the row with real data.
  */
+/**
+ * True when a cached row was written by the build that read the header's
+ * `total_contacted_count` on each DAILY row — a field PV does not send there.
+ * num() turned the miss into 0, so every day got contacted = 0 while the
+ * totals (taken from the header, which does have it) stayed correct. The LPT
+ * line then sat flat on the axis.
+ *
+ * The cache key is (ws_id, start, end) with no schema version, so those rows
+ * are served until their TTL expires and no deploy can evict them. Detect the
+ * shape instead: days that sent mail but recorded nobody contacted, while the
+ * range total did record contacts. Such a row is stale by construction.
+ */
+function hasStaleZeroContacted(r: PvRange): boolean {
+  const series = r?.series
+  if (!Array.isArray(series) || !series.length) return false
+  if (!((r.totals?.contacted ?? 0) > 0)) return false
+  const sentDays = series.filter(d => (d?.sent ?? 0) > 0)
+  if (!sentDays.length) return false
+  return sentDays.every(d => (d?.contacted ?? 0) === 0)
+}
+
 function migrateRange(r: PvRange): PvRange {
   const t = r?.totals
   if (!t || typeof t.splitSent === 'number') return r
@@ -337,10 +358,14 @@ export async function readRangeCache(
     const now = Date.now()
     for (const r of res.rows as Array<{ ws_id: string; data: PvRange; saved_at: string | number }>) {
       const savedAt = Number(r.saved_at) || 0
+      const range = migrateRange(r.data)
       out.set(String(r.ws_id), {
-        range: migrateRange(r.data),
+        range,
         savedAt,
-        stale: now - savedAt > RANGE_TTL_MS,
+        // Age OR shape. A pre-fix row can be seconds old and still carry an
+        // all-zero daily `contacted`; without the shape check it would be
+        // served as fresh until the TTL, and a redeploy would never evict it.
+        stale: now - savedAt > RANGE_TTL_MS || hasStaleZeroContacted(range),
       })
     }
   } catch {

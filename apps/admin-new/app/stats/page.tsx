@@ -119,7 +119,7 @@ const SERIES_HINT: Record<SeriesKey, string> = {
   recipientBounceRate: 'Bad lead address — list quality. Classified from 14 Sep 2026; earlier days are a gap, not 0%.',
   senderBounceRate: 'Our mailbox was rejected — sending reputation. Classified from 14 Sep 2026.',
   rtl: 'Replies needed per lead (human replies ÷ leads). Gaps on days with no leads.',
-  lpt: 'TREND ONLY — reads about 19% below the LPT figure above. PlusVibe\'s daily data counts only NEW contacts each day, while the headline also counts follow-ups. Shape is right, level is not comparable. Shares the right axis with RTL, so view it alone.',
+  lpt: 'TREND ONLY — reads roughly 10-20% below the LPT figure above. PlusVibe\'s daily data counts only NEW contacts each day, while the headline also counts follow-ups to people first contacted earlier. Shape is right, level is not comparable. Shares the right axis with RTL, so view it alone.',
   sent: 'Emails sent that day.',
   leads: 'Leads recorded that day.',
 }
@@ -160,9 +160,11 @@ function seriesValue(s: SeriesKey, d: DayData): number | null {
       // READ THIS LINE AS A TREND, NOT AS THE HEADER FIGURE. PV's daily rows
       // carry only NEW leads contacted that day; the header's contacted also
       // counts follow-ups to leads first contacted earlier in the window. So
-      // the daily series sums LOW against the header (3,116 vs 3,849 measured
-      // on ShireRecoveries 09-11..09-17), and this line reads ~19% under the
-      // LPT KPI. PV exposes no per-day equivalent of the header's field, so the
+      // the daily series sums LOW against the header: 9,412 vs 10,405 on
+      // LendingTeam 08-19..09-17 (~10%), 3,116 vs 3,849 on ShireRecoveries
+      // 09-11..09-17 (~19%). PV's own header reports 9,412 for the daily
+      // field's name, so the daily data is right, just a different measure.
+      // PV exposes no per-day equivalent of the header's field, so the
       // shape is right but the level is not directly comparable.
       return (d.leads || 0) > 0 ? +((d.contacted || 0) / (d.leads || 1)).toFixed(0) : null
     case 'sent':
