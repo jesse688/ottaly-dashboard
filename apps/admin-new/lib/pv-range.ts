@@ -108,7 +108,12 @@ interface PvChartRow {
   total_reply_count?: number
   total_ooo_reply_count?: number
   total_bounce_count?: number
-  total_contacted_count?: number
+  // NOT on the daily rows. The header has `total_contacted_count`; each chart
+  // row carries `total_new_lead_contacted_count` instead (verified live
+  // 2026-09-17). Reading the header's name here yielded undefined -> 0 via
+  // num(), so every day's `contacted` was 0 and the LPT line sat flat on the
+  // axis while the header read 1309.
+  total_new_lead_contacted_count?: number
   total_pos_reply_count?: number
   // Present from 14 Sep 2026; absent (not zero) on earlier days.
   recipient_bounce_count?: number
@@ -182,7 +187,9 @@ export async function fetchPvRange(
       posReplies: num(d.total_pos_reply_count),
       oooReplies: num(d.total_ooo_reply_count),
       bounces: num(d.total_bounce_count),
-      contacted: num(d.total_contacted_count),
+      // Per-day contacted. See the note on PvChartRow: the header's field name
+      // does not exist on these rows.
+      contacted: num(d.total_new_lead_contacted_count),
       recipientBounces: num(d.recipient_bounce_count),
       senderBounces: num(d.sender_bounce_count),
     }))
