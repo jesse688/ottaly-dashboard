@@ -199,19 +199,32 @@ export async function GET(req: NextRequest) {
     // Leads are counted from esp_leads (label='INTERESTED') — the table the
     // Unibox writes to when a reply is marked as a lead. PlusVibe does NOT
     // expose these, so this stays our own. Windowed on the lead date so RTL and
-    // LPT share the same period as their denominators.
+    // LPT share the same period as their denominators. Grouped by date as well
+    // as workspace: the per-day counts feed the RTL and Leads chart lines, and
+    // the window total is summed from the same rows so the header and the chart
+    // can never disagree.
     const leadsRes = await pool.query(
-      `SELECT workspace_id, COUNT(*)::int AS n
+      `SELECT workspace_id,
+              COALESCE(first_replied_at, created_at, synced_at)::date AS d,
+              COUNT(*)::int AS n
          FROM esp_leads
         WHERE label = 'INTERESTED'
           AND COALESCE(first_replied_at, created_at, synced_at)::date >= $1::date
           AND COALESCE(first_replied_at, created_at, synced_at)::date <= $2::date
-        GROUP BY workspace_id`,
+        GROUP BY workspace_id, d`,
       [start, end],
     )
     const leadsByWs: Record<string, number> = {}
-    ;(leadsRes.rows as Array<{ workspace_id: string; n: number }>).forEach(r => {
-      leadsByWs[r.workspace_id] = r.n
+    const leadsByWsDate: Record<string, Record<string, number>> = {}
+    ;(leadsRes.rows as Array<{ workspace_id: string; d: Date | string; n: number }>).forEach(r => {
+      // pg returns a JS Date for ::date; normalise to the YYYY-MM-DD keys the
+      // series is built from. toISOString() would shift days in a non-UTC
+      // timezone, so format the local parts the driver already resolved.
+      const key = r.d instanceof Date
+        ? `${r.d.getFullYear()}-${String(r.d.getMonth() + 1).padStart(2, '0')}-${String(r.d.getDate()).padStart(2, '0')}`
+        : String(r.d).slice(0, 10)
+      leadsByWs[r.workspace_id] = (leadsByWs[r.workspace_id] || 0) + r.n
+      ;(leadsByWsDate[r.workspace_id] ||= {})[key] = r.n
     })
 
     const workspaces: Workspace[] = []
@@ -232,6 +245,7 @@ export async function GET(req: NextRequest) {
       const byDate = new Map<string, PvDay>()
       for (const d of range.series) byDate.set(d.date, d)
 
+      const wsLeadsByDate = leadsByWsDate[ws.workspace_id] || {}
       const series: DayData[] = dates.map(date => {
         const d = byDate.get(date)
         // Before the cutover PV reported no split at all, so emit null (a gap in
@@ -246,7 +260,7 @@ export async function GET(req: NextRequest) {
           oooReplies: d?.oooReplies ?? 0,
           bounces: d?.bounces ?? 0,
           contacted: d?.contacted ?? 0,
-          leads: 0, // leads are a window total from esp_leads, not per-day
+          leads: wsLeadsByDate[date] ?? 0,
           recipientBounces: classified ? d?.recipientBounces ?? 0 : null,
           senderBounces: classified ? d?.senderBounces ?? 0 : null,
         }
