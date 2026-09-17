@@ -110,6 +110,46 @@ const SERIES_COLOR: Record<SeriesKey, string> = {
 }
 // Series that start hidden. See the toggle state below for why each one.
 const OFF_BY_DEFAULT: SeriesKey[] = ['recipientBounceRate', 'senderBounceRate', 'lpt']
+
+// ── Which days are worth plotting ────────────────────────────────────────────
+//
+// Rates on a near-empty day are noise, not performance: measured on the Ottaly
+// workspace 06-17..09-17, the five highest Human RR days were all under 125
+// sends (08-10 = 4 replies / 56 sent = 7.14%, against a 1.5% real rate). Those
+// are the visible spikes. A day with a tiny denominator cannot say anything
+// about reply rate, so it is excluded from the line and from the average.
+//
+// The floor is RELATIVE to the workspace's own median so it travels across
+// clients sending 300/day and 3,000/day alike. 20% of median dropped 5 of 42
+// days on that workspace and took the top spike with it.
+const LOW_VOLUME_FRACTION = 0.2
+
+// Weekends: PV sends no mail on Sat/Sun (0 of 26 weekend days sent anything in
+// that window), so they already yield null. Excluding them explicitly keeps a
+// stray weekend send — a one-off manual campaign, a rescheduled sequence — from
+// entering the average on a handful of sends.
+const isWeekend = (iso: string): boolean => {
+  const day = new Date(`${iso}T00:00:00Z`).getUTCDay()
+  return day === 0 || day === 6
+}
+
+/** The sent floor under which a day's rates are treated as unmeasurable. */
+function lowVolumeFloor(series: DayData[]): number {
+  const sent = series.filter(d => !isWeekend(d.date) && d.sent > 0).map(d => d.sent).sort((a, b) => a - b)
+  if (!sent.length) return 0
+  const median = sent[Math.floor(sent.length / 2)]
+  return median * LOW_VOLUME_FRACTION
+}
+
+/**
+ * True when a day can carry a meaningful RATE. Volume series (sent, leads) are
+ * counts, not rates, so they stay whole — zeroing a real send day would be a
+ * lie, and weekends genuinely are zero.
+ */
+function dayCounts(d: DayData, floor: number, key: SeriesKey): boolean {
+  if (key === 'sent' || key === 'leads') return true
+  return !isWeekend(d.date) && d.sent >= floor && d.sent > 0
+}
 // Hover text per toggle. LPT's caveat is the important one: it cannot be read
 // against the LPT KPI, so the pill has to say so where it is clicked.
 const SERIES_HINT: Record<SeriesKey, string> = {
@@ -345,9 +385,14 @@ function ClientCard({
 
   const labels = w.series.map(d => d.date.slice(5))
   const shown = ALL_SERIES.filter(s => toggles[s])
+  const floor = lowVolumeFloor(w.series)
+  // Excluded days become null (a gap), never 0 — a flat zero would read as a
+  // measured bad day rather than a day that cannot be measured.
+  const valueFor = (s: SeriesKey, d: DayData): number | null =>
+    dayCounts(d, floor, s) ? seriesValue(s, d) : null
   const chartSeries: LineSeries[] = shown.map(s => ({
     label: SERIES_LABEL[s],
-    data: rollingAvg(w.series.map(d => seriesValue(s, d)), smooth),
+    data: rollingAvg(w.series.map(d => valueFor(s, d)), smooth),
     color: SERIES_COLOR[s],
     percent: isPercent(s),
   }))
@@ -356,19 +401,59 @@ function ClientCard({
   // average for each is unreadable, so it tracks the single visible series and
   // hides itself when more than one is on.
   //
-  // The mean is over the raw daily values, NOT the smoothed ones. Smoothing is
-  // a trailing window, so its first days average fewer points and would drag
-  // the mean. Days with no value (null) are skipped, not counted as zero — the
-  // same rule RTL and LPT already use for zero-lead days.
+  // VOLUME-WEIGHTED, not a mean of daily percentages. Measured on the Ottaly
+  // workspace 06-17..09-17: the mean of the daily rates is 1.91% while the true
+  // rate is 1.53%, because a 56-send day counted as heavily as a 2,000-send one.
+  // Summing the numerators and denominators reproduces PV's own arithmetic.
+  // Counts (sent, leads) have no denominator, so they keep a plain mean.
+  //
+  // Raw values, never the smoothed ones: smoothing is a trailing window whose
+  // first days average fewer points and would drag the result.
   const soloKey = shown.length === 1 ? shown[0] : null
-  const soloRaw = soloKey ? w.series.map(d => seriesValue(soloKey, d)) : []
-  const soloVals = soloRaw.filter((v): v is number => v != null)
-  const soloAvg = soloVals.length
-    ? soloVals.reduce((a, b) => a + b, 0) / soloVals.length
-    : null
+  const soloDays = soloKey ? w.series.filter(d => dayCounts(d, floor, soloKey)) : []
+  const soloVals = soloKey
+    ? soloDays.map(d => seriesValue(soloKey, d)).filter((v): v is number => v != null)
+    : []
+  const soloAvg = ((): number | null => {
+    if (!soloKey || !soloVals.length) return null
+    if (isPercent(soloKey)) {
+      // Rebuild the rate from its own parts rather than averaging ratios.
+      const numOf = (d: DayData) => {
+        switch (soloKey) {
+          case 'humanRR': return d.replies || 0
+          case 'oooRR': return d.oooReplies || 0
+          case 'bounceRate': return d.bounces || 0
+          case 'recipientBounceRate': return d.recipientBounces ?? 0
+          case 'senderBounceRate': return d.senderBounces ?? 0
+          default: return 0
+        }
+      }
+      // The split is only classified on qualifying days; averaging it over days
+      // PV never classified would divide by a denominator those days inflate.
+      const split = soloKey === 'recipientBounceRate' || soloKey === 'senderBounceRate'
+      const days = split ? soloDays.filter(d => d.recipientBounces != null || d.senderBounces != null) : soloDays
+      const den = days.reduce((t, d) => t + (d.sent || 0), 0)
+      if (den <= 0) return null
+      return (days.reduce((t, d) => t + numOf(d), 0) / den) * 100
+    }
+    if (soloKey === 'rtl' || soloKey === 'lpt') {
+      // Per-lead metrics: total replies (or contacts) over total leads.
+      const leads = soloDays.reduce((t, d) => t + (d.leads || 0), 0)
+      if (leads <= 0) return null
+      const num = soloDays.reduce(
+        (t, d) => t + (soloKey === 'rtl' ? d.replies || 0 : d.contacted || 0), 0)
+      return num / leads
+    }
+    return soloVals.reduce((a, b) => a + b, 0) / soloVals.length
+  })()
   // Compare the LAST day that actually has a value, so a trailing null (a
-  // zero-lead day on RTL/LPT) does not read as "no verdict".
+  // zero-lead day on RTL/LPT, or an excluded day) does not read as "no verdict".
   const soloLast = soloVals.length ? soloVals[soloVals.length - 1] : null
+  // Days dropped from a RATE series: weekends and near-empty days that DID send.
+  // dayCounts always passes counts, so this is naturally 0 for sent/leads.
+  const excludedCount = soloKey
+    ? w.series.filter(d => d.sent > 0 && !dayCounts(d, floor, soloKey)).length
+    : 0
   if (soloKey && soloAvg != null) {
     // Bound to locals so the narrowing survives into the closure below.
     const k = soloKey
@@ -542,6 +627,14 @@ function ClientCard({
                     {fmtVal(soloAvg, soloKey)}
                   </span>{' '}
                   over {soloVals.length} day{soloVals.length === 1 ? '' : 's'}
+                  {excludedCount > 0 && (
+                    <span
+                      className="ml-1 cursor-help underline decoration-dotted"
+                      title={`Excluded ${excludedCount} day${excludedCount === 1 ? '' : 's'}: weekends, and days sending under ${Math.round(floor).toLocaleString()} (20% of this client's median day). Rates on a near-empty day are noise — a handful of replies against a few dozen sends reads as a huge percentage.`}
+                    >
+                      ({excludedCount} excluded)
+                    </span>
+                  )}
                 </span>
               </span>
               {soloLast != null && (() => {
