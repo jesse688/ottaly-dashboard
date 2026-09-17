@@ -79,8 +79,8 @@ interface ProvidersResponse {
 }
 
 // ── Series config (matches legacy stats.html) ────────────────────────────────
-type SeriesKey = 'humanRR' | 'oooRR' | 'bounceRate' | 'recipientBounceRate' | 'senderBounceRate' | 'rtl' | 'sent' | 'leads'
-const ALL_SERIES: SeriesKey[] = ['humanRR', 'oooRR', 'bounceRate', 'recipientBounceRate', 'senderBounceRate', 'rtl', 'sent', 'leads']
+type SeriesKey = 'humanRR' | 'oooRR' | 'bounceRate' | 'recipientBounceRate' | 'senderBounceRate' | 'rtl' | 'lpt' | 'sent' | 'leads'
+const ALL_SERIES: SeriesKey[] = ['humanRR', 'oooRR', 'bounceRate', 'recipientBounceRate', 'senderBounceRate', 'rtl', 'lpt', 'sent', 'leads']
 const SERIES_LABEL: Record<SeriesKey, string> = {
   humanRR: 'Human RR',
   oooRR: 'OOO RR',
@@ -88,6 +88,7 @@ const SERIES_LABEL: Record<SeriesKey, string> = {
   recipientBounceRate: 'Recipient Bounce',
   senderBounceRate: 'Sender Bounce',
   rtl: 'RTL',
+  lpt: 'LPT',
   sent: 'Sent',
   leads: 'Leads',
 }
@@ -103,9 +104,12 @@ const SERIES_COLOR: Record<SeriesKey, string> = {
   recipientBounceRate: '#F472B6', // pink — bad lead address
   senderBounceRate: '#991B1B',    // dark red — our mailbox rejected
   rtl: '#7C3AED',        // purple — reply-to-lead
+  lpt: '#0D9488',        // teal — contacts-per-lead, the other "cost per lead" metric
   sent: '#64748B',       // slate/grey — volume
   leads: '#16A34A',      // green — the win
 }
+// Series that start hidden. See the toggle state below for why each one.
+const OFF_BY_DEFAULT: SeriesKey[] = ['recipientBounceRate', 'senderBounceRate', 'lpt']
 const isPercent = (s: SeriesKey) =>
   s === 'humanRR' || s === 'oooRR' || s === 'bounceRate' ||
   s === 'recipientBounceRate' || s === 'senderBounceRate'  // RTL is a per-1000 count, not %
@@ -137,6 +141,10 @@ function seriesValue(s: SeriesKey, d: DayData): number | null {
     case 'rtl':
       // Replies-To-Lead: HUMAN replies needed per lead (human ÷ leads, OOO excl).
       return (d.leads || 0) > 0 ? +((human / (d.leads || 1))).toFixed(1) : null
+    case 'lpt':
+      // Leads-Per-Thousand inverse: contacts needed per lead (contacted ÷ leads).
+      // Same shape as RTL — null on zero-lead days, since there is no divisor.
+      return (d.leads || 0) > 0 ? +((d.contacted || 0) / (d.leads || 1)).toFixed(0) : null
     case 'sent':
       return sent
     case 'leads':
@@ -299,9 +307,12 @@ function ClientCard({
   // The recipient/sender split starts OFF: the combined Bounce Rate line already
   // covers the common case, and switching two more lines on by default would
   // change every existing card. Toggle them on to diagnose a bounce spike.
+  // LPT starts OFF for a different reason: it runs in the thousands and shares
+  // the right-hand count axis with RTL (~17), so showing it by default would
+  // flatten RTL onto the baseline. Toggle it on its own to read it.
   const [toggles, setToggles] = useState<Record<SeriesKey, boolean>>(() =>
     Object.fromEntries(
-      ALL_SERIES.map(s => [s, s !== 'recipientBounceRate' && s !== 'senderBounceRate']),
+      ALL_SERIES.map(s => [s, !OFF_BY_DEFAULT.includes(s)]),
     ) as Record<SeriesKey, boolean>,
   )
   // Rolling-average smoothing window in days. Default 3; 1 = raw (no smoothing).
