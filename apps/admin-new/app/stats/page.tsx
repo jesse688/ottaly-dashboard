@@ -110,6 +110,19 @@ const SERIES_COLOR: Record<SeriesKey, string> = {
 }
 // Series that start hidden. See the toggle state below for why each one.
 const OFF_BY_DEFAULT: SeriesKey[] = ['recipientBounceRate', 'senderBounceRate', 'lpt']
+// Hover text per toggle. LPT's caveat is the important one: it cannot be read
+// against the LPT KPI, so the pill has to say so where it is clicked.
+const SERIES_HINT: Record<SeriesKey, string> = {
+  humanRR: 'Real (non-OOO) replies as a share of contacts.',
+  oooRR: 'Out-of-office and auto-replies as a share of contacts.',
+  bounceRate: 'All bounces as a share of sent.',
+  recipientBounceRate: 'Bad lead address — list quality. Classified from 14 Sep 2026; earlier days are a gap, not 0%.',
+  senderBounceRate: 'Our mailbox was rejected — sending reputation. Classified from 14 Sep 2026.',
+  rtl: 'Replies needed per lead (human replies ÷ leads). Gaps on days with no leads.',
+  lpt: 'TREND ONLY — reads about 19% below the LPT figure above. PlusVibe\'s daily data counts only NEW contacts each day, while the headline also counts follow-ups. Shape is right, level is not comparable. Shares the right axis with RTL, so view it alone.',
+  sent: 'Emails sent that day.',
+  leads: 'Leads recorded that day.',
+}
 const isPercent = (s: SeriesKey) =>
   s === 'humanRR' || s === 'oooRR' || s === 'bounceRate' ||
   s === 'recipientBounceRate' || s === 'senderBounceRate'  // RTL is a per-1000 count, not %
@@ -142,8 +155,15 @@ function seriesValue(s: SeriesKey, d: DayData): number | null {
       // Replies-To-Lead: HUMAN replies needed per lead (human ÷ leads, OOO excl).
       return (d.leads || 0) > 0 ? +((human / (d.leads || 1))).toFixed(1) : null
     case 'lpt':
-      // Leads-Per-Thousand inverse: contacts needed per lead (contacted ÷ leads).
-      // Same shape as RTL — null on zero-lead days, since there is no divisor.
+      // Contacts per lead (contacted ÷ leads). Null on zero-lead days, like RTL.
+      //
+      // READ THIS LINE AS A TREND, NOT AS THE HEADER FIGURE. PV's daily rows
+      // carry only NEW leads contacted that day; the header's contacted also
+      // counts follow-ups to leads first contacted earlier in the window. So
+      // the daily series sums LOW against the header (3,116 vs 3,849 measured
+      // on ShireRecoveries 09-11..09-17), and this line reads ~19% under the
+      // LPT KPI. PV exposes no per-day equivalent of the header's field, so the
+      // shape is right but the level is not directly comparable.
       return (d.leads || 0) > 0 ? +((d.contacted || 0) / (d.leads || 1)).toFixed(0) : null
     case 'sent':
       return sent
@@ -439,6 +459,7 @@ function ClientCard({
                   key={s}
                   type="button"
                   onClick={() => setToggles(prev => ({ ...prev, [s]: !prev[s] }))}
+                  title={SERIES_HINT[s]}
                   className="rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors"
                   style={
                     on
