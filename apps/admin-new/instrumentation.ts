@@ -30,6 +30,14 @@ export async function register() {
     } catch (err) {
       console.error('[instrumentation] cache-warming failed to start:', err)
     }
+    // Same reasoning for the mailbox health ingest: it self-starts on import,
+    // but nothing imports it until an API route is hit, so without this it
+    // would not run until someone opened the page.
+    try {
+      await import('./lib/mailbox-health')
+    } catch (err) {
+      console.error('[instrumentation] mailbox-health failed to start:', err)
+    }
   }
   if (process.env.NEXT_RUNTIME === 'edge') {
     await import('./sentry.server.config')

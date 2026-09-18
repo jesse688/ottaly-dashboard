@@ -48,6 +48,11 @@ const PUBLIC_PATHS = [
   '/api/auth',
   '/api/healthz',
   '/api/data/esp-matching/enforce',
+  // PlusVibe posts bounce webhooks here unauthenticated. The route validates
+  // callers itself against PV_WEBHOOK_SECRET, the same way esp-matching/enforce
+  // checks ADMIN_KEY, and only ever INSERTs a bounce event — it reads nothing
+  // and returns no client data.
+  '/api/mailbox-health/bounce-webhook',
 ]
 
 function matchesPrefix(pathname: string, paths: string[]): boolean {
