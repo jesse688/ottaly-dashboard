@@ -19,7 +19,7 @@ import { PeriodFilter, periodRange, type PeriodKey } from '@/components/ui/perio
  */
 
 type Tab = 'actions' | 'clients' | 'mailboxes' | 'bounces' | 'placement'
-  | 'domains' | 'buy' | 'trend' | 'manage'
+  | 'domains' | 'buy' | 'trend' | 'manage' | 'changes'
 
 interface ClientRow {
   client: string
@@ -100,6 +100,10 @@ interface PlacementResp {
   by_recipient: { rec_type: string; sender_provider: string; seeds: number; inbox_pct: number | null }[]
   runs: { test_id: string; name: string | null; sent: number | null; inbox_pct: number | null; spam_pct: number | null; created_at: string | null }[]
 }
+interface ChangeLogRow {
+  id: number; applied_at: string; kind: string
+  reason: string | null; mailboxes: number; undone_at: string | null
+}
 interface StateRow { client: string; mailboxes: number; state: string; note: string | null }
 interface StatesResp { clients: StateRow[]; removed: { client: string; note: string | null }[] }
 interface TodoRow {
@@ -118,6 +122,21 @@ const ACTION_LABEL: Record<string, string> = {
   none: 'Nothing to do',
 }
 
+/** One action button. Disabled while any action is running. */
+function ActBtn({ onClick, busy, children, tone = 'default' }: {
+  onClick: () => void; busy: boolean; children: React.ReactNode; tone?: 'default' | 'danger'
+}) {
+  return (
+    <button type="button" onClick={onClick} disabled={busy}
+      className={`rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors disabled:opacity-40 ${
+        tone === 'danger'
+          ? 'border border-red-500/40 text-red-600 hover:bg-red-500/10'
+          : 'border border-border bg-card hover:bg-accent'}`}>
+      {children}
+    </button>
+  )
+}
+
 const pct = (n: number | null) => n === null || n === undefined ? '—' : `${n.toFixed(2)}%`
 const num = (n: number | null | undefined) => n === null || n === undefined ? '—' : n.toLocaleString()
 
@@ -133,6 +152,7 @@ export default function MailboxHealthPage() {
   const [actions, setActions] = useState<ActionsResp | null>(null)
   const [placement, setPlacement] = useState<PlacementResp | null>(null)
   const [states, setStates] = useState<StatesResp | null>(null)
+  const [changes, setChanges] = useState<ChangeLogRow[] | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
 
@@ -167,11 +187,12 @@ export default function MailboxHealthPage() {
     if (tab === 'buy' && !actions) load(`/api/mailbox-health/actions${qs()}`, d => setActions(d as ActionsResp))
     if (tab === 'placement' && !placement) load(`/api/mailbox-health/placement${qs()}`, d => setPlacement(d as PlacementResp))
     if (tab === 'manage' && !states) load(`/api/mailbox-health/client-state`, d => setStates(d as StatesResp))
+    if (tab === 'changes' && !changes) load(`/api/mailbox-health/apply`, d => setChanges((d as { changes: ChangeLogRow[] }).changes))
     if (tab === 'mailboxes' && !mailboxes) load(`/api/mailbox-health/mailboxes${qs()}`, d => setMailboxes((d as { mailboxes: MailboxRow[] }).mailboxes))
     if (tab === 'domains' && !domains) load(`/api/mailbox-health/domains${qs()}`, d => setDomains((d as { domains: DomainRow[] }).domains))
     if (tab === 'trend' && !trend) setTrend(ov?.clients ? null : null)
     return () => { cancelled = true }
-  }, [tab, qs, bounces, mailboxes, domains, trend, ov, actions, placement, states])
+  }, [tab, qs, bounces, mailboxes, domains, trend, ov, actions, placement, states, changes])
 
   // A period change invalidates anything date-scoped.
   useEffect(() => { setBounces(null) }, [period])
@@ -181,6 +202,45 @@ export default function MailboxHealthPage() {
     setBounces(null); setMailboxes(null); setDomains(null)
     setActions(null); setPlacement(null)
   }, [focus])
+
+  /**
+   * Run an action against PlusVibe.
+   *
+   * Always dry-runs first and shows exactly what would change, because this
+   * alters live sending and the failure mode is client emails stopping. Only
+   * after you confirm does it apply.
+   */
+  async function runAction(payload: Record<string, unknown>, describe: string) {
+    setBusy(describe)
+    try {
+      const dry = await fetch('/api/mailbox-health/apply', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, apply: false }),
+      }).then(r => r.json())
+      if (dry.error) throw new Error(dry.error)
+      if (!dry.targeted) { alert('Nothing matches — no mailboxes to change.'); return }
+
+      const sample = (dry.preview ?? []).slice(0, 8)
+        .map((p: { email: string; from: number | null; to: number }) =>
+          `  ${p.email}  ${p.from ?? '?'} → ${p.to}`).join('\n')
+      const more = dry.targeted > 8 ? `\n  …and ${dry.targeted - 8} more` : ''
+      if (!confirm(`${describe}\n\n${dry.targeted} mailbox${dry.targeted > 1 ? 'es' : ''} will change in PlusVibe:\n\n${sample}${more}\n\nThis is reversible — the previous values are logged and can be restored.`)) return
+
+      const res = await fetch('/api/mailbox-health/apply', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, apply: true }),
+      }).then(r => r.json())
+      if (res.error) throw new Error(res.error)
+      alert(`Changed ${res.changed} of ${res.targeted}.`
+        + (res.failed ? ` ${res.failed} failed.` : '')
+        + (res.change_id ? `\n\nChange #${res.change_id} — undo from the Changes tab.` : ''))
+      setOv(null); setBounces(null); setMailboxes(null); setActions(null)
+      const d = await fetch(`/api/mailbox-health${qs()}`).then(x => x.json())
+      if (!d.error) setOv(d)
+    } catch (e) {
+      alert('Failed: ' + String(e))
+    } finally { setBusy(null) }
+  }
 
   /** Set a client's state. Dashboard-only — never touches PlusVibe. */
   async function setClientState(client: string, state: 'active'|'paused'|'removed') {
@@ -307,6 +367,7 @@ export default function MailboxHealthPage() {
     { key: 'buy', label: 'Buy calendar' },
     { key: 'trend', label: 'Trend' },
     { key: 'manage', label: 'Manage clients' },
+    { key: 'changes', label: 'Changes' },
   ]
 
   return (
@@ -413,6 +474,32 @@ export default function MailboxHealthPage() {
                         </span>
                       </div>
                       <p className="mb-2 text-[13px]">{t.what_to_do}</p>
+                      <div className="mb-2 flex flex-wrap gap-1.5">
+                        {t.action === 'reduce_volume' && (
+                          <>
+                            <ActBtn busy={!!busy} onClick={() => runAction(
+                              { action: 'set_limit', target: 'bouncing', limit: 8, client: focus || undefined,
+                                reason: 'tenant ceiling — halve the volume' },
+                              'Lower these mailboxes to 8/day')}>
+                              Lower to 8/day
+                            </ActBtn>
+                            <ActBtn busy={!!busy} onClick={() => runAction(
+                              { action: 'pause', target: 'bouncing', client: focus || undefined,
+                                reason: 'tenant ceiling — stop sending' },
+                              'Pause these mailboxes')} tone="danger">
+                              Pause them
+                            </ActBtn>
+                          </>
+                        )}
+                        {(t.action === 'retire_domain' || t.action === 'fix_dns') && (
+                          <ActBtn busy={!!busy} onClick={() => runAction(
+                            { action: 'pause', target: 'faulty_domains', client: focus || undefined,
+                              reason: `${t.label} — every send bounces regardless of rate` },
+                            'Pause mailboxes on faulty domains')} tone="danger">
+                            Pause these mailboxes
+                          </ActBtn>
+                        )}
+                      </div>
                       {t.worst_mailboxes.length > 0 && (
                         <details>
                           <summary className="cursor-pointer text-[12px] text-muted-foreground hover:text-foreground">
@@ -509,6 +596,67 @@ export default function MailboxHealthPage() {
                 ))}
               </div>
           : <p className="text-[13px] text-muted-foreground">Building the queue…</p>
+      )}
+
+      {/* Estate-wide fixes that apply to everything, not one finding. */}
+      {tab === 'actions' && ov && (
+        <div className="mb-4 rounded-lg border border-border bg-card p-4">
+          <h3 className="mb-1 text-[13px] font-semibold">Estate-wide</h3>
+          <p className="mb-2.5 text-[12px] text-muted-foreground">
+            Changes that apply across every active mailbox. Each shows exactly what it will do
+            before it does it, and every change is logged so it can be undone.
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            <ActBtn busy={!!busy} onClick={() => runAction(
+              { action: 'randomise', pct: 40, client: focus || undefined,
+                reason: 'PlusVibe recommends 40; currently unset estate-wide' },
+              'Randomise daily limits by 40%')}>
+              Randomise limits (40%)
+            </ActBtn>
+            <ActBtn busy={!!busy} onClick={() => runAction(
+              { action: 'rest', target: 'burnt', send_days: 10, rest_days: 7, client: focus || undefined,
+                reason: 'past the 350-send burn threshold' },
+              'Enable rest cycles on burnt mailboxes: 10 sending days, then 7 off')}>
+              Rest cycles on burnt mailboxes
+            </ActBtn>
+            <ActBtn busy={!!busy} onClick={() => runAction(
+              { action: 'set_limit', target: 'bouncing', limit: 8, client: focus || undefined,
+                reason: 'bouncing on causes we caused, still at full rate' },
+              'Lower bouncing mailboxes to 8/day')}>
+              Throttle bouncing mailboxes
+            </ActBtn>
+          </div>
+          <p className="mt-2.5 text-[11.5px] text-muted-foreground">
+            Randomisation is free and changes no capacity ceiling — PlusVibe recommends 40 and it is
+            currently set on none of the estate. Rest is the only intervention measured to restore a
+            worn mailbox, and it also costs nothing.
+          </p>
+        </div>
+      )}
+
+      {/* ── CHANGES ──────────────────────────────────────────────────── */}
+      {tab === 'changes' && (
+        changes
+          ? changes.length === 0
+            ? <p className="text-[13px] text-muted-foreground">
+                Nothing changed yet. Every action taken from this page is logged here with the
+                previous values, so it can be undone.
+              </p>
+            : <DataTable
+                columns={[
+                  { key: 'applied_at', header: 'When', cell: (r: ChangeLogRow) => <span className="font-mono text-[12px]">{String(r.applied_at).slice(0, 16).replace('T', ' ')}</span>, sortValue: (r: ChangeLogRow) => r.applied_at },
+                  { key: 'kind', header: 'Change', cell: (r: ChangeLogRow) => r.kind.replace(/_/g, ' '), sortValue: (r: ChangeLogRow) => r.kind },
+                  { key: 'reason', header: 'Why', cell: (r: ChangeLogRow) => <span className="text-muted-foreground">{r.reason}</span> },
+                  { key: 'mailboxes', header: 'Mbx', numeric: true, cell: (r: ChangeLogRow) => r.mailboxes, sortValue: (r: ChangeLogRow) => r.mailboxes },
+                  { key: 'undo', header: '', numeric: true, cell: (r: ChangeLogRow) => r.undone_at
+                      ? <span className="text-[11px] text-muted-foreground">undone</span>
+                      : (r.kind === 'randomise' || r.kind === 'rest_cycle')
+                        ? <span className="text-[11px] text-muted-foreground">—</span>
+                        : <ActBtn busy={!!busy} onClick={() => runAction(
+                            { action: 'undo', change_id: r.id }, `Undo change #${r.id}`)}>undo</ActBtn> },
+                ] as Column<ChangeLogRow>[]}
+                rows={changes} getRowKey={r => String(r.id)} dense />
+          : <p className="text-[13px] text-muted-foreground">Loading…</p>
       )}
 
       {/* ── BUY CALENDAR ─────────────────────────────────────────────── */}
