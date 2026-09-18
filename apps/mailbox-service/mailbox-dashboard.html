@@ -1,0 +1,1112 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mailbox Health</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #181b22;
+    --panel-2: #1f232c;
+    --border: #2a2f3a;
+    --text: #e7eaf0;
+    --muted: #9aa3b2;
+    --accent: #6d5efc;
+    --accent-hover: #5a4bf0;
+    --green: #2ecc71;
+    --red: #ff5c5c;
+    --amber: #f5a623;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.45;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 20px 80px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 18px;
+  }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 14px; }
+  .card h2 .note { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--muted); font-size: 12px; margin-left: 8px; }
+
+  button {
+    background: var(--accent); color: #fff; border: none; border-radius: 8px;
+    padding: 9px 16px; font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  button:hover { background: var(--accent-hover); }
+  button.secondary { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); }
+  button.secondary:hover { background: #262b35; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+
+  .tabs { display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; }
+  .tabs button { flex: 0 0 auto; }
+  .tabs button:not(.active) { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .stat .v { font-size: 24px; font-weight: 600; letter-spacing: -.02em; }
+  .stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-top: 2px; }
+  .stat.warn .v { color: var(--amber); }
+  .stat.bad .v { color: var(--red); }
+  .stat.good .v { color: var(--green); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th {
+    text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--muted); font-weight: 600; padding: 0 10px 8px; border-bottom: 1px solid var(--border);
+    white-space: nowrap; cursor: pointer; user-select: none;
+  }
+  th:hover { color: var(--text); }
+  th.no-sort { cursor: default; }
+  th.no-sort:hover { color: var(--muted); }
+  td { padding: 9px 10px; border-bottom: 1px solid #21252e; white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  tr.clickable { cursor: pointer; }
+  tr.clickable:hover td { background: var(--panel-2); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+
+  .pill { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px;
+          background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); }
+  .pill.red   { color: var(--red);   border-color: #4a2626; background: #2a1a1a; }
+  .pill.amber { color: var(--amber); border-color: #4a3d1f; background: #2a2416; }
+  .pill.green { color: var(--green); border-color: #234a33; background: #16271d; }
+  .pill.grey  { color: var(--muted); }
+
+  .bar { height: 5px; border-radius: 3px; background: var(--panel-2); overflow: hidden; min-width: 60px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); }
+  .bar > i.red { background: var(--red); }
+  .bar > i.amber { background: var(--amber); }
+  .bar > i.green { background: var(--green); }
+
+  .act { border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; background: var(--panel-2); }
+  .act.critical { border-left: 3px solid var(--red); }
+  .act.high     { border-left: 3px solid var(--amber); }
+  .act.medium   { border-left: 3px solid var(--accent); }
+  .act.low      { border-left: 3px solid var(--border); }
+  .act .t { font-weight: 600; font-size: 14px; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .act .e { color: var(--muted); font-size: 12.5px; margin-bottom: 6px; }
+  .act .a { font-size: 13px; }
+  .act .a b { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+
+  /* Hover explanations. Column headers use jargon that is only obvious once
+     you already know the system, so every one carries its definition. */
+  th[data-tip], span[data-tip] { position: relative; }
+  th[data-tip]::after, span[data-tip]::after {
+    content: attr(data-tip);
+    position: absolute; left: 0; top: calc(100% + 6px); z-index: 20;
+    width: 280px; white-space: normal; text-align: left;
+    background: #0b0d11; border: 1px solid var(--border); border-radius: 8px;
+    padding: 9px 11px; font-size: 12px; font-weight: 400; line-height: 1.45;
+    color: var(--text); text-transform: none; letter-spacing: 0;
+    box-shadow: 0 8px 24px rgba(0,0,0,.55);
+    opacity: 0; pointer-events: none; transition: opacity .12s ease;
+  }
+  th[data-tip]:hover::after, span[data-tip]:hover::after { opacity: 1; }
+  th.num[data-tip]::after { left: auto; right: 0; }
+  th[data-tip], span[data-tip] { border-bottom: 1px dotted #3a4150; }
+  span[data-tip] { cursor: help; }
+
+  select {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; padding: 8px 11px; font-size: 13px; font-family: inherit; cursor: pointer;
+  }
+  select:hover { border-color: var(--accent); }
+  .focus-banner {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    background: #1b1a2e; border: 1px solid #332f5a; border-left: 3px solid var(--accent);
+    border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; font-size: 13px;
+  }
+  .focus-banner b { font-weight: 600; }
+
+  .hint { font-size: 12px; color: var(--muted); margin-top: 10px; }
+  .hint code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+  .muted { color: var(--muted); }
+  .right { margin-left: auto; }
+  .flex { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .spark { display: flex; align-items: flex-end; gap: 3px; height: 40px; }
+  .spark > i { flex: 1; background: var(--accent); border-radius: 2px 2px 0 0; min-height: 2px; opacity: .8; }
+  #loading { padding: 40px; text-align: center; color: var(--muted); }
+  a { color: var(--accent); }
+  .err { color: var(--red); font-size: 13px; }
+</style>
+
+<div class="wrap">
+  <div class="flex" style="margin-bottom:4px">
+    <h1 id="title">Mailbox Health</h1>
+    <div class="right flex">
+      <select id="focus" title="Scope every view to one client">
+        <option value="">All clients (agency view)</option>
+      </select>
+      <span class="muted mono" id="stamp"></span>
+      <button class="secondary" id="refresh">Refresh from PlusVibe</button>
+    </div>
+  </div>
+  <p class="sub" id="scope">Loading…</p>
+
+  <div id="loading">Loading estate…</div>
+
+  <div id="app" style="display:none">
+    <div class="stats" id="stats"></div>
+
+    <div class="tabs">
+      <button data-tab="actions" class="active">Action queue</button>
+      <button data-tab="clients">Clients</button>
+      <button data-tab="domains">Domain load</button>
+      <button data-tab="buy">Buy calendar</button>
+      <button data-tab="trend">Estate trend</button>
+      <button data-tab="mailboxes">Mailboxes</button>
+      <button data-tab="placement">Placement</button>
+      <button data-tab="bounces">Bounces</button>
+      <button data-tab="manage">Manage clients</button>
+    </div>
+
+    <div id="panel"></div>
+  </div>
+</div>
+
+<script>
+const API = '/api/mailbox';
+let D = {};            // loaded data
+let tab = 'actions';
+let sort = {};         // per-tab sort state
+let focus = null;      // null = agency view, otherwise one client's name
+let states = null;     // client state list, lazily fetched by the Manage tab
+let placement = null;  // placement results, lazily fetched by the Placement tab
+let bounces = null;    // bounce data, lazily fetched by the Bounces tab
+let filterClient = null;
+let mbxRows = null;
+
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const num = (n) => n === null || n === undefined ? '—' : Number(n).toLocaleString();
+const pct = (n) => n === null || n === undefined ? '—' : Number(n).toFixed(2) + '%';
+
+/** Every request carries the current focus, so one switch rescopes the whole page. */
+async function get(path) {
+  const url = new URL(API + path, location.origin);
+  if (focus) url.searchParams.set('client', focus);
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(path + ' → HTTP ' + r.status);
+  return r.json();
+}
+
+async function load() {
+  try {
+    const [overview, clients, domains, trend, actions, buy] = await Promise.all([
+      get('/overview'), get('/clients'), get('/domains'),
+      get('/trend?weeks=12'), get('/actions'), get('/buy-calendar'),
+    ]);
+    D = { overview, clients, domains, trend, actions, buy };
+    mbxRows = null;   // per-client list must be refetched, not filtered client-side
+    states = null;    // state list may have changed
+    placement = null; // placement flags may have changed
+    bounces = null;   // bounce data may have changed
+    $('#loading').style.display = 'none';
+    $('#app').style.display = '';
+    renderHeader();
+    renderStats();
+    render();
+  } catch (e) {
+    $('#loading').innerHTML = '<div class="err">Failed to load: ' + esc(e.message) + '</div>';
+  }
+}
+
+function renderHeader() {
+  const o = D.overview, li = o.last_ingest || {};
+
+  // Populate the picker once, from the full client list the API always returns.
+  const sel = $('#focus');
+  if (sel.options.length <= 1 && o.all_clients) {
+    for (const c of o.all_clients) {
+      const opt = document.createElement('option');
+      opt.value = c; opt.textContent = c;
+      sel.appendChild(opt);
+    }
+  }
+  sel.value = focus || '';
+
+  $('#title').textContent = focus ? focus : 'Mailbox Health';
+  $('#scope').innerHTML = focus
+    ? `${num(o.estate.mailboxes)} mailboxes · ${num(o.estate.domains)} domains. `
+      + `Judged on at least ${o.thresholds.min_judge} contacted; burn threshold ${o.thresholds.burn} lifetime sends.`
+    : `${num(o.estate.mailboxes)} mailboxes · ${num(o.estate.domains)} domains · ${o.estate.clients} clients. `
+      + `Judged on at least ${o.thresholds.min_judge} contacted; burn threshold ${o.thresholds.burn} lifetime sends.`;
+
+  const when = li.finished_at ? new Date(li.finished_at) : null;
+  $('#stamp').textContent = (when
+    ? 'ingest ' + li.kind + ' · ' + when.toLocaleString() + ' · ' + li.api_calls + ' calls'
+    : 'no completed ingest')
+    + (li.stalled ? ' · ' + li.stalled + ' unfinished' : '');
+}
+
+/** Banner shown in client view, with the way back out. */
+function focusBanner() {
+  if (!focus) return '';
+  const c = D.clients[0];
+  const bits = c ? `${c.mailboxes} mailboxes on ${c.domains} domains · `
+    + `${c.avg_cum} avg lifetime sends · ${pct(c.ooo_pct)} OOO · ${c.positive_90d} positives in 90 days` : '';
+  return `<div class="focus-banner">
+    <span>Viewing <b>${esc(focus)}</b> only. ${esc(bits)}</span>
+    <span class="right"><button class="secondary" id="exitFocus">← Back to all clients</button></span>
+  </div>`;
+}
+
+function renderStats() {
+  const o = D.overview, e = o.estate;
+  const past = D.clients.reduce((s, c) => s + (c.past_threshold || 0), 0);
+  const crit = D.actions.filter(a => a.severity === 'critical').length;
+  const cells = [
+    { k: 'Mailboxes', v: num(e.mailboxes),
+      tip: 'Every sending mailbox we manage, across all client workspaces. Ex-client workspaces are excluded.' },
+    { k: 'Past ' + o.thresholds.burn + ' sends', v: num(past), cls: past > e.mailboxes * 0.3 ? 'warn' : '',
+      tip: 'Mailboxes that have sent more than 350 emails in their lifetime. A warning sign, not a failure — a mailbox that rests regularly can go well past it and stay healthy.' },
+    { k: 'Under ' + o.thresholds.dead_ooo_pct + '% OOO', v: num(o.underperforming), cls: o.underperforming > 0 ? 'warn' : 'good',
+      tip: 'Mailboxes returning almost no out-of-office replies, which suggests mail is not reaching inboxes. Only counts mailboxes with 100+ contacted, because below that a zero can easily be luck.' },
+    { k: 'ERROR status', v: num(e.errored), cls: e.errored > 0 ? 'bad' : 'good',
+      tip: 'Mailboxes disconnected from PlusVibe. They send nothing at all, so they quietly cut capacity without showing up as poor performance.' },
+    { k: 'Rest cycles on', v: num(e.auto_pause_on) + ' / ' + num(e.mailboxes), cls: e.auto_pause_on === 0 ? 'warn' : 'good',
+      tip: 'Mailboxes set to pause automatically after a set number of sending days. Rest is the only intervention measured to bring a worn mailbox back, and it costs nothing.' },
+    { k: 'Randomised', v: num(e.randomised) + ' / ' + num(e.mailboxes), cls: e.randomised === 0 ? 'warn' : 'good',
+      tip: 'Mailboxes whose daily limit varies a little each day instead of sending an identical number. PlusVibe recommends 40% variation; it is free and makes sending look less mechanical.' },
+    { k: 'Critical actions', v: num(crit), cls: crit > 0 ? 'bad' : 'good',
+      tip: 'Items in the action queue that need attention this week.' },
+  ];
+  $('#stats').innerHTML = cells.map(c =>
+    `<div class="stat ${c.cls || ''}"><div class="v">${c.v}</div>`
+    + `<div class="k"><span data-tip="${esc(c.tip)}">${esc(c.k)}</span></div></div>`
+  ).join('');
+}
+
+/* ---- sortable tables ---------------------------------------------------- */
+function table(id, cols, rows, opts = {}) {
+  const s = sort[id] || opts.defaultSort || {};
+  let data = [...rows];
+  if (s.key) {
+    // A defaultSort may name a field that has no visible column (the buy
+    // calendar sorts by order_in_days but shows order_by). Fall back to the
+    // raw field rather than throwing, which would blank the whole panel.
+    const c = cols.find(x => x.key === s.key) || { key: s.key };
+    data.sort((a, b) => {
+      let va = c.sortVal ? c.sortVal(a) : a[s.key];
+      let vb = c.sortVal ? c.sortVal(b) : b[s.key];
+      if (va === null || va === undefined) return 1;
+      if (vb === null || vb === undefined) return -1;
+      if (typeof va === 'string') return s.dir * va.localeCompare(vb);
+      return s.dir * (va - vb);
+    });
+  }
+  const head = cols.map(c =>
+    `<th class="${c.num ? 'num' : ''} ${c.noSort ? 'no-sort' : ''}" data-k="${c.key}"`
+    + (c.tip ? ` data-tip="${esc(c.tip)}"` : '') + '>'
+    + esc(c.label) + (s.key === c.key ? (s.dir === 1 ? ' ↑' : ' ↓') : '') + '</th>'
+  ).join('');
+  const body = data.map(r =>
+    `<tr class="${opts.onRow ? 'clickable' : ''}" data-id="${esc(r[opts.idKey] ?? '')}">`
+    + cols.map(c => `<td class="${c.num ? 'num' : ''}">${c.render ? c.render(r) : esc(r[c.key] ?? '—')}</td>`).join('')
+    + '</tr>'
+  ).join('');
+  setTimeout(() => {
+    document.querySelectorAll(`#${id} th[data-k]`).forEach(th => {
+      if (th.classList.contains('no-sort')) return;
+      th.onclick = () => {
+        const k = th.dataset.k;
+        const cur = sort[id] || {};
+        sort[id] = { key: k, dir: cur.key === k && cur.dir === 1 ? -1 : 1 };
+        render();
+      };
+    });
+    if (opts.onRow) {
+      document.querySelectorAll(`#${id} tr.clickable`).forEach(tr => {
+        tr.onclick = () => opts.onRow(tr.dataset.id);
+      });
+    }
+  }, 0);
+  return `<table id="${id}"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+/* ---- panels ------------------------------------------------------------- */
+function panelActions() {
+  if (!D.actions.length) return '<div class="card"><p class="muted">Nothing needs doing. Unlikely — check the ingest ran.</p></div>';
+  const groups = ['critical', 'high', 'medium', 'low'];
+  let html = '';
+  for (const g of groups) {
+    const list = D.actions.filter(a => a.severity === g);
+    if (!list.length) continue;
+    html += `<div class="card"><h2>${g}<span class="note">${list.length} item${list.length > 1 ? 's' : ''}</span></h2>`;
+    for (const a of list) {
+      html += `<div class="act ${g}">
+        <div class="t">${esc(a.title)}
+          ${a.spends_money ? '<span class="pill amber">spends money</span>' : ''}
+          ${a.reversible ? '<span class="pill green">reversible</span>' : '<span class="pill red">not reversible</span>'}
+        </div>
+        <div class="e">${esc(a.evidence)}</div>
+        <div class="a"><b>Do:</b> ${esc(a.action)}</div>
+      </div>`;
+    }
+    html += '</div>';
+  }
+  return html;
+}
+
+function runwayPill(c) {
+  if (c.runway_months === null) return '<span class="pill grey">idle</span>';
+  if (c.over_threshold) return `<span class="pill amber">past ${D.overview.thresholds.burn}</span>`;
+  const m = c.runway_months;
+  const cls = m <= 1 ? 'red' : m <= 3 ? 'amber' : 'green';
+  return `<span class="pill ${cls}">${m} mo</span>`;
+}
+
+function panelClients() {
+  const cols = [
+    { key: 'client', label: 'Client', tip: 'The PlusVibe workspace. One workspace per client.',
+      render: r => esc(r.client) + (r.state === 'paused'
+        ? ' <span class="pill grey" data-tip="Still our client, temporarily not sending. Stays visible but raises no actions — a paused client is not failing.">paused</span>' : '') },
+    { key: 'mailboxes', label: 'Mbx', num: true, tip: 'How many sending mailboxes this client has.' },
+    { key: 'domains', label: 'Dom', num: true, tip: 'How many separate sending domains those mailboxes sit on.' },
+    { key: 'avg_cum', label: 'Avg lifetime', num: true, render: r => num(r.avg_cum),
+      tip: 'Average emails each mailbox has sent since the day it was created. Mailboxes wear out from total sends, not from age — around 350 is where decline usually starts.' },
+    { key: 'past_threshold', label: 'Past thr.', num: true,
+      render: r => `${r.past_threshold}<span class="muted"> / ${r.mailboxes}</span>`,
+      tip: 'How many of this client’s mailboxes have already sent more than 350 emails in their lifetime. Being past 350 is a warning, not a failure — a rested mailbox can go far beyond it.' },
+    { key: 'runway_months', label: 'Runway', num: true, render: runwayPill,
+      sortVal: r => r.runway_months === null ? 1e9 : (r.over_threshold ? -1 : r.runway_months),
+      tip: 'How many months until the average mailbox here hits 350 lifetime sends, at the rate it is sending now. Under 1 month means act this week. "past 350" means it is already there.' },
+    { key: 'ooo_pct', label: 'OOO', num: true, render: r => pct(r.ooo_pct),
+      tip: 'Out-of-office replies as a share of people contacted. An auto-reply proves the email reached a real inbox, so this is our best read on deliverability. Estate average is about 5%.' },
+    { key: 'human_pct', label: 'Human', num: true, render: r => pct(r.human_pct),
+      tip: 'Real replies from people, as a share of contacted. Lower than OOO but the one that turns into revenue.' },
+    { key: 'positive_90d', label: 'Pos', num: true,
+      tip: 'Positive replies in the last 90 days — people who answered with interest. This is what the client is paying for.' },
+    { key: 'emails_per_positive', label: 'Em/pos', num: true, render: r => num(r.emails_per_positive),
+      tip: 'Emails sent per positive reply. Lower is better: it is the true cost of a lead in sends. Northern runs at 117, the worst clients over 2,000.' },
+    { key: 'sent_90d', label: '90d sent', num: true, render: r => num(r.sent_90d),
+      tip: 'Total emails sent by this client in the last 90 days.' },
+  ];
+  return `<div class="card"><h2>Clients<span class="note">ranked by urgency: deadline first, then past-threshold by how badly it shows</span></h2>`
+    + table('tClients', cols, D.clients, { idKey: 'client', onRow: (c) => setFocus(c) })
+    + `<p class="hint">Click a client to scope every view to it. Past-threshold is not automatically a problem — Enviro sits at 1,821 lifetime sends and still returns 9.16% OOO, because it rests. Judge on the OOO column, not the burn column alone.</p></div>`;
+}
+
+/** Provider baselines. Different setups perform differently and must not be
+    judged against one blended number. */
+function providerPanel() {
+  const ps = D.overview.providers || {};
+  const names = { GOOGLE_WORKSPACE: 'Google Workspace', MICROSOFT365: 'Microsoft 365',
+                  REGULAR_ACCOUNT: 'SMTP / bulk (Inboxing.com etc)' };
+  const rows = Object.entries(ps).map(([k, v]) => ({ ...v, name: names[k] || k }));
+  if (!rows.length) return '';
+  const cols = [
+    { key: 'name', label: 'Setup', tip: 'How the mailbox is hosted. Each type has its own normal range.' },
+    { key: 'mailboxes', label: 'Mbx', num: true, tip: 'Mailboxes of this type with 100+ contacted.' },
+    { key: 'avg_lifetime', label: 'Avg lifetime', num: true, render: r => num(r.avg_lifetime),
+      tip: 'Average lifetime sends for this type.' },
+    { key: 'ooo_pct', label: 'OOO', num: true, render: r => `<b>${pct(r.ooo_pct)}</b>`,
+      tip: 'This is the baseline a mailbox of this type is judged against. A mailbox is flagged when it falls well below its OWN type, not below a blended average.' },
+    { key: 'human_pct', label: 'Human', num: true, render: r => pct(r.human_pct),
+      tip: 'Real replies as a share of contacted, for this type.' },
+    { key: 'positive', label: 'Pos', num: true, tip: 'Positive replies in 90 days from this type.' },
+  ];
+  return `<div class="card"><h2>Baselines by setup<span class="note">each type is judged against itself</span></h2>`
+    + table('tProv', cols, rows)
+    + `<p class="hint">These are measured from our own estate, not vendor claims. A Microsoft mailbox at 4.5% OOO is normal for its type; a Google mailbox at 4.5% is underperforming. The action queue uses these baselines, so the same number can mean different things depending on the setup.</p></div>`;
+}
+
+function panelDomains() {
+  const cols = [
+    { key: 'domain', label: 'Domain', render: r => `<span class="mono">${esc(r.domain)}</span>`,
+      tip: 'The sending domain. Reputation damage is shared by everything on it.' },
+    { key: 'client', label: 'Client', tip: 'Which client sends from this domain.' },
+    // Mailbox count is never a fault on its own. Bulk-provisioned domains
+    // (Inboxing.com and similar) deliberately run 25-99 mailboxes on one
+    // domain at a low per-mailbox limit — that is the product, not a mistake.
+    { key: 'mailboxes', label: 'Mbx', num: true, render: r =>
+        r.mailboxes >= 20 ? `${r.mailboxes} <span class="pill grey">bulk</span>` : r.mailboxes,
+      tip: 'Mailboxes on this domain. House standard is 3. "bulk" marks Inboxing.com-style domains running 20+ at a low rate each — by design, never a fault.' },
+    { key: 'sent_90d', label: '90d sent', num: true, render: r => num(r.sent_90d),
+      tip: 'Total emails sent from this domain in 90 days. Total volume on a domain is what correlates with deliverability decline.' },
+    // Volume per mailbox is the part that tracks OOO, so that is what gets flagged.
+    // 800+ per mailbox over 90 days is roughly 9/day sustained, which is where
+    // the estate's own heaviest domains sit.
+    { key: 'sent_per_mbx', label: 'Per mbx', num: true, render: r =>
+        (r.sent_per_mbx || 0) > 800 ? `<span class="pill amber">${num(r.sent_per_mbx)}</span>` : num(r.sent_per_mbx),
+      tip: 'Average sends per mailbox on this domain over 90 days. This is the number to judge a domain on — amber above 800, roughly 9 a day sustained. Fix a high one by lowering the daily limit, not by splitting the domain.' },
+    { key: 'ooo_pct', label: 'OOO', num: true, render: r => pct(r.ooo_pct),
+      tip: 'Out-of-office replies as a share of contacted, for this domain. Our proxy for whether mail is landing in inboxes.' },
+    { key: 'load', label: 'Load', noSort: true, tip: 'This domain’s 90-day volume relative to the busiest domain in the estate.', render: r => {
+        const max = Math.max(...D.domains.map(d => d.sent_90d || 0)) || 1;
+        const w = Math.round((r.sent_90d || 0) / max * 100);
+        const cls = (r.sent_per_mbx || 0) > 800 ? 'amber' : '';
+        return `<div class="bar"><i class="${cls}" style="width:${w}%"></i></div>`;
+      } },
+  ];
+  const bulk = D.domains.filter(d => d.mailboxes >= 20).length;
+  const hot = D.domains.filter(d => (d.sent_per_mbx || 0) > 800).length;
+  return providerPanel()
+    + `<div class="card"><h2>Domain load<span class="note">sends-per-domain correlates with OOO at r = −0.47, far stronger than mailboxes-per-domain at r = −0.10</span></h2>`
+    + `<p class="hint" style="margin:0 0 12px">${hot} domains send more than 800 per mailbox in 90 days `
+    + `(about 9 a day sustained). ${bulk} are bulk-provisioned (Inboxing.com style) — those deliberately run `
+    + `many mailboxes at a low rate each, so they are marked, not flagged. `
+    + `Judge a domain on its volume per mailbox, not its headcount.</p>`
+    + table('tDomains', cols, D.domains, { defaultSort: { key: 'sent_90d', dir: -1 } })
+    + '</div>';
+}
+
+function panelBuy() {
+  if (!D.buy.length) return '<div class="card"><p class="muted">Nothing to order.</p></div>';
+  const cols = [
+    { key: 'order_by', label: 'Order by',
+      tip: 'The date you must place the order. A new mailbox cannot carry load for 20 days (14 days warming up, ~6 ramping), so this is always the date capacity is needed minus 20. "overdue" means that date has already passed.',
+      render: r =>
+        r.overdue ? `<span class="pill red">${esc(r.order_by)} overdue</span>` : `<span class="mono">${esc(r.order_by)}</span>` },
+    { key: 'client', label: 'Client', tip: 'Who the new capacity is for.' },
+    { key: 'mailboxes_needed', label: 'Mbx', num: true,
+      tip: 'How many mailboxes to buy — the count that is already spent, or a quarter of the estate for a client running out of runway.' },
+    { key: 'domains_needed', label: 'Domains', num: true,
+      tip: 'Domains to register, at 3 mailboxes each.' },
+    { key: 'est_cost', label: 'Est. cost', num: true, render: r => '£' + num(r.est_cost),
+      tip: 'Rough first-year cost: £5.30 per domain plus £2.50 per mailbox per month.' },
+    { key: 'note', label: 'Why', render: r => `<span class="muted">${esc(r.note)}</span>`,
+      tip: 'The measurement that put this client on the list. Nothing appears here just for being past 350 — the burn has to be visibly costing replies, or runway has to be short.' },
+  ];
+  const total = D.buy.reduce((s, b) => s + b.est_cost, 0);
+  return `<div class="card"><h2>Buy calendar<span class="note">order date = needed date − 20 days (14 warmup + ~6 ramp)</span></h2>`
+    + table('tBuy', cols, D.buy, { defaultSort: { key: 'order_in_days', dir: 1 } })
+    + `<p class="hint">Total if every line is ordered: <b>£${num(total.toFixed(2))}</b>. Batch orders to billing renewal dates — replacing on day 10 of a billing month wastes 20 days of the old unit. Nothing here is ordered automatically.</p></div>`;
+}
+
+function panelTrend() {
+  const t = [...D.trend].reverse();
+  if (!t.length) return '<div class="card"><p class="muted">No trend data yet.</p></div>';
+  const maxSent = Math.max(...t.map(x => x.sent || 0)) || 1;
+  const spark = t.map(x =>
+    `<i style="height:${Math.round((x.sent || 0) / maxSent * 100)}%" title="${x.week_start}: ${num(x.sent)} sent"></i>`
+  ).join('');
+  const cols = [
+    { key: 'week_start', label: 'Week', render: r => `<span class="mono">${esc(r.week_start)}</span>`,
+      tip: 'Monday of the week.' },
+    { key: 'sent', label: 'Sent', num: true, render: r => num(r.sent),
+      tip: 'Emails sent that week, including follow-ups.' },
+    { key: 'contacted', label: 'Contacted', num: true, render: r => num(r.contacted),
+      tip: 'People contacted that week. Rates divide by this, not by sends.' },
+    { key: 'ooo_pct', label: 'OOO', num: true, render: r => pct(r.ooo_pct),
+      tip: 'Out-of-office replies as a share of contacted. Watch this line over time — if the system is working it should hold or rise as volume grows.' },
+    { key: 'human_pct', label: 'Human', num: true, render: r => pct(r.human_pct),
+      tip: 'Replies from real people, as a share of contacted.' },
+    { key: 'active_mailboxes', label: 'Active mbx', num: true, render: r => num(r.active_mailboxes),
+      tip: 'Mailboxes that actually sent something that week.' },
+  ];
+  return `<div class="card"><h2>Estate trend<span class="note">weekly, most recent first</span></h2>`
+    + `<div class="spark" style="margin-bottom:16px">${spark}</div>`
+    + table('tTrend', cols, D.trend)
+    + `<p class="hint">Rates divide by contacted, not sends — sends include follow-ups. This is the same denominator PlusVibe's own UI uses.</p></div>`;
+}
+
+/**
+ * Client states. Dashboard-only: nothing here touches PlusVibe, so pausing or
+ * removing a client leaves their workspace, mailboxes and campaigns untouched.
+ * History is always kept — a removed client's numbers stay in the store, so
+ * restoring one brings their past back with them.
+ */
+/**
+ * Placement tests: direct inbox-vs-spam evidence.
+ *
+ * Every other view here infers deliverability from OOO reply rate, which is a
+ * proxy. This is measured. Only generic-content tests appear — a test using
+ * live campaign copy measures the copy, not the mailbox.
+ */
+async function panelPlacement() {
+  if (!placement) {
+    placement = 'loading';
+    Promise.all([get('/placement'), get('/round'), get('/recovery'), get('/coverage')])
+      .then(([pl, round, rec, cov]) => { placement = { ...pl, round, rec, cov }; render(); });
+    return '<div class="card"><p class="muted">Loading placement results…</p></div>';
+  }
+  if (placement === 'loading') return '<div class="card"><p class="muted">Loading…</p></div>';
+
+  const p = placement;
+  const plan = p.round, rec = p.rec, cov = p.cov;
+
+  // --- the testing plan -----------------------------------------------------
+  const planCard = `<div class="card">
+    <h2>Next test round<span class="note">one mailbox per domain, rotating every ${plan.round_days} days</span></h2>
+    <div class="stats" style="margin-bottom:14px">
+      <div class="stat"><div class="v">${num(plan.mailboxes_this_round)}</div>
+        <div class="k"><span data-tip="One mailbox from each domain, picked least-recently-tested first so rotation covers the estate instead of retesting the same ones.">Mailboxes this round</span></div></div>
+      <div class="stat ${plan.over_budget ? 'bad' : ''}"><div class="v">${num(plan.credits_per_month)}<span class="muted" style="font-size:14px"> / ${num(plan.monthly_credit_budget)}</span></div>
+        <div class="k"><span data-tip="PlusVibe charges 1 credit per test run per sender account — seeds inside a run are free, so cost follows mailboxes tested, not seeds. Two rounds a month at ${num(plan.credits_this_round)} each. Testing every mailbox instead would cost ${num(plan.credits_if_all_tested)} and need the Scale plan.">Credits / month</span></div></div>
+      <div class="stat"><div class="v">${plan.rounds_for_full_coverage}</div>
+        <div class="k"><span data-tip="Rounds before every mailbox in the estate has been tested once, at one per domain per round.">Rounds to cover all</span></div></div>
+      <div class="stat"><div class="v">${plan.weeks_for_full_coverage}w</div>
+        <div class="k"><span data-tip="Calendar time for full coverage at one round every ${plan.round_days} days.">Full coverage</span></div></div>
+    </div>
+    <p class="hint" style="margin:0 0 12px"><b>A clean result only clears the mailbox that was tested.</b>
+    Same-domain mailboxes were measured splitting 75% vs 25% in the same minute, and two Butterfly
+    domains disagreed about which naming style won — so reputation sits on the mailbox, not the domain.
+    Untested mailboxes are <b>unknown</b>, never assumed clean. Rotation is what eventually covers them.</p>
+    ${table('tRound', [
+      { key: 'client', label: 'Client', tip: 'Whose domains are in this round.' },
+      { key: 'domains', label: 'Domains', num: true,
+        tip: 'One mailbox tested per domain, so this is also the credit cost for this client.' },
+      { key: 'never_tested', label: 'Never tested', num: true,
+        tip: 'Domains where no mailbox has ever had a placement result.' },
+    ], plan.by_client, { defaultSort: { key: 'domains', dir: -1 } })}
+  </div>`;
+
+  // --- recovery queue -------------------------------------------------------
+  const recCard = rec.flagged ? `<div class="card">
+    <h2>Recovery queue<span class="note">what to do with each flagged mailbox</span></h2>
+    <p class="hint" style="margin:0 0 12px">
+      Under ${rec.thresholds.burn} lifetime sends the mailbox is not worn out, so spam is likely
+      fixable — rest it ${rec.thresholds.rest_days} days and retest. At or over ${rec.thresholds.burn}
+      it is already spent, and rebuilding on the same domain has been measured not to work, so it is
+      replaced on a new domain instead. A mailbox that rested once and still lands in spam escalates
+      to ${rec.thresholds.rest_escalated} days.
+    </p>
+    ${rec.rest.length ? `<div class="flex" style="margin-bottom:10px">
+        <button id="doPause">Pause all ${rec.rest.length} in PlusVibe</button>
+        <span class="muted" style="font-size:12px">Sets daily_limit to 0 — cold sending stops,
+        warmup keeps running. A restore file is written first, so it can be undone exactly.</span>
+      </div>` : ''}
+    ${rec.rest.length ? `<h2 style="margin-top:6px">Rest (${rec.rest.length})</h2>` + table('tRest', [
+      { key: 'email', label: 'Mailbox', render: r => `<span class="mono">${esc(r.email)}</span>` },
+      { key: 'client', label: 'Client' },
+      { key: 'lifetime_sends', label: 'Lifetime', num: true, render: r => num(r.lifetime_sends),
+        tip: `Under ${rec.thresholds.burn}, so not burnt out.` },
+      { key: 'spam_pct', label: 'Spam', num: true, render: r => `<span class="pill red">${r.spam_pct}%</span>` },
+      { key: 'rest_days', label: 'Rest', num: true, render: r => r.rest_days + 'd',
+        tip: 'Days to stop cold sending. Warmup keeps running throughout.' },
+    ], rec.rest, { defaultSort: { key: 'spam_pct', dir: -1 } }) : ''}
+    ${rec.replace.length ? `<h2 style="margin-top:18px">Replace (${rec.replace.length})</h2>` + table('tRepl', [
+      { key: 'email', label: 'Mailbox', render: r => `<span class="mono">${esc(r.email)}</span>` },
+      { key: 'client', label: 'Client' },
+      { key: 'lifetime_sends', label: 'Lifetime', num: true, render: r =>
+          `<span class="pill amber">${num(r.lifetime_sends)}</span>`,
+        tip: `At or over ${rec.thresholds.burn} — already spent.` },
+      { key: 'spam_pct', label: 'Spam', num: true, render: r => `<span class="pill red">${r.spam_pct}%</span>` },
+    ], rec.replace, { defaultSort: { key: 'spam_pct', dir: -1 } })
+      + `<p class="hint">Needs about ${rec.replacement_domains_needed} new domains
+         (3 mailboxes each), roughly £${num(rec.est_cost)}. New domains, not rebuilds on the
+         existing ones — that has failed twice on Bubble.</p>` : ''}
+  </div>` : '';
+
+  // --- coverage -------------------------------------------------------------
+  const covCard = `<div class="card">
+    <h2>Coverage<span class="note">untested is unknown, not clean</span></h2>
+    ${table('tCov', [
+      { key: 'client', label: 'Client' },
+      { key: 'mailboxes', label: 'Mbx', num: true, tip: 'Sending mailboxes for this client.' },
+      { key: 'tested', label: 'Tested', num: true, render: r =>
+          `${r.tested}<span class="muted"> / ${r.mailboxes}</span>`,
+        tip: 'How many have ever had a generic placement result.' },
+      { key: 'flagged', label: 'Flagged', num: true, render: r =>
+          r.flagged ? `<span class="pill red">${r.flagged}</span>` : '—',
+        tip: 'Mailboxes measured landing in spam.' },
+      { key: 'last_tested', label: 'Last test', render: r => r.last_tested
+          ? `<span class="mono">${esc(String(r.last_tested).slice(0, 10))}</span>`
+          : '<span class="muted">never</span>',
+        tip: 'Most recent generic placement result for this client.' },
+    ], cov, { defaultSort: { key: 'tested', dir: 1 } })}
+  </div>`;
+  // The plan and coverage are useful before any results exist — that is when
+  // you are deciding what to test.
+  if (!p.mailboxes.length) {
+    return planCard + `<div class="card"><h2>Placement results</h2>
+      <p class="muted">No generic-content placement results stored yet.</p>
+      <p class="hint">Only tests with <b>generic</b> in the name are counted. A test sent with
+      live campaign copy measures that copy, not the mailbox — a spam result there could mean
+      bad copy on a perfectly healthy mailbox.<br><br>
+      Import results with <code>node mailbox/placement-import.js &lt;file.json&gt;</code>.</p></div>`
+      + covCard;
+  }
+
+  const cols = [
+    { key: 'email', label: 'Mailbox', render: r => `<span class="mono">${esc(r.email)}</span>`,
+      tip: 'The sending mailbox that was tested.' },
+    { key: 'client', label: 'Client', tip: 'Who it sends for.' },
+    { key: 'provider', label: 'Provider', render: r =>
+        `<span class="pill grey">${esc((r.provider || '').replace('_WORKSPACE', '').replace('_ACCOUNT', ''))}</span>`,
+      tip: 'How the mailbox is hosted.' },
+    { key: 'seeds', label: 'Seeds', num: true,
+      tip: `Test emails sent to known inboxes. Fewer than ${p.thresholds.min_seeds} is too few to judge on.` },
+    { key: 'inbox_pct', label: 'Inbox', num: true, render: r => {
+        const v = r.inbox_pct;
+        const cls = v >= 90 ? 'green' : v >= 75 ? 'amber' : 'red';
+        return `<span class="pill ${cls}">${v}%</span>`;
+      }, tip: 'Share of test emails that reached the inbox. This is measured, not inferred.' },
+    { key: 'spam_pct', label: 'Spam', num: true, render: r => {
+        const v = r.spam_pct;
+        return v >= p.thresholds.spam_pause_pct
+          ? `<span class="pill red">${v}%</span>` : `${v}%`;
+      }, tip: `Share that landed in spam. At or above ${p.thresholds.spam_pause_pct}% the mailbox is flagged — it is not being seen.` },
+    { key: 'tested_at', label: 'Tested', render: r => `<span class="mono">${esc((r.tested_at || '').slice(0, 10))}</span>`,
+      tip: 'When the most recent generic test ran.' },
+    { key: 'flagged_reason', label: 'Flagged', render: r => r.flagged_reason
+        ? `<span class="pill red">pause</span> <span class="muted">${esc(r.flagged_reason)}</span>`
+        : '<span class="muted">—</span>',
+      tip: 'Mailboxes measured landing in spam. A later passing test clears the flag automatically.' },
+  ];
+
+  const recCols = [
+    { key: 'sender_provider', label: 'Sender', render: r =>
+        esc((r.sender_provider || '').replace('_WORKSPACE', '').replace('_ACCOUNT', '')),
+      tip: 'How the sending mailbox is hosted.' },
+    { key: 'rec_type', label: 'Recipient', tip: 'Where the test email was sent.' },
+    { key: 'seeds', label: 'Seeds', num: true, tip: 'Test emails in this combination.' },
+    { key: 'inbox_pct', label: 'Inbox', num: true, render: r => {
+        const cls = r.inbox_pct >= 90 ? 'green' : r.inbox_pct >= 75 ? 'amber' : 'red';
+        return `<span class="pill ${cls}">${r.inbox_pct}%</span>`;
+      }, tip: 'Inbox rate for this sender-to-recipient pairing. This is what ESP matching is built on.' },
+  ];
+
+  const runCols = [
+    { key: 'created_at', label: 'When', render: r => `<span class="mono">${esc((r.created_at || '').slice(0, 10))}</span>` },
+    { key: 'name', label: 'Test' },
+    { key: 'sent', label: 'Sent', num: true },
+    { key: 'inbox_pct', label: 'Inbox', num: true, render: r => r.inbox_pct + '%' },
+    { key: 'spam_pct', label: 'Spam', num: true, render: r => r.spam_pct + '%' },
+  ];
+
+  // Order: what needs doing now (recovery), then results, then the plan and
+  // coverage — act first, read second.
+  return recCard + `<div class="card">
+      <h2>Placement results<span class="note">measured, not inferred — generic-content tests only</span></h2>
+      ${p.flagged ? `<p class="hint" style="margin:0 0 12px"><b style="color:var(--red)">${p.flagged}
+        mailbox${p.flagged > 1 ? 'es' : ''} flagged</b> at or above ${p.thresholds.spam_pause_pct}% spam.
+        These appear in the action queue as critical. A later passing test clears the flag by itself.</p>`
+        : `<p class="hint" style="margin:0 0 12px">Nothing flagged — every tested mailbox is under
+        ${p.thresholds.spam_pause_pct}% spam.</p>`}
+      ${table('tPlace', cols, p.mailboxes, { defaultSort: { key: 'spam_pct', dir: -1 } })}
+      <p class="hint">Only tests with <b>generic</b> in the name count. A test using live campaign copy
+      measures the copy, not the mailbox. Nothing under ${p.thresholds.min_seeds} seeds is judged —
+      the same small-sample rule the OOO side uses.</p>
+    </div>
+    ${p.by_recipient.length ? `<div class="card">
+      <h2>Sender → recipient<span class="note">where each setup actually lands</span></h2>
+      ${table('tRec', recCols, p.by_recipient, { defaultSort: { key: 'inbox_pct', dir: 1 } })}
+      <p class="hint">Placement differs by recipient provider, which is the whole basis of ESP matching.
+      A mailbox can inbox reliably at one provider and land in spam at another.</p>
+    </div>` : ''}
+    ${p.runs.length ? `<div class="card">
+      <h2>Test runs<span class="note">newest first</span></h2>
+      ${table('tRuns', runCols, p.runs)}
+    </div>` : ''}` + planCard + covCard;
+}
+
+/**
+ * Bounces by cause.
+ *
+ * A raw bounce rate cannot tell you what to do: the same number can mean the
+ * tenant is over its sending limit (lower the volume) or the address is dead
+ * (fix the data). So everything here is split by cause, and only sending
+ * faults are allowed anywhere near a volume decision.
+ */
+async function panelBounces() {
+  if (!bounces) {
+    bounces = 'loading';
+    get('/bounces').then(r => { bounces = r; render(); });
+    return '<div class="card"><p class="muted">Loading bounces…</p></div>';
+  }
+  if (bounces === 'loading') return '<div class="card"><p class="muted">Loading…</p></div>';
+  const b = bounces;
+  if (!b.causes.length) {
+    return `<div class="card"><h2>Bounces</h2>
+      <p class="muted">No bounces stored yet.</p>
+      <p class="hint">Pull them with <code>node mailbox/bounce-ingest.js</code>.</p></div>`;
+  }
+
+  const ACTION_LABEL = {
+    reduce_volume: 'Lower the volume',
+    retire_domain: 'Retire the domain',
+    fix_dns: 'Fix DNS / auth',
+    fix_content: 'Copy or reputation',
+    suppress_lead: 'Bad data — suppress the lead',
+    none: 'Nothing to do',
+  };
+  const ACTION_CLS = {
+    reduce_volume: 'red', retire_domain: 'red', fix_dns: 'amber',
+    fix_content: 'amber', suppress_lead: 'grey', none: 'grey',
+  };
+
+  // --- the estate-wide tenant alert ----------------------------------------
+  const td = b.tenant_by_day;
+  const tenantCard = td.length ? `<div class="card">
+    <h2>Tenant rate limit<span class="note">estate-wide — this cannot be judged per client</span></h2>
+    ${b.tenant_alert ? `<div class="focus-banner" style="border-left-color:var(--red);background:#2a1a1a;border-color:#4a2626">
+      <span><b>${b.tenant_worst_day.tenant_bounces} tenant-limit bounces on ${b.tenant_worst_day.date}</b>,
+      across ${b.tenant_worst_day.clients_hit} clients and ${b.tenant_worst_day.mailboxes_hit} mailboxes.
+      The limit is shared by the whole Microsoft tenant, so the fix is less total volume, not pausing one client.</span>
+    </div>` : ''}
+    ${table('tTenantDay', [
+      { key: 'date', label: 'Date', render: r => `<span class="mono">${esc(r.date)}</span>` },
+      { key: 'tenant_bounces', label: 'Bounces', num: true,
+        render: r => r.tenant_bounces >= b.thresholds.tenant_alert
+          ? `<span class="pill red">${r.tenant_bounces}</span>` : r.tenant_bounces,
+        tip: `Microsoft 5.7.233 events estate-wide. Red at ${b.thresholds.tenant_alert} or more in a day.` },
+      { key: 'clients_hit', label: 'Clients', num: true,
+        tip: 'Unrelated clients hit the same day. More than one means a shared ceiling, not a client problem.' },
+      { key: 'mailboxes_hit', label: 'Mailboxes', num: true },
+    ], td)}
+    <p class="hint">A shared tenant ceiling cannot be caught by a per-client rule. In the 17-18 Sep
+    incident Shire bounced at 489 sends a day having been clean at 725 the day before, and the
+    bouncing moved between clients as each consumed the headroom.</p>
+  </div>` : '';
+
+  const clientCard = b.tenant_by_client.length ? `<div class="card">
+    <h2>Who is hitting it<span class="note">last 7 days</span></h2>
+    ${table('tTenantCli', [
+      { key: 'client', label: 'Client' },
+      { key: 'tenant_bounces', label: 'Bounces', num: true },
+      { key: 'mailboxes', label: 'Mailboxes', num: true },
+      { key: 'first_seen', label: 'First', render: r => `<span class="mono">${esc(r.first_seen)}</span>` },
+      { key: 'last_seen', label: 'Last', render: r => `<span class="mono">${esc(r.last_seen)}</span>` },
+    ], b.tenant_by_client, { defaultSort: { key: 'tenant_bounces', dir: -1 } })}
+  </div>` : '';
+
+  // --- still sending despite recent faults ---------------------------------
+  // The actionable list: a mailbox bouncing on OUR account in the last 3 days
+  // that has not had its volume touched. PlusVibe reports over the same window.
+  const live = (b.recent || []).filter(r => r.daily_limit > 0);
+  const recentCard = live.length ? `<div class="card">
+    <h2>Bouncing now, still sending<span class="note">last 3 days, same window PlusVibe reports on</span></h2>
+    <p class="hint" style="margin:0 0 12px">These have bounced on causes that are our own in the last
+    three days, and their daily limit is still above zero. Counts, not rates — over three days the
+    estate averages about one send per mailbox, so a percentage would mean nothing.</p>
+    ${table('tRecent', [
+      { key: 'email', label: 'Mailbox', render: r => `<span class="mono">${esc(r.email)}</span>` },
+      { key: 'client', label: 'Client' },
+      { key: 'sending_faults', label: 'Our fault', num: true,
+        render: r => `<span class="pill red">${r.sending_faults}</span>`,
+        tip: 'Bounces in 3 days caused by our sending, not by the recipient or bad data.' },
+      { key: 'tenant_limit', label: 'Tenant', num: true,
+        render: r => r.tenant_limit || '—',
+        tip: 'Of those, how many were the shared tenant ceiling. Those want less volume, not a pause.' },
+      { key: 'causes', label: 'Causes', render: r =>
+          `<span class="muted">${esc(String(r.causes || '').replace(/_/g, ' ').replace(/,/g, ', '))}</span>` },
+      { key: 'daily_limit', label: 'Limit', num: true,
+        render: r => `<span class="pill amber">${r.daily_limit}</span>`,
+        tip: 'Still sending at this rate despite the bounces.' },
+    ], live.slice(0, 40), { defaultSort: { key: 'sending_faults', dir: -1 } })}
+  </div>` : '';
+
+  // --- causes ---------------------------------------------------------------
+  const causeCard = `<div class="card">
+    <h2>What the bounces actually say<span class="note">read from the message text, not the count</span></h2>
+    ${table('tCause', [
+      { key: 'cause', label: 'Cause', render: r => esc(r.cause.replace(/_/g, ' ')) },
+      { key: 'action', label: 'Means', render: r =>
+          `<span class="pill ${ACTION_CLS[r.action] || 'grey'}">${esc(ACTION_LABEL[r.action] || r.action)}</span>`,
+        tip: 'What this cause implies. Only the red and amber ones are our fault; the grey ones are the recipient or the data.' },
+      { key: 'bounces', label: 'Bounces', num: true },
+      { key: 'mailboxes', label: 'Mailboxes', num: true },
+      { key: 'clients', label: 'Clients', num: true },
+    ], b.causes, { defaultSort: { key: 'bounces', dir: -1 } })}
+    <p class="hint">The provider fields cannot be used for this: 16 of 68 tenant-limit bounces were
+    labelled Google for a Microsoft-only error code. Classification reads the message text only.</p>
+  </div>`;
+
+  // --- per mailbox ----------------------------------------------------------
+  const mbxCard = `<div class="card">
+    <h2>By mailbox<span class="note">sending faults only drive volume decisions</span></h2>
+    ${table('tBmbx', [
+      { key: 'email', label: 'Mailbox', render: r => `<span class="mono">${esc(r.email)}</span>` },
+      { key: 'client', label: 'Client' },
+      { key: 'tenant_limit', label: 'Tenant', num: true,
+        render: r => r.tenant_limit ? `<span class="pill red">${r.tenant_limit}</span>` : '—',
+        tip: 'Tenant rate-limit bounces. Shared ceiling, so lower volume rather than pausing.' },
+      { key: 'sending_faults', label: 'Our fault', num: true,
+        tip: 'Bounces caused by our sending: tenant limit, blocklisting, DNS or content.' },
+      { key: 'not_our_fault', label: 'Not ours', num: true,
+        tip: 'Dead addresses, full mailboxes, their org policy. These must never trigger a volume change.' },
+      { key: 'sending_fault_pct', label: 'Rate', num: true,
+        render: r => r.sending_fault_pct === null || r.sending_fault_pct === undefined
+          ? '<span class="muted">insufficient</span>'
+          : `${r.sending_fault_pct}%`,
+        tip: `Sending faults as a share of 90-day sends. Blank under ${b.thresholds.min_sends} sends — one bounce in seven looks like 14% and means nothing.` },
+      { key: 'daily_limit', label: 'Limit', num: true },
+    ], b.mailboxes.slice(0, 100), { defaultSort: { key: 'tenant_limit', dir: -1 } })}
+    <p class="hint">Rates are blank below ${b.thresholds.min_sends} sends on purpose. In the live
+    incident about 15 mailboxes showed "14.3%" from a single bounce in seven sends, and a volume rule
+    keyed on that paused three mailboxes whose only bounces were dead recipient addresses.</p>
+  </div>`;
+
+  const burnedCard = b.burned_domains.length ? `<div class="card">
+    <h2>Domains with a standing fault<span class="note">volume will not fix these</span></h2>
+    ${table('tBurn', [
+      { key: 'domain', label: 'Domain', render: r => `<span class="mono">${esc(r.domain)}</span>` },
+      { key: 'client', label: 'Client' },
+      { key: 'cause', label: 'Cause', render: r => esc(r.cause.replace(/_/g, ' ')) },
+      { key: 'bounces', label: 'Bounces', num: true },
+      { key: 'last_seen', label: 'Last', render: r => `<span class="mono">${esc(String(r.last_seen).slice(0,10))}</span>` },
+    ], b.burned_domains, { defaultSort: { key: 'bounces', dir: -1 } })}
+    <p class="hint">Blocklisted or failing their own DMARC policy. Every send bounces regardless of
+    how slowly it goes out.</p>
+  </div>` : '';
+
+  const unkCard = b.unclassified.length ? `<div class="card">
+    <h2>Unclassified<span class="note">a recurring one is a missing rule</span></h2>
+    ${table('tUnk', [
+      { key: 'seen', label: 'Seen', num: true },
+      { key: 'bounce_msg', label: 'Message', render: r =>
+          `<span class="mono">${esc(String(r.bounce_msg).replace(/\s+/g, ' ').slice(0, 110))}</span>` },
+    ], b.unclassified, { defaultSort: { key: 'seen', dir: -1 } })}
+  </div>` : '';
+
+  return tenantCard + recentCard + causeCard + clientCard + mbxCard + burnedCard + unkCard;
+}
+
+async function panelManage() {
+  if (!states) {
+    states = 'loading';
+    get('/client-states').then(r => { states = r; render(); });
+    return '<div class="card"><p class="muted">Loading…</p></div>';
+  }
+  if (states === 'loading') return '<div class="card"><p class="muted">Loading…</p></div>';
+
+  const row = (name, extra, current) => `
+    <tr>
+      <td>${esc(name)}${extra ? ` <span class="muted">${esc(extra)}</span>` : ''}</td>
+      <td class="num">
+        ${['active', 'paused', 'removed'].map(s =>
+          s === current
+            ? `<span class="pill ${s === 'active' ? 'green' : s === 'paused' ? 'amber' : 'red'}">${s}</span>`
+            : `<button class="secondary set-state" data-client="${esc(name)}" data-state="${s}"
+                 style="padding:4px 10px;font-size:12px;margin-left:6px">${s === 'active' ? 'restore' : s}</button>`
+        ).join('')}
+      </td>
+    </tr>`;
+
+  const activeRows = states.active.map(c => row(c, '', 'active')).join('');
+  const pausedRows = states.paused.map(p =>
+    row(p.client, `${p.mailboxes} mailboxes${p.note ? ' · ' + p.note : ''}`, 'paused')).join('');
+  const removedRows = states.removed.map(r =>
+    row(r.client, r.note || '', 'removed')).join('');
+
+  return `<div class="card">
+      <h2>Manage clients<span class="note">dashboard only — never touches PlusVibe</span></h2>
+      <p class="hint" style="margin:0 0 14px">
+        <b>Paused</b> keeps a client visible but stops them raising actions, buy-calendar lines
+        and warnings — they are not sending, so they cannot be failing.
+        <b>Removed</b> hides them from every view and from estate totals, and stops the nightly
+        ingest spending API calls on them.
+        Neither changes anything in PlusVibe, and history is always kept: restore a client and
+        their past numbers come back with them.
+      </p>
+      <table>
+        <thead><tr><th class="no-sort">Client</th><th class="no-sort num">State</th></tr></thead>
+        <tbody>
+          ${states.paused.length ? `<tr><td colspan="2" class="muted" style="padding-top:14px"><b>Paused</b></td></tr>${pausedRows}` : ''}
+          ${states.removed.length ? `<tr><td colspan="2" class="muted" style="padding-top:14px"><b>Removed</b></td></tr>${removedRows}` : ''}
+          <tr><td colspan="2" class="muted" style="padding-top:14px"><b>Active</b></td></tr>
+          ${activeRows}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+async function panelMailboxes() {
+  if (!mbxRows) {
+    mbxRows = 'loading';
+    get('/mailboxes').then(r => { mbxRows = r; render(); });
+    return '<div class="card"><p class="muted">Loading mailboxes…</p></div>';
+  }
+  if (mbxRows === 'loading') return '<div class="card"><p class="muted">Loading mailboxes…</p></div>';
+  // In client view the API already scoped the rows; filterClient is only used
+  // for the older in-page drill-down.
+  let rows = mbxRows;
+  if (!focus && filterClient) rows = rows.filter(r => r.client === filterClient);
+  const cols = [
+    { key: 'email', label: 'Mailbox', render: r => `<span class="mono">${esc(r.email)}</span>`,
+      tip: 'The sending address.' },
+    { key: 'client', label: 'Client', tip: 'Which client this mailbox sends for.' },
+    { key: 'provider', label: 'Provider',
+      tip: 'Who hosts the mailbox. Measured over 30 days: Google loses 2.7% of mailboxes, Microsoft loses 20.3%. Google is the better buy.',
+      render: r => {
+        const p = (r.provider || '').replace('_WORKSPACE', '').replace('_ACCOUNT', '');
+        const cls = p === 'GOOGLE' ? 'green' : p === 'MICROSOFT365' ? 'amber' : 'grey';
+        return `<span class="pill ${cls}">${esc(p)}</span>`;
+      } },
+    { key: 'lifetime_sends', label: 'Lifetime', num: true,
+      tip: 'Every email this mailbox has sent since it was created. Mailboxes wear out from total sends, not age. Amber past 350.',
+      render: r => {
+        const over = r.lifetime_sends >= D.overview.thresholds.burn;
+        return `<span class="${over ? 'pill amber' : ''}">${num(r.lifetime_sends)}</span>`;
+      } },
+    { key: 'sends_since_rest', label: 'Since rest', num: true, render: r => num(r.sends_since_rest),
+      tip: 'Sends since this mailbox last had a break of 7+ days. Likely the number that really matters: Accrue has sent 1,327 lifetime but rests half its life, and is still improving.' },
+    { key: 'contacted', label: 'Contacted', num: true, render: r => num(r.contacted),
+      tip: 'People contacted in the last 90 days. All rates divide by this, not by sends — sends include follow-ups to the same person.' },
+    { key: 'ooo_pct', label: 'OOO', num: true,
+      tip: 'Out-of-office replies as a share of contacted. Red below 1.5%, amber below 3%. Only shown for mailboxes with 100+ contacted, because below that a zero means nothing.',
+      render: r => {
+        const v = r.ooo_pct;
+        if (v === null) return '—';
+        const cls = v < D.overview.thresholds.dead_ooo_pct ? 'red' : v < 3 ? 'amber' : 'green';
+        return `<span class="pill ${cls}">${pct(v)}</span>`;
+      } },
+    { key: 'human_pct', label: 'Human', num: true, render: r => pct(r.human_pct),
+      tip: 'Replies from real people, as a share of contacted.' },
+    { key: 'age_days', label: 'Age', num: true, render: r => r.age_days === null ? '—' : r.age_days + 'd',
+      tip: 'Days since the mailbox was created. Age alone barely predicts decline — an old mailbox that sent slowly is healthier than a young one that sent hard.' },
+    // PlusVibe keeps reporting "Active" for a mailbox on daily_limit 0 — its
+    // UI shows sends as "12/0", meaning 12 warmup and 0 campaign. Reading
+    // status alone would show a paused mailbox as live, so paused is derived
+    // from the limit and takes precedence in the display.
+    { key: 'status', label: 'Status',
+      tip: 'ERROR means disconnected from PlusVibe. PAUSED means we set its daily limit to 0, so cold sending has stopped while warmup continues — PlusVibe still calls that "Active", so it is derived from the limit rather than the status.',
+      render: r =>
+        r.status === 'ERROR' ? '<span class="pill red">ERROR</span>'
+        : r.daily_limit === 0 ? '<span class="pill amber">PAUSED</span>'
+        : `<span class="pill grey">${esc(r.status)}</span>` },
+  ];
+  return `<div class="card"><h2>Mailboxes
+      <span class="note">${rows.length} shown, each with at least ${D.overview.thresholds.min_judge} contacted`
+      + (filterClient ? ` · filtered to ${esc(filterClient)}` : '') + `</span></h2>`
+    + (filterClient ? `<button class="secondary" id="clearFilter" style="margin-bottom:12px">Show all clients</button>` : '')
+    + table('tMbx', cols, rows, { defaultSort: { key: 'ooo_pct', dir: 1 } })
+    + `<p class="hint">Only mailboxes with at least ${D.overview.thresholds.min_judge} contacted appear here. Below that, a zero OOO rate means nothing: at 25 sends and a 6% rate, chance alone puts P(zero) at about 21%, which nearly cost us 16 healthy Northern mailboxes.</p></div>`;
+}
+
+async function render() {
+  const panels = {
+    actions: panelActions, clients: panelClients, domains: panelDomains,
+    buy: panelBuy, trend: panelTrend, mailboxes: panelMailboxes,
+    placement: panelPlacement, bounces: panelBounces, manage: panelManage,
+  };
+  // A throwing panel must say so rather than rendering an empty page, which
+  // reads as "nothing to do" and is the most dangerous thing this page can do.
+  try {
+    $('#panel').innerHTML = focusBanner() + await panels[tab]();
+  } catch (e) {
+    $('#panel').innerHTML = `<div class="card"><p class="err">This view failed to render: `
+      + esc(e.message) + `</p><p class="hint">The data is still in the API — try another tab, `
+      + `or check <code>${API}/${tab}</code> directly.</p></div>`;
+    console.error('[panel ' + tab + ']', e);
+  }
+  document.querySelectorAll('.tabs button').forEach(b =>
+    b.classList.toggle('active', b.dataset.tab === tab));
+  const cf = $('#clearFilter');
+  if (cf) cf.onclick = () => { filterClient = null; render(); };
+  const ef = $('#exitFocus');
+  if (ef) ef.onclick = () => setFocus(null);
+
+  // The one control on this page that changes PlusVibe. Confirmed every time,
+  // never remembered, and it says exactly what it will do before doing it.
+  const dp = $('#doPause');
+  if (dp) dp.onclick = async () => {
+    const n = (placement?.rec?.rest || []).length;
+    if (!confirm(`Pause ${n} mailbox${n > 1 ? 'es' : ''} in PlusVibe?\n\n`
+      + `Their daily limit is set to 0, so cold sending stops. Warmup keeps running and `
+      + `nothing is deleted or disconnected.\n\nA restore file is written first — `
+      + `run "node mailbox/actuator.js restore <file> --apply" to undo it.`)) return;
+    dp.disabled = true; dp.textContent = 'Pausing…';
+    try {
+      const r = await fetch(API + '/pause', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apply: true, client: focus || null }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'pause failed');
+      alert(`Paused ${j.paused} of ${j.targets}.`
+        + (j.failed ? ` ${j.failed} failed.` : '')
+        + `\n\nRestore file:\n${(j.file || '').split('/').pop()}`);
+      placement = null;
+      await load();
+    } catch (e) {
+      alert('Pause failed: ' + e.message);
+      dp.disabled = false; dp.textContent = `Pause all ${n} in PlusVibe`;
+    }
+  };
+
+  document.querySelectorAll('.set-state').forEach(b => {
+    b.onclick = async () => {
+      const { client, state } = b.dataset;
+      // Removing hides a client everywhere, so make sure it was intended.
+      if (state === 'removed' &&
+          !confirm(`Remove ${client}?\n\nThey disappear from every view and from estate `
+            + `totals, and the nightly ingest stops fetching them.\n\nNothing in PlusVibe `
+            + `changes and their history is kept — you can restore them at any time.`)) return;
+      let note = null;
+      if (state !== 'active') {
+        note = prompt(`Optional note (why is ${client} ${state}?)`, '') || null;
+      }
+      b.disabled = true;
+      try {
+        const r = await fetch(API + '/client-state', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ client, state, note }),
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'failed');
+        states = null;
+        if (focus === client && state === 'removed') focus = null;
+        await load();
+      } catch (e) {
+        alert('Could not change state: ' + e.message);
+        b.disabled = false;
+      }
+    };
+  });
+}
+
+/** Enter or leave client view. Reloads every dataset scoped to the choice. */
+async function setFocus(client) {
+  focus = client || null;
+  filterClient = null;
+  const u = new URL(location);
+  if (focus) u.searchParams.set('client', focus); else u.searchParams.delete('client');
+  history.replaceState(null, '', u);
+  await load();
+}
+
+const TABS = ['actions', 'clients', 'domains', 'buy', 'trend', 'mailboxes', 'placement', 'bounces', 'manage'];
+
+document.querySelectorAll('.tabs button').forEach(b => {
+  b.onclick = () => {
+    tab = b.dataset.tab;
+    if (tab !== 'mailboxes') filterClient = null;
+    history.replaceState(null, '', '#' + tab);
+    render();
+  };
+});
+
+// Tabs are linkable, so a view can be shared or bookmarked.
+window.addEventListener('hashchange', () => {
+  const h = location.hash.slice(1);
+  if (TABS.includes(h) && h !== tab) { tab = h; render(); }
+});
+
+$('#refresh').onclick = async () => {
+  const btn = $('#refresh');
+  btn.disabled = true; btn.textContent = 'Refreshing…';
+  try {
+    const r = await fetch(API + '/refresh', { method: 'POST' });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'refresh failed');
+    mbxRows = null;
+    await load();
+  } catch (e) {
+    alert('Refresh failed: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Refresh from PlusVibe';
+  }
+};
+
+$('#focus').onchange = (e) => setFocus(e.target.value);
+
+{
+  const h = location.hash.slice(1);
+  if (TABS.includes(h)) tab = h;
+  // A focused view is linkable: /mailboxes?client=Bubble#domains
+  focus = new URL(location).searchParams.get('client') || null;
+}
+load();
+</script>
