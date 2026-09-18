@@ -4,6 +4,8 @@ import { useEffect, useState, useCallback } from 'react'
 import { PageShell } from '@/components/shell/page-shell'
 import { KpiCard } from '@/components/ui/kpi-card'
 import { DataTable, type Column } from '@/components/ui/data-table'
+import { StatusBadge } from '@/components/ui/status-badge'
+import { PeriodFilter, periodRange, type PeriodKey } from '@/components/ui/period-filter'
 
 /**
  * Mailbox health.
@@ -16,7 +18,8 @@ import { DataTable, type Column } from '@/components/ui/data-table'
  * "Past thr." is only obvious once you already know the system.
  */
 
-type Tab = 'clients' | 'mailboxes' | 'bounces' | 'domains' | 'trend'
+type Tab = 'actions' | 'clients' | 'mailboxes' | 'bounces' | 'placement'
+  | 'domains' | 'buy' | 'trend' | 'manage'
 
 interface ClientRow {
   client: string
@@ -59,11 +62,51 @@ interface Bounces {
   tenant_by_day: TenantDay[]
   tenant_alert: boolean
   tenant_worst_day: TenantDay | null
+  todo: TodoRow[]
   mailboxes: { email: string; client: string | null; bounces: number; tenant: number; sending_faults: number; not_ours: number; causes: string }[]
   burned_domains: { domain: string; cause: string; bounces: number }[]
   updatedAt: string
 }
 interface DomainRow { domain: string; client: string; mailboxes: number; sent_90d: number; sent_per_mbx: number; ooo_pct: number | null }
+interface ActionRow {
+  severity: 'critical'|'high'|'medium'|'low'
+  client: string | null
+  title: string
+  evidence: string
+  action: string
+  spends_money: boolean
+  reversible: boolean
+  mailboxes?: string[]
+}
+interface BuyRow {
+  client: string; mailboxes_needed: number; domains_needed: number
+  order_by: string; overdue: boolean; est_cost: number; reason: string; note: string
+}
+interface ActionsResp {
+  actions: ActionRow[]
+  counts: { critical: number; high: number; medium: number; low: number }
+  buy: BuyRow[]
+  buy_total: number
+}
+interface PlacementRow {
+  email: string; client: string; provider: string | null
+  runs: number; seeds: number; inbox_pct: number | null; spam_pct: number | null
+  tested_at: string | null; judgeable: boolean
+}
+interface PlacementResp {
+  thresholds: { spam_flag_pct: number; min_seeds: number; pool_days: number }
+  mailboxes: PlacementRow[]
+  flagged: number
+  by_recipient: { rec_type: string; sender_provider: string; seeds: number; inbox_pct: number | null }[]
+  runs: { test_id: string; name: string | null; sent: number | null; inbox_pct: number | null; spam_pct: number | null; created_at: string | null }[]
+}
+interface StateRow { client: string; mailboxes: number; state: string; note: string | null }
+interface StatesResp { clients: StateRow[]; removed: { client: string; note: string | null }[] }
+interface TodoRow {
+  action: string; label: string; what_to_do: string
+  bounces: number; mailboxes: number; clients: string[]
+  worst_mailboxes: { email: string; bounces: number }[]
+}
 interface TrendRow { week_start: string; sent: number; contacted: number; ooo_pct: number | null; human_pct: number | null; active_mailboxes: number }
 
 const ACTION_LABEL: Record<string, string> = {
@@ -79,21 +122,30 @@ const pct = (n: number | null) => n === null || n === undefined ? '—' : `${n.t
 const num = (n: number | null | undefined) => n === null || n === undefined ? '—' : n.toLocaleString()
 
 export default function MailboxHealthPage() {
-  const [tab, setTab] = useState<Tab>('clients')
+  const [tab, setTab] = useState<Tab>('actions')
+  const [period, setPeriod] = useState<PeriodKey>('30d')
   const [focus, setFocus] = useState<string>('')
   const [ov, setOv] = useState<Overview | null>(null)
   const [bounces, setBounces] = useState<Bounces | null>(null)
   const [mailboxes, setMailboxes] = useState<MailboxRow[] | null>(null)
   const [domains, setDomains] = useState<DomainRow[] | null>(null)
   const [trend, setTrend] = useState<TrendRow[] | null>(null)
+  const [actions, setActions] = useState<ActionsResp | null>(null)
+  const [placement, setPlacement] = useState<PlacementResp | null>(null)
+  const [states, setStates] = useState<StatesResp | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
 
-  const qs = useCallback((extra = '') => {
+  const qs = useCallback((withRange = false) => {
     const p = new URLSearchParams()
     if (focus) p.set('client', focus)
+    if (withRange) {
+      const { start, end } = periodRange(period)
+      p.set('start', start); p.set('end', end)
+    }
     const s = p.toString()
-    return s ? `?${s}${extra ? '&' + extra : ''}` : (extra ? `?${extra}` : '')
-  }, [focus])
+    return s ? `?${s}` : ''
+  }, [focus, period])
 
   useEffect(() => {
     let cancelled = false
@@ -110,15 +162,48 @@ export default function MailboxHealthPage() {
     let cancelled = false
     const load = (path: string, set: (d: unknown) => void) =>
       fetch(path).then(r => r.json()).then(d => { if (!cancelled) set(d) }).catch(() => {})
-    if (tab === 'bounces' && !bounces) load(`/api/mailbox-health/bounces${qs('days=30')}`, d => setBounces(d as Bounces))
+    if (tab === 'bounces' && !bounces) load(`/api/mailbox-health/bounces${qs(true)}`, d => setBounces(d as Bounces))
+    if (tab === 'actions' && !actions) load(`/api/mailbox-health/actions${qs()}`, d => setActions(d as ActionsResp))
+    if (tab === 'buy' && !actions) load(`/api/mailbox-health/actions${qs()}`, d => setActions(d as ActionsResp))
+    if (tab === 'placement' && !placement) load(`/api/mailbox-health/placement${qs()}`, d => setPlacement(d as PlacementResp))
+    if (tab === 'manage' && !states) load(`/api/mailbox-health/client-state`, d => setStates(d as StatesResp))
     if (tab === 'mailboxes' && !mailboxes) load(`/api/mailbox-health/mailboxes${qs()}`, d => setMailboxes((d as { mailboxes: MailboxRow[] }).mailboxes))
     if (tab === 'domains' && !domains) load(`/api/mailbox-health/domains${qs()}`, d => setDomains((d as { domains: DomainRow[] }).domains))
     if (tab === 'trend' && !trend) setTrend(ov?.clients ? null : null)
     return () => { cancelled = true }
-  }, [tab, qs, bounces, mailboxes, domains, trend, ov])
+  }, [tab, qs, bounces, mailboxes, domains, trend, ov, actions, placement, states])
+
+  // A period change invalidates anything date-scoped.
+  useEffect(() => { setBounces(null) }, [period])
 
   // Changing the focused client invalidates every per-tab cache.
-  useEffect(() => { setBounces(null); setMailboxes(null); setDomains(null) }, [focus])
+  useEffect(() => {
+    setBounces(null); setMailboxes(null); setDomains(null)
+    setActions(null); setPlacement(null)
+  }, [focus])
+
+  /** Set a client's state. Dashboard-only — never touches PlusVibe. */
+  async function setClientState(client: string, state: 'active'|'paused'|'removed') {
+    if (state === 'removed' && !confirm(
+      `Remove ${client}?\n\nThey disappear from every view and from estate totals. Nothing in `
+      + `PlusVibe changes and their history is kept — you can restore them at any time.`)) return
+    setBusy(client)
+    try {
+      const r = await fetch('/api/mailbox-health/client-state', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client, state }),
+      })
+      if (!r.ok) throw new Error((await r.json()).error ?? 'failed')
+      // Removing a client changes the estate totals, so everything reloads.
+      setStates(null); setOv(null); setActions(null)
+      const d = await fetch(`/api/mailbox-health${qs()}`).then(x => x.json())
+      if (!d.error) setOv(d)
+      const st = await fetch('/api/mailbox-health/client-state').then(x => x.json())
+      setStates(st)
+    } catch (e) {
+      alert('Could not change state: ' + String(e))
+    } finally { setBusy(null) }
+  }
 
   const clientCols: Column<ClientRow>[] = [
     { key: 'client', header: 'Client', cell: r => (
@@ -213,11 +298,15 @@ export default function MailboxHealthPage() {
   ]
 
   const tabs: { key: Tab; label: string }[] = [
+    { key: 'actions', label: 'Action queue' },
     { key: 'clients', label: 'Clients' },
     { key: 'mailboxes', label: 'Mailboxes' },
     { key: 'bounces', label: 'Bounces' },
+    { key: 'placement', label: 'Placement' },
     { key: 'domains', label: 'Domain load' },
+    { key: 'buy', label: 'Buy calendar' },
     { key: 'trend', label: 'Trend' },
+    { key: 'manage', label: 'Manage clients' },
   ]
 
   return (
@@ -228,6 +317,8 @@ export default function MailboxHealthPage() {
         : 'Loading…'}
       freshness={{ table: 'mbx_daily', syncedAt: ov?.last_ingest?.finished_at ?? null }}
       actions={
+        <div className="flex flex-wrap items-center gap-2">
+        <PeriodFilter value={period} onChange={setPeriod} />
         <select
           value={focus}
           onChange={e => setFocus(e.target.value)}
@@ -236,6 +327,7 @@ export default function MailboxHealthPage() {
           <option value="">All clients (agency view)</option>
           {(ov?.all_clients ?? []).map(c => <option key={c} value={c}>{c}</option>)}
         </select>
+        </div>
       }
     >
       {err && <div className="mb-4 rounded-md border border-red-500/30 bg-red-500/10 p-3 text-[13px] text-red-500">{err}</div>}
@@ -304,6 +396,45 @@ export default function MailboxHealthPage() {
                 <KpiCard label="Not our fault" value={num(bounces.not_ours)}
                   sub="dead addresses, full mailboxes, their policy" />
               </div>
+              {/* What to DO. A cause total is not actionable: "149 spam content"
+                  does not say which mailbox to touch. These group by the response
+                  needed and name the mailboxes behind it. */}
+              {bounces.todo && bounces.todo.length > 0 && (
+                <div className="mb-6 space-y-2.5">
+                  {bounces.todo.map(t => (
+                    <div key={t.action} className="rounded-lg border border-border bg-card p-4">
+                      <div className="mb-1.5 flex flex-wrap items-center gap-2">
+                        <StatusBadge status={t.action === 'reduce_volume' || t.action === 'retire_domain' ? 'error' : 'warn'}>
+                          {t.label}
+                        </StatusBadge>
+                        <span className="text-[13px] text-muted-foreground">
+                          {t.bounces} bounces · {t.mailboxes} mailbox{t.mailboxes > 1 ? 'es' : ''}
+                          {t.clients.length > 0 && ` · ${t.clients.join(', ')}`}
+                        </span>
+                      </div>
+                      <p className="mb-2 text-[13px]">{t.what_to_do}</p>
+                      {t.worst_mailboxes.length > 0 && (
+                        <details>
+                          <summary className="cursor-pointer text-[12px] text-muted-foreground hover:text-foreground">
+                            Worst {t.worst_mailboxes.length}
+                          </summary>
+                          <table className="mt-1.5 text-[11.5px]">
+                            <tbody>
+                              {t.worst_mailboxes.map(m => (
+                                <tr key={m.email}>
+                                  <td className="pr-4 font-mono text-muted-foreground">{m.email}</td>
+                                  <td className="tabular-nums">{m.bounces}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </details>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+              <h3 className="mb-2 text-[13px] font-semibold">Every cause</h3>
               <DataTable columns={causeCols} rows={bounces.causes} getRowKey={r => r.cause} />
               <p className="mt-3 mb-6 text-[12px] text-muted-foreground">
                 A raw bounce rate counts all of these the same. Nearly half say nothing about our
@@ -335,6 +466,178 @@ export default function MailboxHealthPage() {
               </p>
             </>
           : <p className="text-[13px] text-muted-foreground">Loading domains…</p>
+      )}
+
+
+      {/* ── ACTION QUEUE ─────────────────────────────────────────────── */}
+      {tab === 'actions' && (
+        actions
+          ? actions.actions.length === 0
+            ? <p className="text-[13px] text-muted-foreground">Nothing needs doing. Unlikely — check the ingest has run.</p>
+            : <div className="space-y-2.5">
+                {actions.actions.map((a, i) => (
+                  <div key={i} className={`rounded-lg border bg-card p-4 ${
+                    a.severity === 'critical' ? 'border-l-4 border-l-red-500' :
+                    a.severity === 'high' ? 'border-l-4 border-l-amber-500' :
+                    a.severity === 'medium' ? 'border-l-4 border-l-blue-500' : 'border-l-4 border-l-border'}`}>
+                    <div className="mb-1.5 flex flex-wrap items-center gap-2">
+                      <StatusBadge status={a.severity === 'critical' ? 'error' : a.severity === 'high' ? 'warn' : 'info'}>
+                        {a.severity}
+                      </StatusBadge>
+                      <span className="text-[14px] font-semibold">{a.title}</span>
+                      {a.spends_money && <StatusBadge status="warn">spends money</StatusBadge>}
+                      {a.reversible
+                        ? <StatusBadge status="ok">reversible</StatusBadge>
+                        : <StatusBadge status="error">not reversible</StatusBadge>}
+                    </div>
+                    <p className="mb-2 text-[12.5px] text-muted-foreground">{a.evidence}</p>
+                    <p className="text-[13px]">
+                      <span className="mr-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Do</span>
+                      {a.action}
+                    </p>
+                    {a.mailboxes && a.mailboxes.length > 0 && (
+                      <details className="mt-2">
+                        <summary className="cursor-pointer text-[12px] text-muted-foreground hover:text-foreground">
+                          {a.mailboxes.length} mailbox{a.mailboxes.length > 1 ? 'es' : ''}
+                        </summary>
+                        <div className="mt-1.5 font-mono text-[11.5px] leading-relaxed text-muted-foreground">
+                          {a.mailboxes.join(', ')}
+                        </div>
+                      </details>
+                    )}
+                  </div>
+                ))}
+              </div>
+          : <p className="text-[13px] text-muted-foreground">Building the queue…</p>
+      )}
+
+      {/* ── BUY CALENDAR ─────────────────────────────────────────────── */}
+      {tab === 'buy' && (
+        actions
+          ? actions.buy.length === 0
+            ? <p className="text-[13px] text-muted-foreground">
+                Nothing to order. Past the threshold is not by itself a reason to buy — a client
+                only appears here when the burn is visibly costing replies, or runway is under
+                two months.
+              </p>
+            : <>
+                <DataTable
+                  columns={[
+                    { key: 'order_by', header: 'Order by', cell: (r: BuyRow) => r.overdue
+                        ? <StatusBadge status="error">{r.order_by} overdue</StatusBadge>
+                        : <span className="font-mono text-[12px]">{r.order_by}</span>,
+                      sortValue: (r: BuyRow) => r.order_by,
+                      tip: 'The date the order must be placed. A new mailbox cannot carry load for 20 days (14 warmup + ~6 ramp), so this is always the needed date minus 20.' },
+                    { key: 'client', header: 'Client', cell: (r: BuyRow) => r.client, sortValue: (r: BuyRow) => r.client },
+                    { key: 'mailboxes_needed', header: 'Mbx', numeric: true, cell: (r: BuyRow) => r.mailboxes_needed, sortValue: (r: BuyRow) => r.mailboxes_needed },
+                    { key: 'domains_needed', header: 'Domains', numeric: true, cell: (r: BuyRow) => r.domains_needed, sortValue: (r: BuyRow) => r.domains_needed,
+                      tip: 'At 3 mailboxes per domain, the house standard.' },
+                    { key: 'est_cost', header: 'Est. cost', numeric: true, cell: (r: BuyRow) => `£${r.est_cost.toLocaleString()}`, sortValue: (r: BuyRow) => r.est_cost,
+                      tip: 'Rough first-year cost: £5.30 per domain plus £2.50 per mailbox per month.' },
+                    { key: 'note', header: 'Why', cell: (r: BuyRow) => <span className="text-muted-foreground">{r.note}</span> },
+                  ] as Column<BuyRow>[]}
+                  rows={actions.buy} getRowKey={r => r.client} dense />
+                <p className="mt-3 text-[12px] text-muted-foreground">
+                  Total if every line is ordered: <b>£{actions.buy_total.toLocaleString()}</b>. Batch
+                  orders to billing renewal dates — replacing on day 10 of a billing month wastes 20
+                  days of the old unit. Nothing here is ordered automatically.
+                </p>
+              </>
+          : <p className="text-[13px] text-muted-foreground">Loading…</p>
+      )}
+
+      {/* ── PLACEMENT ────────────────────────────────────────────────── */}
+      {tab === 'placement' && (
+        placement
+          ? placement.mailboxes.length === 0
+            ? <p className="text-[13px] text-muted-foreground">
+                No generic-content placement results stored yet. Only tests with <b>generic</b> in
+                the name count — a test sent with live campaign copy measures the copy, not the
+                mailbox, so a spam result there could condemn a healthy mailbox.
+              </p>
+            : <>
+                {placement.flagged > 0 && (
+                  <div className="mb-4 rounded-md border border-red-500/30 bg-red-500/10 p-3 text-[13px]">
+                    <b>{placement.flagged} mailbox{placement.flagged > 1 ? 'es' : ''} landing in spam</b> at
+                    or above {placement.thresholds.spam_flag_pct}%. Measured, not inferred — these are
+                    not being seen at all.
+                  </div>
+                )}
+                <DataTable
+                  columns={[
+                    { key: 'email', header: 'Mailbox', cell: (r: PlacementRow) => <span className="font-mono text-[12px]">{r.email}</span>, sortValue: (r: PlacementRow) => r.email },
+                    { key: 'client', header: 'Client', cell: (r: PlacementRow) => r.client, sortValue: (r: PlacementRow) => r.client },
+                    { key: 'seeds', header: 'Seeds', numeric: true, cell: (r: PlacementRow) => r.seeds, sortValue: (r: PlacementRow) => r.seeds,
+                      tip: `Test emails sent to known inboxes, pooled over ${placement.thresholds.pool_days} days. Fewer than ${placement.thresholds.min_seeds} is too few to judge — one run gives only about 2 seeds per mailbox.` },
+                    { key: 'inbox_pct', header: 'Inbox', numeric: true,
+                      cell: (r: PlacementRow) => !r.judgeable ? <span className="text-muted-foreground">—</span>
+                        : <StatusBadge status={(r.inbox_pct ?? 0) >= 90 ? 'ok' : (r.inbox_pct ?? 0) >= 75 ? 'warn' : 'error'}>{r.inbox_pct}%</StatusBadge>,
+                      sortValue: (r: PlacementRow) => r.inbox_pct ?? -1,
+                      tip: 'Share of test emails that reached the inbox. This is measured, not inferred from reply behaviour.' },
+                    { key: 'spam_pct', header: 'Spam', numeric: true,
+                      cell: (r: PlacementRow) => !r.judgeable ? <span className="text-muted-foreground">insufficient</span>
+                        : (r.spam_pct ?? 0) >= placement.thresholds.spam_flag_pct
+                          ? <span className="font-medium text-red-500">{r.spam_pct}%</span> : `${r.spam_pct}%`,
+                      sortValue: (r: PlacementRow) => r.spam_pct ?? -1 },
+                    { key: 'tested_at', header: 'Tested', cell: (r: PlacementRow) => <span className="font-mono text-[12px]">{String(r.tested_at ?? '').slice(0, 10)}</span>, sortValue: (r: PlacementRow) => String(r.tested_at ?? '') },
+                  ] as Column<PlacementRow>[]}
+                  rows={placement.mailboxes} getRowKey={r => r.email} dense />
+                {placement.by_recipient.length > 0 && (
+                  <>
+                    <h3 className="mb-2 mt-6 text-[13px] font-semibold">Sender → recipient</h3>
+                    <DataTable
+                      columns={[
+                        { key: 'sender_provider', header: 'Sender', cell: (r: { sender_provider: string }) => String(r.sender_provider).replace(/_WORKSPACE|_ACCOUNT/g, ''), sortValue: (r: { sender_provider: string }) => r.sender_provider },
+                        { key: 'rec_type', header: 'Recipient', cell: (r: { rec_type: string }) => r.rec_type, sortValue: (r: { rec_type: string }) => r.rec_type },
+                        { key: 'seeds', header: 'Seeds', numeric: true, cell: (r: { seeds: number }) => r.seeds, sortValue: (r: { seeds: number }) => r.seeds },
+                        { key: 'inbox_pct', header: 'Inbox', numeric: true,
+                          cell: (r: { inbox_pct: number | null }) => <StatusBadge status={(r.inbox_pct ?? 0) >= 90 ? 'ok' : (r.inbox_pct ?? 0) >= 75 ? 'warn' : 'error'}>{r.inbox_pct}%</StatusBadge>,
+                          sortValue: (r: { inbox_pct: number | null }) => r.inbox_pct ?? -1,
+                          tip: 'Placement differs by recipient provider, which is the whole basis of ESP matching. A mailbox can inbox reliably at one provider and land in spam at another.' },
+                      ] as Column<{ sender_provider: string; rec_type: string; seeds: number; inbox_pct: number | null }>[]}
+                      rows={placement.by_recipient} getRowKey={r => r.sender_provider + r.rec_type} dense />
+                  </>
+                )}
+              </>
+          : <p className="text-[13px] text-muted-foreground">Loading placement results…</p>
+      )}
+
+      {/* ── MANAGE CLIENTS ───────────────────────────────────────────── */}
+      {tab === 'manage' && (
+        states
+          ? <>
+              <p className="mb-4 text-[12.5px] text-muted-foreground">
+                <b>Paused</b> keeps a client visible but stops them raising actions, buy-calendar
+                lines and warnings — they are not sending, so they cannot be failing.
+                <b> Removed</b> hides them from every view and from estate totals.
+                Neither changes anything in PlusVibe, and history is always kept: restore a client
+                and their past numbers come back with them.
+              </p>
+              <DataTable
+                columns={[
+                  { key: 'client', header: 'Client', cell: (r: StateRow) => (
+                      <span>{r.client}{r.note && <span className="ml-2 text-[11px] text-muted-foreground">{r.note}</span>}</span>
+                    ), sortValue: (r: StateRow) => r.client },
+                  { key: 'mailboxes', header: 'Mbx', numeric: true, cell: (r: StateRow) => r.mailboxes, sortValue: (r: StateRow) => r.mailboxes },
+                  { key: 'state', header: 'State', cell: (r: StateRow) => (
+                      <StatusBadge status={r.state === 'active' ? 'ok' : r.state === 'paused' ? 'warn' : 'error'}>{r.state}</StatusBadge>
+                    ), sortValue: (r: StateRow) => r.state,
+                    tip: 'active: normal. paused: still ours, not sending, raises no actions. removed: gone, hidden everywhere, history kept.' },
+                  { key: 'set', header: 'Change to', cell: (r: StateRow) => (
+                      <span className="flex justify-end gap-1">
+                        {(['active', 'paused', 'removed'] as const).filter(x => x !== r.state).map(x => (
+                          <button key={x} disabled={busy === r.client}
+                            onClick={() => setClientState(r.client, x)}
+                            className="rounded-md border border-border bg-card px-2 py-0.5 text-[11px] hover:bg-accent disabled:opacity-40">
+                            {x === 'active' ? 'restore' : x}
+                          </button>
+                        ))}
+                      </span>
+                    ), numeric: true },
+                ] as Column<StateRow>[]}
+                rows={states.clients} getRowKey={r => r.client} dense />
+            </>
+          : <p className="text-[13px] text-muted-foreground">Loading clients…</p>
       )}
 
       {tab === 'trend' && ov && (

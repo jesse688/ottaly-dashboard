@@ -34,8 +34,11 @@ interface EventRow {
 }
 
 export async function GET(req: NextRequest) {
-  const days = Math.min(365, Math.max(1, Number(req.nextUrl.searchParams.get('days')) || 30))
   const client = req.nextUrl.searchParams.get('client') || null
+  // Explicit start/end (from the period filter) wins; days is the fallback.
+  const start = req.nextUrl.searchParams.get('start')
+  const end = req.nextUrl.searchParams.get('end')
+  const days = Math.min(365, Math.max(1, Number(req.nextUrl.searchParams.get('days')) || 30))
   try {
     const rows = await q<EventRow>(
       `SELECT e.raw->>'msg'          AS msg,
@@ -50,10 +53,14 @@ export async function GET(req: NextRequest) {
             WHERE workspace_id = e.workspace_id LIMIT 1
          ) m ON TRUE
         WHERE e.event_type = 'bounce'
-          AND e.event_at >= now() - ($1::int || ' days')::interval
+          AND (
+            CASE WHEN $3::text IS NOT NULL
+                 THEN e.event_at >= $3::date AND e.event_at < ($4::date + 1)
+                 ELSE e.event_at >= now() - ($1::int || ' days')::interval
+            END)
           AND COALESCE(e.raw->>'msg', '') <> ''
           AND ($2::text IS NULL OR m.workspace_name = $2)`,
-      [days, client], { tag: 'mailbox-health:bounces' },
+      [days, client, start, end], { tag: 'mailbox-health:bounces' },
     )
 
     const classified = classifyAll(rows)
@@ -129,8 +136,67 @@ export async function GET(req: NextRequest) {
 
     const worstTenantDay = tenantDays[0] ?? null
 
+    // ── what to actually DO ───────────────────────────────────────────────
+    // A cause total is not actionable: "149 spam content" does not tell you
+    // which mailbox to touch. Each item below names the mailboxes and the one
+    // thing to do about them, grouped by the response they need rather than by
+    // the error code that produced them.
+    const byAction = new Map<string, { action: string; bounces: number; mailboxes: Map<string, number>; clients: Set<string> }>()
+    for (const b of classified) {
+      if (!b.sending_fault) continue
+      const a = byAction.get(b.action) ?? {
+        action: b.action, bounces: 0, mailboxes: new Map<string, number>(), clients: new Set<string>(),
+      }
+      a.bounces++
+      if (b.sender_email) a.mailboxes.set(b.sender_email, (a.mailboxes.get(b.sender_email) ?? 0) + 1)
+      const ws = (b as ClassifiedBounce & { workspace_name?: string }).workspace_name
+      if (ws) a.clients.add(ws)
+      byAction.set(b.action, a)
+    }
+
+    const DO: Record<string, { label: string; what: string }> = {
+      reduce_volume: {
+        label: 'Lower the volume',
+        what: 'The tenant ceiling is shared, so cut total daily sending across these clients '
+          + 'rather than pausing one. Pausing a single client frees headroom the others consume.',
+      },
+      retire_domain: {
+        label: 'Retire these domains',
+        what: 'The domain is on a public blocklist. No amount of volume reduction helps — '
+          + 'take it out of rotation and replace it.',
+      },
+      fix_dns: {
+        label: 'Fix DNS / auth',
+        what: 'The domain fails its own published policy, or the receiving server will not '
+          + 'relay for it. Every send bounces regardless of rate.',
+      },
+      fix_content: {
+        label: 'Copy or reputation',
+        what: 'The receiving side judged the message, not the rate. Check the copy against '
+          + 'these mailboxes before changing any sending settings.',
+      },
+    }
+
+    const todo = [...byAction.values()]
+      .map(a => {
+        const worst = [...a.mailboxes.entries()].sort((x, y) => y[1] - x[1])
+        return {
+          action: a.action,
+          label: DO[a.action]?.label ?? a.action,
+          what_to_do: DO[a.action]?.what ?? '',
+          bounces: a.bounces,
+          mailboxes: a.mailboxes.size,
+          clients: [...a.clients].sort(),
+          // Named, so there is something to click through to.
+          worst_mailboxes: worst.slice(0, 15).map(([email, n]) => ({ email, bounces: n })),
+        }
+      })
+      .sort((a, b) => b.bounces - a.bounces)
+
     return NextResponse.json({
       days,
+      range: start && end ? { start, end } : null,
+      todo,
       focus: client,
       thresholds: { tenant_alert: TENANT_ALERT, min_sends: MIN_SENDS },
       total: classified.length,

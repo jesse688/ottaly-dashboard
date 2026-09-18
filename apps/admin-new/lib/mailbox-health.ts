@@ -107,6 +107,34 @@ export function ensureSchema(): Promise<void> {
         errors      integer,
         note        text
       )`)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS mbx_placement (
+        test_id   text NOT NULL,
+        email     text NOT NULL,
+        rec_type  text NOT NULL,
+        sent      integer NOT NULL DEFAULT 0,
+        inbox     integer NOT NULL DEFAULT 0,
+        spam      integer NOT NULL DEFAULT 0,
+        promotion integer NOT NULL DEFAULT 0,
+        missing   integer NOT NULL DEFAULT 0,
+        tested_at timestamptz,
+        PRIMARY KEY (test_id, email, rec_type)
+      )`)
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_mbx_placement_email ON mbx_placement (email)`)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS mbx_placement_run (
+        test_id      text PRIMARY KEY,
+        parent_id    text,
+        workspace_id text,
+        name         text,
+        status       text,
+        sent         integer,
+        inbox        integer,
+        inbox_pct    numeric,
+        spam_pct     numeric,
+        created_at   timestamptz,
+        fetched_at   timestamptz NOT NULL DEFAULT now()
+      )`)
     // mailbox_full is shared with mailbox-sync; only ever ADD to it.
     for (const col of ['flagged_reason text', 'flagged_at timestamptz', 'paused_at timestamptz']) {
       await pool.query(`ALTER TABLE mailbox_full ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {})
