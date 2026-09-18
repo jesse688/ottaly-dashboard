@@ -14,6 +14,14 @@ export interface Column<T> {
   /** right-align + tabular-nums for numeric columns */
   numeric?: boolean
   className?: string
+  /**
+   * Plain-English explanation of what the column means, shown on hover.
+   *
+   * Column headers are necessarily terse, and a name like "Runway" or
+   * "Past thr." is only obvious once you already know the system. Optional, so
+   * existing tables are unaffected.
+   */
+  tip?: string
 }
 
 export function DataTable<T>({
@@ -74,7 +82,25 @@ export function DataTable<T>({
                   )}
                 >
                   <span className={cn('inline-flex items-center gap-1', col.numeric && 'flex-row-reverse')}>
-                    {col.header}
+                    {col.tip ? (
+                      // group/tip rather than a bare `group`, so a tooltip is
+                      // not triggered by hovering some other grouped ancestor.
+                      <span className="group/tip relative cursor-help border-b border-dotted border-muted-foreground/50">
+                        {col.header}
+                        <span
+                          role="tooltip"
+                          className={cn(
+                            'pointer-events-none absolute top-[calc(100%+6px)] z-30 w-64 rounded-md border border-border',
+                            'bg-popover p-2.5 text-[12px] font-normal normal-case leading-snug tracking-normal',
+                            'text-popover-foreground opacity-0 shadow-lg transition-opacity',
+                            'group-hover/tip:opacity-100',
+                            col.numeric ? 'right-0' : 'left-0',
+                          )}
+                        >
+                          {col.tip}
+                        </span>
+                      </span>
+                    ) : col.header}
                     {col.sortValue && (
                       sortKey === col.key
                         ? (dir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />)

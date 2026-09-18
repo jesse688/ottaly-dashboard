@@ -6,7 +6,11 @@ const SECRET = new TextEncoder().encode(
 )
 const COOKIE = 'ottaly_session'
 
-const PUBLIC_PATHS = ['/login', '/api/auth', '/api/healthz']
+// PlusVibe posts bounce webhooks to /api/mailbox-health/bounce-webhook
+// unauthenticated, so it has to be reachable without a session. The route
+// validates callers itself against PV_WEBHOOK_SECRET and only ever INSERTs a
+// bounce event — it reads nothing and changes no settings.
+const PUBLIC_PATHS = ['/login', '/api/auth', '/api/healthz', '/api/mailbox-health/bounce-webhook']
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl
