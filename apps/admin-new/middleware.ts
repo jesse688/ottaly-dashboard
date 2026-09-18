@@ -53,6 +53,10 @@ const PUBLIC_PATHS = [
   // checks ADMIN_KEY, and only ever INSERTs a bounce event — it reads nothing
   // and returns no client data.
   '/api/mailbox-health/bounce-webhook',
+  // One-off history import. Validates ?key=ADMIN_KEY itself, same as
+  // esp-matching/enforce — it exists so a write-capable database credential
+  // never has to leave the server.
+  '/api/mailbox-health/import-history',
 ]
 
 function matchesPrefix(pathname: string, paths: string[]): boolean {
