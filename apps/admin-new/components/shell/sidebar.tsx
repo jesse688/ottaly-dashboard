@@ -28,6 +28,7 @@ const CATEGORIES: Category[] = [
     items: [
       { href: '/domains', label: 'Domains' },
       { href: '/mailboxes', label: 'Mailboxes' },
+      { href: '/mailbox-health', label: 'Mailbox Health' },
       { href: '/capacity', label: 'Capacity' },
       { href: '/warmup', label: 'Warmup' },
       { href: '/apollo-prep', label: 'Apollo Prep' },
