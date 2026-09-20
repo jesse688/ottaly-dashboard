@@ -25,6 +25,33 @@
 import pool from './db'
 import { mcpCall } from './pv-mcp'
 
+/**
+ * Did an MCP write fail?
+ *
+ * This replaced `JSON.stringify(res).includes('error')`, which was a substring
+ * test over the WHOLE serialised response. A perfectly successful PlusVibe
+ * payload containing `"errors": 0`, an `error_count` field, or any message
+ * mentioning the word scored as a failure. That mattered more than a wrong
+ * counter: the database mirror was gated on the same flag, so a mailbox could
+ * be paused in PlusVibe while the dashboard still showed it sending.
+ *
+ * mcpCall already THROWS on transport and JSON-RPC errors, so anything that
+ * gets here is a response. Only an explicit error field counts as a failure.
+ */
+function mcpFailed(res: unknown): boolean {
+  if (res === null || res === undefined) return true
+  if (typeof res !== 'object') return false
+  const r = res as Record<string, unknown>
+  // pv-mcp falls back to { raw: text } when the body will not parse; that text
+  // is the only case where scanning for a message is the best we can do.
+  if (typeof r.raw === 'string') return /\b(error|failed|unauthori[sz]ed)\b/i.test(r.raw)
+  if (r.error !== undefined && r.error !== null && r.error !== false) return true
+  if (Array.isArray(r.errors) && r.errors.length > 0) return true
+  if (typeof r.success === 'boolean') return !r.success
+  if (typeof r.status === 'string' && /^(error|failed)$/i.test(r.status)) return true
+  return false
+}
+
 /** What a change did, so the UI can report it honestly. */
 export interface ChangeResult {
   dry_run: boolean
@@ -111,6 +138,11 @@ async function writeLimit(
   }
 
   let changed = 0, failed = 0
+  // Only the emails PlusVibe actually accepted. Mirroring the write to every
+  // target instead was how 150 mailboxes could read "paused" here while still
+  // sending at full rate in PlusVibe — and resolveTarget filters on
+  // daily_limit > 0, so they would never be re-selected to try again.
+  const done: string[] = []
   for (const [ws, list] of byWs) {
     for (let i = 0; i < list.length; i += 100) {
       const chunk = list.slice(i, i + 100)
@@ -120,8 +152,12 @@ async function writeLimit(
           ids: chunk.map(c => c.account_id),
           daily_limit: to,
         })
-        if (res && !JSON.stringify(res).includes('error')) changed += chunk.length
-        else failed += chunk.length
+        if (mcpFailed(res)) {
+          failed += chunk.length
+        } else {
+          changed += chunk.length
+          for (const c of chunk) done.push(c.email)
+        }
       } catch {
         failed += chunk.length
       }
@@ -130,15 +166,15 @@ async function writeLimit(
 
   // Keep our copy in step so the page does not show a stale limit until the
   // next sync.
-  if (changed > 0) {
+  if (done.length) {
     await pool.query(
       `UPDATE mailbox_full SET daily_limit = $1 WHERE email = ANY($2::text[])`,
-      [to, targets.map(t => t.email)],
+      [to, done],
     ).catch(() => {})
     if (to === 0) {
       await pool.query(
         `UPDATE mailbox_full SET paused_at = now() WHERE email = ANY($1::text[])`,
-        [targets.map(t => t.email)],
+        [done],
       ).catch(() => {})
     }
   }
@@ -205,8 +241,8 @@ export async function randomiseLimits(pct: number, apply: boolean, client?: stri
           ids: chunk.map(c => c.account_id),
           bulk_limit_rand_pct: value,
         })
-        if (res && !JSON.stringify(res).includes('error')) changed += chunk.length
-        else failed += chunk.length
+        if (mcpFailed(res)) failed += chunk.length
+        else changed += chunk.length
       } catch {
         failed += chunk.length
       }
@@ -260,8 +296,8 @@ export async function setRestCycle(
           bulk_auto_pause_send_days: sendDays,
           bulk_auto_pause_days: restDays,
         })
-        if (res && !JSON.stringify(res).includes('error')) changed += chunk.length
-        else failed += chunk.length
+        if (mcpFailed(res)) failed += chunk.length
+        else changed += chunk.length
       } catch {
         failed += chunk.length
       }

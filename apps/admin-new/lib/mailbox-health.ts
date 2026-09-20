@@ -298,9 +298,29 @@ export async function ingest(mode: 'backfill' | 'nightly' = 'nightly', only?: st
       stats.workspaces++
       stats.mailboxes += accounts.rowCount
 
-      const from = mode === 'backfill'
+      // A workspace with no banked history gets backfilled even on a nightly
+      // run, whatever the mode.
+      //
+      // WHY. Nightly only ever looks back 6 days, and backfill was a one-off
+      // manual run. Any client onboarded afterwards was therefore invisible
+      // forever: measured 2026-09-20, Bruud had 10,282 sends over 90 days in
+      // PlusVibe and ZERO rows here. It had stopped sending before the 6-day
+      // window opened, so nightly saw nothing and always would. PlusVibe caps
+      // ranges at 90 days, so that history was days from being unrecoverable.
+      const banked = await pool.query<{ n: string }>(
+        `SELECT COUNT(*) AS n FROM mbx_daily d
+           JOIN mailbox_full m ON m.email = d.email
+          WHERE m.workspace_id = $1`,
+        [ws.workspace_id],
+      ).catch(() => null)
+      const isNew = Number(banked?.rows[0]?.n ?? 0) === 0
+
+      const from = (mode === 'backfill' || isNew)
         ? new Date(ws.oldest ?? Date.now() - 365 * 86400000)
         : new Date(Date.now() - 6 * 86400000)
+      if (isNew && mode === 'nightly') {
+        console.log(`[mailbox-health] ${ws.workspace_name}: no history, backfilling`)
+      }
       const wins = windows(from, new Date())
       const byId = new Map(accounts.rows.map(a => [a.account_id, a.email.toLowerCase()]))
       const ids = accounts.rows.map(a => a.account_id)
@@ -380,33 +400,78 @@ export async function ingest(mode: 'backfill' | 'nightly' = 'nightly', only?: st
 const FLAG = '__ottalyMailboxHealthStarted'
 let jobRunning = false
 
-async function tick(mode: 'backfill' | 'nightly') {
-  if (jobRunning) return
+/** Has a nightly ingest already succeeded today (UTC)? */
+async function ranToday(): Promise<boolean> {
+  const r = await pool.query<{ n: string }>(
+    `SELECT COUNT(*) AS n FROM mbx_ingest_run
+      WHERE finished_at IS NOT NULL AND finished_at >= date_trunc('day', now())`,
+  ).catch(() => null)
+  return Number(r?.rows[0]?.n ?? 0) > 0
+}
+
+/**
+ * One attempt. Returns false when it deliberately stood down, so the caller
+ * knows to come back rather than write the day off.
+ *
+ * WHY THIS RETRIES. It used to `return` on pvBulkActive() with nothing
+ * scheduled but the next 24h interval. mailbox-sync re-arms a 30-MINUTE bulk
+ * claim every 30 MINUTES (pv-gate BULK_STALE_MS === mailbox-sync's interval),
+ * so that flag is set nearly always and whether the daily tick ever landed in
+ * a gap was pure luck. Measured result: no ingest at all after 2026-09-19.
+ */
+async function tick(mode: 'backfill' | 'nightly', force = false): Promise<boolean> {
+  if (jobRunning) return false
+  if (!force && await ranToday()) return true
   // Stand down while a bulk job owns the PV queue — mailbox-sync makes ~1,700
-  // calls per cycle and there is no point competing with it.
-  if (pvBulkActive()) return
+  // calls per cycle and there is no point competing with it. The caller retries.
+  if (!force && pvBulkActive()) return false
   jobRunning = true
   try {
     const r = await ingest(mode)
     console.log(`[mailbox-health] ${mode}: ${r.mailboxes} mailboxes, `
       + `${r.dayRows} day rows, ${r.errors} errors`)
+    return true
   } catch (err) {
     console.error('[mailbox-health] ingest failed:', err)
+    return false
   } finally {
     jobRunning = false
   }
 }
 
+/** Manual/API entry point. `force` skips the bulk-active and ran-today guards. */
+export async function runIngestNow(
+  mode: 'backfill' | 'nightly' = 'nightly',
+  force = true,
+): Promise<boolean> {
+  return tick(mode, force)
+}
+
+const RETRY_MS = 20 * 60 * 1000
+
 export function startMailboxHealthInterval(): void {
   const g = globalThis as Record<string, unknown>
   if (g[FLAG]) return
   g[FLAG] = true
-  // Stagger past boot and past mailbox-sync's own 15s first run.
-  setTimeout(() => { void tick('nightly') }, 90_000)
-  // Daily. PlusVibe's underlying data is daily, so a finer interval cannot
-  // produce new numbers — it would only spend calls against the shared gate.
-  setInterval(() => { void tick('nightly') }, 24 * 60 * 60 * 1000)
-  console.log('[mailbox-health] interval started (nightly ingest, daily)')
+
+  // Keep trying until the day's ingest is banked, then idle until tomorrow.
+  // A fixed 24h setInterval also drifts with every container restart, which is
+  // how runs landed at 14:50 and then 21:05 and then not at all.
+  const attempt = () => {
+    void tick('nightly').then(done => {
+      setTimeout(attempt, done ? sleepUntilTomorrow() : RETRY_MS)
+    })
+  }
+  setTimeout(attempt, 90_000)
+  console.log('[mailbox-health] scheduler started (daily, retries every 20m)')
+}
+
+/** ms until just after the next UTC midnight, so each day gets one run. */
+function sleepUntilTomorrow(): number {
+  const now = new Date()
+  const next = new Date(Date.UTC(
+    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 5, 0))
+  return Math.max(60_000, next.getTime() - now.getTime())
 }
 
 if (typeof window === 'undefined' && typeof global !== 'undefined') {

@@ -17,22 +17,52 @@ import { q } from './query'
 import { BURN_THRESHOLD, MIN_JUDGE } from './mailbox-health'
 
 /**
- * The most recent window per mailbox, one row each.
+ * The widest recent window per mailbox, one row each. Every "90d" figure on
+ * the page reads from here.
  *
- * A mailbox can hold several windows sharing an end_date: a backfill banks 90
- * days ending today, and that night's run banks 7 days ending today too.
- * Selecting on MAX(end_date) alone matches both and silently DOUBLES every
- * count joined against it — Lending Team read 174 mailboxes against an actual
- * 87. Ranking by span picks the widest window for that end date, which is the
- * one the 90-day figures are meant to read.
+ * TWO bugs have been fixed in this ranking, and they pull in opposite
+ * directions. Keep both in mind before touching the ORDER BY.
+ *
+ *   1. DOUBLE-COUNTING. A mailbox can hold several windows sharing an
+ *      end_date: a backfill banks 90 days ending today, and that night's run
+ *      banks 7 days ending today too. MAX(end_date) alone matches both and
+ *      silently DOUBLES every count joined against it — Lending Team read 174
+ *      mailboxes against an actual 87.
+ *
+ *   2. UNDER-REPORTING (worse, and what SPAN_FLOOR fixes). Ranking by
+ *      end_date FIRST means a nightly 6-day window, which always has the
+ *      newest end_date, beats the backfill's 90-day window every time.
+ *      Measured 2026-09-20: 1,608 of 1,656 mailboxes were serving a 6-day
+ *      window as their "90d" figure. Consequences, both silent:
+ *        - judgeable() filters contacted >= 100; a 6-day window rarely gets
+ *          there, so the mailbox list returned ZERO rows against a true 377.
+ *        - rankByUrgency divides sent_90d by 90, so burn read ~13x low and
+ *          runway ~13x high. Nothing ever tripped the <3 month warning and
+ *          the buy calendar stayed empty.
+ *
+ * So: prefer a window that is actually long enough to mean "90d"
+ * (SPAN_FLOOR), and only among those take the most recent. The final
+ * (end_date - start_date) DESC still settles ties within one end_date, which
+ * is what keeps bug 1 fixed.
+ *
+ * The COALESCE fallback matters: a brand-new client has only ever had short
+ * windows banked, and showing it with no numbers at all is worse than showing
+ * it with narrow ones. is_full_window tells the caller which it got.
  */
+const SPAN_FLOOR = 60
+
 const LATEST_WINDOW = `
   SELECT email, sent, contacted, ooo, replies, positive, bounce,
-         recipient_bounce, sender_bounce
+         recipient_bounce, sender_bounce, span_days,
+         (span_days >= ${SPAN_FLOOR}) AS is_full_window
     FROM (
-      SELECT w.*, ROW_NUMBER() OVER (
+      SELECT w.*,
+             (w.end_date - w.start_date) AS span_days,
+             ROW_NUMBER() OVER (
                PARTITION BY email
-               ORDER BY end_date DESC, (end_date - start_date) DESC
+               ORDER BY ((w.end_date - w.start_date) >= ${SPAN_FLOOR}) DESC,
+                        end_date DESC,
+                        (w.end_date - w.start_date) DESC
              ) AS rn
         FROM mbx_window w
     ) ranked
@@ -54,6 +84,10 @@ export interface ClientRow {
   past_threshold: number
   sent_90d: number
   contacted_90d: number
+  /** Real days the 90d figures cover. Rates and burn divide by this. */
+  window_days: number
+  /** Mailboxes whose window is genuinely wide enough to call "90d". */
+  full_window_mbx: number
   ooo_90d: number
   replies_90d: number
   positive_90d: number
@@ -78,6 +112,11 @@ export async function clientSummary(client?: string): Promise<ClientRow[]> {
             COUNT(*) FILTER (WHERE COALESCE(cum.lifetime_sends,0) >= ${BURN_THRESHOLD}) AS past_threshold,
             COALESCE(SUM(win.sent), 0)                        AS sent_90d,
             COALESCE(SUM(win.contacted), 0)                   AS contacted_90d,
+            -- The real span the sent_90d figure covers. Burn rate divides by
+            -- this, never by a hardcoded 90: a client whose mailboxes have
+            -- only ever banked short windows would otherwise read ~13x low.
+            COALESCE(ROUND(AVG(win.span_days + 1)), 90)       AS window_days,
+            COUNT(*) FILTER (WHERE win.is_full_window)        AS full_window_mbx,
             COALESCE(SUM(win.ooo), 0)                         AS ooo_90d,
             COALESCE(SUM(win.replies), 0)                     AS replies_90d,
             COALESCE(SUM(win.positive), 0)                    AS positive_90d,
@@ -107,6 +146,8 @@ export async function clientSummary(client?: string): Promise<ClientRow[]> {
     past_threshold: Number(r.past_threshold),
     sent_90d: Number(r.sent_90d),
     contacted_90d: Number(r.contacted_90d),
+    window_days: Number(r.window_days ?? 90),
+    full_window_mbx: Number(r.full_window_mbx ?? 0),
     ooo_90d: Number(r.ooo_90d),
     replies_90d: Number(r.replies_90d),
     positive_90d: Number(r.positive_90d),
@@ -138,7 +179,11 @@ export interface RankedClient extends ClientRow {
  */
 export function rankByUrgency(rows: ClientRow[]): RankedClient[] {
   const scored = rows.map(r => {
-    const perDay = (r.sent_90d || 0) / Math.max(1, r.mailboxes) / 90
+    // Divide by the window's REAL span, not 90. Reading a 7-day window as if
+    // it were 90 days understated burn ~13x and pushed runway far enough out
+    // that no client ever tripped the <3 month warning.
+    const days = Math.max(1, r.window_days || 90)
+    const perDay = (r.sent_90d || 0) / Math.max(1, r.mailboxes) / days
     const past = (r.avg_cum || 0) >= BURN_THRESHOLD
     const remaining = Math.max(0, BURN_THRESHOLD - (r.avg_cum || 0))
     const runway = past ? 0 : (perDay > 0 ? remaining / perDay / 30 : null)
