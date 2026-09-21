@@ -62,8 +62,11 @@ async function resolveTarget(target: string, client?: string): Promise<string[]>
           AND m.daily_limit > 0
           AND m.ignored_at IS NULL
           AND ($1::text IS NULL OR m.workspace_name = $1)
+          -- SURBL deliberately excluded: it lists URLs in message BODIES,
+          -- not sending domains, and its public zone no longer answers, so a
+          -- listing cannot be verified. See lib/bounce-classify.ts.
           AND (e.raw->>'msg' ILIKE '%5.7.233%'
-            OR e.raw->>'msg' ILIKE '%spamhaus%' OR e.raw->>'msg' ILIKE '%surbl%'
+            OR e.raw->>'msg' ILIKE '%spamhaus%'
             OR e.raw->>'msg' ILIKE '%5.7.350%' OR e.raw->>'msg' ILIKE '%5.7.509%'
             OR e.raw->>'msg' ILIKE '%access denied%')`,
       [client ?? null], { tag: 'mailbox-apply:target:bouncing' },
@@ -92,7 +95,10 @@ async function resolveTarget(target: string, client?: string): Promise<string[]>
           AND e.event_at >= now() - interval '30 days'
           AND m.daily_limit > 0 AND m.ignored_at IS NULL
           AND ($1::text IS NULL OR m.workspace_name = $1)
-          AND (e.raw->>'msg' ILIKE '%spamhaus%' OR e.raw->>'msg' ILIKE '%surbl%'
+          -- SURBL excluded here too: retiring a domain over an unverifiable
+          -- body-link listing is the most expensive wrong call this endpoint
+          -- could make.
+          AND (e.raw->>'msg' ILIKE '%spamhaus%'
             OR e.raw->>'msg' ILIKE '%5.7.509%' OR e.raw->>'msg' ILIKE '%does not pass DMARC%')`,
       [client ?? null], { tag: 'mailbox-apply:target:faulty' },
     )
@@ -111,13 +117,27 @@ export async function POST(req: NextRequest) {
       ? body.emails
       : body.target ? await resolveTarget(body.target, body.client) : []
 
+    // Every resolveTarget query filters on daily_limit > 0, so a target that
+    // resolves to nothing normally means the work is ALREADY DONE rather than
+    // that something failed. "no mailboxes selected" read as a bug and sent us
+    // hunting for one when all 9 tenant-limited mailboxes were already paused.
+    const nothingToDo = (verb: string) => NextResponse.json({
+      error: body.target
+        ? `Nothing to ${verb}: every mailbox behind this finding is already `
+          + 'paused or excluded. The finding counts bounces; the button only '
+          + 'acts on mailboxes that are still sending.'
+        : 'no mailboxes selected',
+      targeted: 0,
+      changed: 0,
+    }, { status: 400 })
+
     switch (body.action) {
       case 'pause':
-        if (!emails.length) return NextResponse.json({ error: 'no mailboxes selected' }, { status: 400 })
+        if (!emails.length) return nothingToDo('pause')
         return NextResponse.json(await pauseMailboxes(emails, reason, apply))
 
       case 'set_limit': {
-        if (!emails.length) return NextResponse.json({ error: 'no mailboxes selected' }, { status: 400 })
+        if (!emails.length) return nothingToDo('change')
         const to = Number(body.limit)
         if (!Number.isFinite(to) || to < 0) {
           return NextResponse.json({ error: 'limit must be a number >= 0' }, { status: 400 })
@@ -129,7 +149,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(await randomiseLimits(Number(body.pct ?? 40), apply, body.client))
 
       case 'rest': {
-        if (!emails.length) return NextResponse.json({ error: 'no mailboxes selected' }, { status: 400 })
+        if (!emails.length) return nothingToDo('rest')
         const send = Math.max(1, Math.min(60, Number(body.send_days ?? 10)))
         const rest = Math.max(1, Math.min(60, Number(body.rest_days ?? 7)))
         return NextResponse.json(await setRestCycle(emails, send, rest, apply))
