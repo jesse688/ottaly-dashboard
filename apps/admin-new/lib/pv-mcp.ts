@@ -72,12 +72,30 @@ async function connect(): Promise<void> {
 
 let callId = 1
 
-/** Call a PlusVibe MCP tool. Goes through the shared gate. */
+/**
+ * Call a PlusVibe MCP tool. Goes through the shared gate.
+ *
+ * `priority` jumps the gate's interactive queue. Every mcpCall is a WRITE a
+ * human clicked a button for, so it defaults to true.
+ *
+ * WHY: on 2026-09-21 a pause of 25 mailboxes reported "Changed 0 of 25. 25
+ * failed" while the identical call succeeded from a shell. Nothing was
+ * rejected -- a 1,626-mailbox backfill was running, PlusVibe was answering
+ * 429 (38 in one hour), and the write sat behind that background work until
+ * it exhausted its retries and returned null. A person waiting on a button
+ * must not queue behind a batch job.
+ *
+ * `label` names the caller in the thrown error, because a null return used to
+ * be indistinguishable from a genuine rejection and nothing was logged.
+ */
 export async function mcpCall<T = Record<string, unknown>>(
   tool: string,
   args: Record<string, unknown>,
+  opts: { priority?: boolean; label?: string } = {},
 ): Promise<T | null> {
-  if (!PV_KEY) return null
+  if (!PV_KEY) throw new Error('PlusVibe key not configured (PLUSVIBE_KEY)')
+  const who = opts.label ? `${opts.label}/${tool}` : tool
+  let lastReason = 'no attempts made'
   return pvGate(async () => {
     for (let attempt = 0; attempt < PV_MAX_RETRIES; attempt++) {
       try {
@@ -92,6 +110,7 @@ export async function mcpCall<T = Record<string, unknown>>(
         })
         if (res.status === 429) {
           const wait = PV_BASE_BACKOFF_MS * (attempt + 1)
+          lastReason = `PlusVibe rate limited (429) after ${attempt + 1} attempts`
           pvBackoffSignal(Math.max(wait, PV_COOLDOWN_MS))
           await new Promise(r => setTimeout(r, wait))
           continue
@@ -99,8 +118,10 @@ export async function mcpCall<T = Record<string, unknown>>(
         if (res.status === 400) {
           // Usually a dropped session; re-establish and retry once.
           session = null
+          lastReason = 'PlusVibe returned 400 (session dropped or bad request)'
           if (attempt < PV_MAX_RETRIES - 1) continue
         }
+        if (!res.ok) lastReason = `PlusVibe returned HTTP ${res.status}`
         const msg = parseSse(await res.text())
         const err = (msg as { error?: { message?: string } })?.error
         if (err) throw new Error(`${tool}: ${err.message}`)
@@ -118,10 +139,14 @@ export async function mcpCall<T = Record<string, unknown>>(
         }
         return ((msg as { result?: T })?.result ?? null)
       } catch (e) {
-        if (attempt >= PV_MAX_RETRIES - 1) throw e
+        lastReason = e instanceof Error ? e.message : String(e)
+        if (attempt >= PV_MAX_RETRIES - 1) throw new Error(`${who}: ${lastReason}`)
         await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)))
       }
     }
-    return null
-  })
+    // Retries exhausted. Throwing beats returning null: the caller used to
+    // score null as "failed" with no reason recorded anywhere, which is how a
+    // rate-limited pause looked identical to a rejected one.
+    throw new Error(`${who}: gave up after ${PV_MAX_RETRIES} attempts - ${lastReason}`)
+  }, opts.priority !== false)
 }
