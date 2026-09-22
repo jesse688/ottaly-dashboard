@@ -3063,6 +3063,14 @@ class PostgresDatabase {
     const batchSize = 1000;
     let inserted = 0;   // genuinely new rows
     let updated = 0;    // existing rows refreshed
+    // [{id, email, inserted}] — every row this call wrote, so a caller that
+    // imports and then pushes can get the ids without a DB query. Capped:
+    // a full-table CSV import is 1.4M rows and would hold ~180MB here, on a
+    // service that has died of process death before. The JSON import endpoint
+    // is capped at 25k rows per request, well inside this.
+    const TOUCHED_CAP = 50000;
+    const touched = [];
+    let touchedTruncated = false;
     let failed = 0;     // rows in a batch whose INSERT threw
 
     for (let i = 0; i < unique.length; i += batchSize) {
@@ -3187,13 +3195,18 @@ class PostgresDatabase {
           -- contacts and made freshness unmeasurable.
           imported_at         = CURRENT_TIMESTAMP,
           updated_at          = CURRENT_TIMESTAMP
-        RETURNING (xmax = 0) AS inserted;
+        RETURNING id, email, (xmax = 0) AS inserted;
       `;
 
       try {
         const result = await this.query(sql, values);
         for (const r of result.rows) {
           if (r.inserted) inserted++; else updated++;
+          // Callers that import and then immediately push need the ids back.
+          // Without them the only way to turn an import into a push was a
+          // direct DB query, which API callers do not have.
+          if (touched.length < TOUCHED_CAP) touched.push({ id: r.id, email: r.email, inserted: !!r.inserted });
+          else touchedTruncated = true;
         }
       } catch (err) {
         // A failed batch used to log only err.message and drop the rows on the
@@ -3213,7 +3226,7 @@ class PostgresDatabase {
 
     // `created` kept for backward-compat with the import endpoint, which adds
     // it to job.imported. We want it to mean "newly inserted" only now.
-    return { created: inserted, inserted, updated, withinBatchDupes, failed };
+    return { created: inserted, inserted, updated, withinBatchDupes, failed, touched, touchedTruncated };
   }
 
   // ── Saved views ─────────────────────────────────────────────
