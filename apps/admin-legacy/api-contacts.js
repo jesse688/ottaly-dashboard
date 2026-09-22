@@ -991,6 +991,90 @@ module.exports = (db) => {
     }
   });
 
+  // POST /api/contacts/import/json
+  // Body: { rows: [ ...GetLeads rows... ], source?, dryRun? }
+  //
+  // Bulk import for rows Claude pulled from GetLeads over MCP, so a CM can
+  // build a list in chat and have it land in contacts with tags, push history
+  // and the send guards all intact. Contacts stays the system of record; this
+  // is just another source feeding it, alongside apollo_csv and plusvibe.
+  //
+  // The upsert underneath (bulkCreateContacts) is COALESCE-guarded, so
+  // re-importing the same rows never overwrites a populated field with a
+  // blank. Running this twice is safe — it costs GetLeads credits, not data.
+  //
+  // dryRun=true maps and reports without writing, which is how the skill
+  // shows a CM what would land before spending anything.
+  router.post('/contacts/import/json', async (req, res) => {
+    try {
+      const { rows, dryRun } = req.body || {};
+      if (!Array.isArray(rows) || rows.length === 0) {
+        return res.status(400).json({ error: 'rows[] required' });
+      }
+      // express.json() is capped at 50mb; 25k rows sits well inside that and
+      // keeps one statement's parameter count sane. The caller pages.
+      const MAX_ROWS = 25000;
+      if (rows.length > MAX_ROWS) {
+        return res.status(413).json({
+          error: `Too many rows: ${rows.length}. Send at most ${MAX_ROWS} per request.`,
+        });
+      }
+
+      const { mapRows } = require('./getleads-mapper');
+      const { mapped, skippedNoEmail } = mapRows(rows);
+      if (!mapped.length) {
+        return res.status(400).json({
+          error: 'No rows had an email address',
+          received: rows.length, skippedNoEmail,
+        });
+      }
+
+      // Share the one job-title normaliser with the CSV path rather than
+      // reimplementing it in the mapper.
+      const { normalizeJobTitle } = ApolloCSVImporter;
+      for (const c of mapped) {
+        if (c.jobTitle) c.jobTitleCleaned = normalizeJobTitle(c.jobTitle);
+      }
+
+      // The push path rejects a contact with no industry, and a cold email
+      // needs both names. Report both up front so a thin pull is visible
+      // here rather than as a silent skip at push time.
+      const pushable = mapped.filter(c => c.industry && c.firstName && c.lastName).length;
+      const summary = {
+        received: rows.length,
+        mapped: mapped.length,
+        skippedNoEmail,
+        uniqueEmails: new Set(mapped.map(c => c.email)).size,
+        uniqueDomains: new Set(mapped.map(c => c.companyDomain).filter(Boolean)).size,
+        missingIndustry: mapped.filter(c => !c.industry).length,
+        missingName: mapped.filter(c => !(c.firstName && c.lastName)).length,
+        pushableNow: pushable,
+      };
+
+      if (dryRun) return res.json({ dryRun: true, ...summary });
+
+      const result = await db.bulkCreateContacts(req.workspaceId, mapped);
+      console.log(`[getleads] import: ${result.inserted} new, ${result.updated} updated, `
+        + `${result.failed} failed, ${skippedNoEmail} no-email, `
+        + `${pushable}/${mapped.length} pushable`);
+
+      res.json({
+        // A lost batch is reported, never inferred from arithmetic — the
+        // bulk upsert counts them for exactly this reason.
+        ok: result.failed === 0,
+        ...summary,
+        inserted: result.inserted,
+        updated: result.updated,
+        failed: result.failed,
+        withinBatchDupes: result.withinBatchDupes,
+        source: 'getleads',
+      });
+    } catch (err) {
+      console.error('[getleads] import failed:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // POST /api/import/batch
   router.post('/import/batch', async (req, res) => {
     try {
