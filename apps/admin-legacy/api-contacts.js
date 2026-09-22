@@ -1058,6 +1058,17 @@ module.exports = (db) => {
         + `${result.failed} failed, ${skippedNoEmail} no-email, `
         + `${pushable}/${mapped.length} pushable`);
 
+      // Return the contact ids. A caller that imports then pushes needs them,
+      // and without this the only way to get them was a direct DB query —
+      // which API callers (and CMs) do not have. `pushable_contact_ids` is the
+      // subset that will actually survive the push gate, so the caller can
+      // hand it straight to verify-and-push.
+      const byEmail = new Map((result.touched || []).map(t => [t.email, t.id]));
+      const pushableIds = mapped
+        .filter(c => c.industry && c.firstName && c.lastName)
+        .map(c => byEmail.get(c.email))
+        .filter(Boolean);
+
       res.json({
         // A lost batch is reported, never inferred from arithmetic — the
         // bulk upsert counts them for exactly this reason.
@@ -1068,6 +1079,12 @@ module.exports = (db) => {
         failed: result.failed,
         withinBatchDupes: result.withinBatchDupes,
         source: 'getleads',
+        contact_ids: (result.touched || []).map(t => t.id),
+        pushable_contact_ids: pushableIds,
+        // True only if the id list was capped (never at this endpoint's 25k
+        // row limit). If it is ever true, the ids are incomplete — say so
+        // rather than pushing a short list silently.
+        contact_ids_truncated: !!result.touchedTruncated,
       });
     } catch (err) {
       console.error('[getleads] import failed:', err);
