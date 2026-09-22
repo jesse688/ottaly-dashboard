@@ -17078,8 +17078,7 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
       // and means "count unverified as sendable". Mirroring `loose` here would
       // bypass the gate for every normal push and re-inflate the badge.
       if (c.source !== 'engine'
-          && ((!c.keywords || String(c.keywords).trim() === '')
-           || (!c.industry || String(c.industry).trim() === ''))) {
+          && (!c.industry || String(c.industry).trim() === '')) {
         skipped.missingEnrichment++; continue;
       }
 
@@ -17279,7 +17278,7 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
       if (!(c.first_name && c.first_name.trim()) || !(c.last_name && c.last_name.trim())) {
         skipped.missingName++; return false;
       }
-      if ((!c.keywords || c.keywords.trim() === '') || (!c.industry || c.industry.trim() === '')) {
+      if (!c.industry || c.industry.trim() === '') {
         skipped.missingEnrichment++; return false;
       }
       if (campaignNameLc && c.last_campaign_name
@@ -17875,7 +17874,7 @@ function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName
     if (!(c.first_name && c.first_name.trim()) || !(c.last_name && c.last_name.trim())) {
       skipped.missingName++; return false;
     }
-    if ((!c.keywords || c.keywords.trim() === '') || (!c.industry || c.industry.trim() === '')) {
+    if (!c.industry || c.industry.trim() === '') {
       skipped.missingEnrichment++; return false;
     }
     if (campaignNameLc && c.last_campaign_name && c.last_campaign_name.toLowerCase() === campaignNameLc) {
@@ -24583,14 +24582,17 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
         if (job.excludeMicrosoft && (c.mx_provider === 'email_outlook' || (!c.mx_provider && !job.loose))) {
           skipped.wrongProvider++; return false;
         }
-        // Enrichment gate is for Apollo-sourced contacts (which carry keywords +
-        // industry). Engine-scraped leads lack `keywords`. Gate on !looseHere
+        // Enrichment gate: industry only. `keywords` was dropped from this
+        // gate 2026-09-22 — it is never sent to PlusVibe (the PV lead payload
+        // has no keywords field; it was an EmailBison custom_variable), so
+        // requiring it blocked sendable contacts for no delivery benefit.
+        // Gate on !looseHere
         // (NOT just source) — staging's ON CONFLICT can leave an engine lead's
         // source non-engine, and keying only on c.source !== 'engine' let this
         // gate silently drop loose engine pushes. looseHere already covers both
         // the loose flag and source='engine'.
         if (!looseHere
-            && ((!c.keywords || c.keywords.trim() === '') || (!c.industry || c.industry.trim() === ''))) {
+            && (!c.industry || c.industry.trim() === '')) {
           skipped.missingEnrichment++; return false;
         }
         // Dedup at the WORKSPACE level, because that is the rule PlusVibe
@@ -25328,7 +25330,7 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
           skipped.wrongProvider++; return false;
         }
         if (!looseHere
-            && ((!c.keywords || c.keywords.trim() === '') || (!c.industry || c.industry.trim() === ''))) {
+            && (!c.industry || c.industry.trim() === '')) {
           skipped.missingEnrichment++; return false;
         }
         const pushed = Array.isArray(c.pushed_campaigns)
