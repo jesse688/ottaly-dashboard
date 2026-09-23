@@ -24501,7 +24501,11 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
         }
       }
 
-      const cutoff = new Date(Date.now() - max_age_days * 24 * 60 * 60 * 1000).toISOString();
+      // max_age_days 0 = always re-verify: a future cutoff makes every stored
+      // verdict stale, so each contact is re-checked regardless of age.
+      const cutoff = max_age_days === 0
+        ? new Date(Date.now() + 86400000).toISOString()
+        : new Date(Date.now() - max_age_days * 24 * 60 * 60 * 1000).toISOString();
       // A 'fresh' verdict is recent AND has a real status. We re-verify
       // contacts whose previous result was 'unknown' (usually transient
       // Reacher failures — timeout / SMTP refused — not a real permanent
@@ -25267,7 +25271,8 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
 
   const contact_ids = JSON.parse(row.contact_ids || '[]');
   const include_risky = !!row.include_risky;
-  const max_age_days = row.max_age_days || 14;
+  // max_age_days 0 = always re-verify; use ?? so a stored 0 is not coerced to 14
+  const max_age_days = row.max_age_days ?? 14;
   const workspace_id = row.workspace_id;
   const campaign_id  = row.campaign_id;
 
@@ -25283,7 +25288,11 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
       const contacts = await db.getContactsById(contact_ids);
       if (!contacts.length) { job.status = 'failed'; job.error = 'No contacts found'; return; }
 
-      const cutoff = new Date(Date.now() - max_age_days * 24 * 60 * 60 * 1000).toISOString();
+      // max_age_days 0 = always re-verify: a future cutoff makes every stored
+      // verdict stale, so each contact is re-checked regardless of age.
+      const cutoff = max_age_days === 0
+        ? new Date(Date.now() + 86400000).toISOString()
+        : new Date(Date.now() - max_age_days * 24 * 60 * 60 * 1000).toISOString();
       // skipVerify: treat EVERY contact as already-verified using its stored
       // email_status (null/unknown stays pushable in loose mode), so the Reacher
       // loop below runs zero times and the push starts immediately.
