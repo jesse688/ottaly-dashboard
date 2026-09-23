@@ -24298,7 +24298,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
   // of 36 bounced with verdicts averaging 52 days old; re-running the same list
   // through the verifier returned 11 invalid. Mailboxes get disabled constantly,
   // so 14 days keeps the credit saving on genuinely recent checks only.
-  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 14, emailProviders, excludeMicrosoft, loose, skipVerify, use_n2b, override_send_rules, target, target_filters, one_per_company } = req.body;
+  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 14, emailProviders, excludeMicrosoft, loose, skipVerify, use_n2b, override_send_rules, target, target_filters, one_per_company, replace_existing } = req.body;
   // TARGET: "push 1,500" as an order rather than a batch size. With it, the job
   // keeps pulling ranked candidates and verifying until 1,500 are actually in
   // PlusVibe, the pool is empty, or the verifier stalls. Without it, behaviour
@@ -24362,6 +24362,11 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
     // Re-tick the box and push again if a resumed job needs it.
     overrideGuards: isGuardOverride(override_send_rules),
     useN2b,
+    // Replace existing lead data in PlusVibe (is_overwrite). Without it PV
+    // silently drops a lead it already holds (leads_uploaded:0), so a re-push
+    // of re-verified contacts is a no-op. With it, PV updates the existing
+    // lead instead — which is what "re-verify then push again" needs.
+    replaceExisting: !!replace_existing,
     skipVerify: skipVerifyMode,
     excludeMicrosoft: excludeMicrosoft === 'true' || excludeMicrosoft === true,
     total: contact_ids.length,
@@ -24648,7 +24653,9 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
         )) { skipped.alreadyInCampaign++; return false; }
         // Legacy guard kept for contacts imported pre-pushed_campaigns —
         // last_campaign_name comes from PlusVibe CSV imports.
-        if (targetCampLc && c.last_campaign_name
+        // replaceExisting: PV was asked to overwrite leads it already holds,
+        // so "already in this campaign" is the point of the push, not a skip.
+        if (!job.replaceExisting && targetCampLc && c.last_campaign_name
             && c.last_campaign_name.toLowerCase() === targetCampLc) {
           skipped.alreadyInCampaign++; return false;
         }
@@ -24766,7 +24773,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
           if (!pvLeadPayload.length) { continue; }
           let lastAddUploaded = 0;
           try {
-            const addRes = await pvAddLeads(workspace_id, campaign_id, pvLeadPayload);
+            const addRes = await pvAddLeads(workspace_id, campaign_id, pvLeadPayload, { overwrite: job.replaceExisting });
             // PlusVibe drops duplicates silently, so a slice can succeed and
             // add nothing. Track what actually landed so the number the user
             // sees is leads in the campaign, not leads we handed over.
@@ -25371,8 +25378,8 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
         if (pushed.some(p =>
           p.workspace_id === job.workspace_id &&
           (p.campaign_id === job.campaign_id || (targetCampLc && (p.campaign_name || '').toLowerCase() === targetCampLc))
-        )) { skipped.alreadyInCampaign++; return false; }
-        if (targetCampLc && c.last_campaign_name && c.last_campaign_name.toLowerCase() === targetCampLc) {
+        ) && !job.replaceExisting) { skipped.alreadyInCampaign++; return false; }
+        if (!job.replaceExisting && targetCampLc && c.last_campaign_name && c.last_campaign_name.toLowerCase() === targetCampLc) {
           skipped.alreadyInCampaign++; return false;
         }
         if (job.workspace_id) {
@@ -25449,7 +25456,7 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
           let lastAddUploaded = 0;
           // Batch add + campaign assignment in one call. Count accepted, not sent.
           try {
-            const addRes = await pvAddLeads(workspace_id, campaign_id, pvPayload);
+            const addRes = await pvAddLeads(workspace_id, campaign_id, pvPayload, { overwrite: job.replaceExisting });
             lastAddUploaded  = addRes.uploaded;
             job.pvUploaded   = (job.pvUploaded   || 0) + addRes.uploaded;
             job.pvDuplicates = (job.pvDuplicates || 0) +

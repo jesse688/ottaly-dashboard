@@ -2204,6 +2204,15 @@
             <p style="font-size:11px;color:#9ca3af;margin:4px 0 0 26px;">A stored verdict newer than this is reused and costs no credit. <strong style="color:#374151;">Always re-verify</strong> ignores stored results and re-checks every contact — use it when a list is bouncing. Mailboxes get disabled constantly, so old verdicts go stale.</p>
           </div>
 
+          <!-- Replace existing lead data in PlusVibe (is_overwrite) -->
+          <div style="margin-top:10px;padding-top:10px;border-top:1px solid #e5e7eb;">
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;font-weight:600;color:#374151;">
+              <input type="checkbox" id="replaceExisting" style="accent-color:#ef4444;width:16px;height:16px;">
+              ♻️ Replace existing lead data in this campaign
+            </label>
+            <p style="font-size:11px;color:#9ca3af;margin:4px 0 0 26px;">By default PlusVibe silently drops a lead it already holds, so re-pushing the same contacts does nothing. Tick this to <strong style="color:#374151;">overwrite</strong> them instead — use it after re-verifying a list that is already in the campaign. <strong style="color:#b91c1c;">This also bypasses our own "already pushed" guard</strong>, so only tick it when you mean to re-send the same people.</p>
+          </div>
+
           <!-- No2Bounce option — only visible when verify is on -->
           <div id="n2bOption" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid #e5e7eb;">
             <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;font-weight:600;color:#374151;">
@@ -5498,7 +5507,7 @@
       try {
         const endpoint = verifyFirst ? '/api/contacts/verify-and-push' : '/api/pv/push-contacts';
         const body = verifyFirst
-          ? { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, workspace_name: wsName, campaign_name: campName, include_risky: false, max_age_days: verifyMaxAge, emailProviders: pushProviders.join(','), excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '', use_n2b: useN2b, allowed_statuses: allowedStatuses, override_send_rules: isSendRuleOverrideOn(), target: targetCount, one_per_company: document.getElementById('pushOnePerCompany')?.checked !== false, target_filters: (() => { const f = { ...getFilterValues(0) }; delete f.limit; delete f.offset; delete f.sortBy; delete f.sortDir; return f; })() }
+          ? { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, workspace_name: wsName, campaign_name: campName, include_risky: false, max_age_days: verifyMaxAge, emailProviders: pushProviders.join(','), excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '', use_n2b: useN2b, allowed_statuses: allowedStatuses, override_send_rules: isSendRuleOverrideOn(), target: targetCount, one_per_company: document.getElementById('pushOnePerCompany')?.checked !== false, replace_existing: document.getElementById('replaceExisting')?.checked === true, target_filters: (() => { const f = { ...getFilterValues(0) }; delete f.limit; delete f.offset; delete f.sortBy; delete f.sortDir; return f; })() }
           : { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, campaign_name: campName, workspace_name: wsName, excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '', allowed_statuses: allowedStatuses, override_send_rules: isSendRuleOverrideOn() };
 
         const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
