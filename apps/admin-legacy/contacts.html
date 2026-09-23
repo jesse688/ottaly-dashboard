@@ -2186,7 +2186,23 @@
             <input type="checkbox" id="verifyBeforePush" style="accent-color:#3b82f6;width:16px;height:16px;" onchange="toggleN2bOption()">
             Verify emails before pushing <span style="font-size:10px;background:#dbeafe;color:#1d4ed8;padding:1px 5px;border-radius:4px;margin-left:4px;">Recommended</span>
           </label>
-          <p style="font-size:11px;color:#9ca3af;margin:4px 0 0 26px;">Only safe/valid emails pushed. Runs in background — you can keep browsing. Skips emails verified in the last 90 days.</p>
+          <p style="font-size:11px;color:#9ca3af;margin:4px 0 0 26px;">Only safe/valid emails pushed. Runs in background — you can keep browsing.</p>
+
+          <!-- Verdict freshness — how old a stored result may be before re-verifying -->
+          <div id="freshnessOption" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid #e5e7eb;">
+            <label style="display:flex;align-items:center;gap:10px;font-size:13px;font-weight:600;color:#374151;">
+              🕐 Re-verify results older than
+              <select id="verifyMaxAge" style="padding:4px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-weight:600;">
+                <option value="14" selected>14 days (default)</option>
+                <option value="7">7 days</option>
+                <option value="3">3 days</option>
+                <option value="0">Always re-verify (ignore stored)</option>
+                <option value="30">30 days</option>
+                <option value="90">90 days</option>
+              </select>
+            </label>
+            <p style="font-size:11px;color:#9ca3af;margin:4px 0 0 26px;">A stored verdict newer than this is reused and costs no credit. <strong style="color:#374151;">Always re-verify</strong> ignores stored results and re-checks every contact — use it when a list is bouncing. Mailboxes get disabled constantly, so old verdicts go stale.</p>
+          </div>
 
           <!-- No2Bounce option — only visible when verify is on -->
           <div id="n2bOption" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid #e5e7eb;">
@@ -5337,6 +5353,8 @@
       const verify = document.getElementById('verifyBeforePush').checked;
       document.getElementById('n2bOption').style.display = verify ? '' : 'none';
       if (!verify) document.getElementById('useN2b').checked = false;
+      const fresh = document.getElementById('freshnessOption');
+      if (fresh) fresh.style.display = verify ? 'block' : 'none';
       // Warn that buckets only match a KNOWN (already-verified) status when verify
       // is off — the system can't classify a contact without verifying it.
       const note = document.getElementById('bucketVerifyNote');
@@ -5366,6 +5384,7 @@
       const wsId = document.getElementById('pvWorkspace').value;
       const errEl = document.getElementById('pushError');
       const verifyFirst = document.getElementById('verifyBeforePush').checked;
+      const verifyMaxAge = parseInt(document.getElementById('verifyMaxAge')?.value ?? '14', 10);
       const useN2b      = verifyFirst && document.getElementById('useN2b').checked;
       const saveFilter  = document.getElementById('saveFilterToCampaign').checked;
       const campMode    = (document.querySelector('input[name="pushCampMode"]:checked') || {}).value || 'existing';
@@ -5479,7 +5498,7 @@
       try {
         const endpoint = verifyFirst ? '/api/contacts/verify-and-push' : '/api/pv/push-contacts';
         const body = verifyFirst
-          ? { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, workspace_name: wsName, campaign_name: campName, include_risky: false, max_age_days: 14, emailProviders: pushProviders.join(','), excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '', use_n2b: useN2b, allowed_statuses: allowedStatuses, override_send_rules: isSendRuleOverrideOn(), target: targetCount, one_per_company: document.getElementById('pushOnePerCompany')?.checked !== false, target_filters: (() => { const f = { ...getFilterValues(0) }; delete f.limit; delete f.offset; delete f.sortBy; delete f.sortDir; return f; })() }
+          ? { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, workspace_name: wsName, campaign_name: campName, include_risky: false, max_age_days: verifyMaxAge, emailProviders: pushProviders.join(','), excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '', use_n2b: useN2b, allowed_statuses: allowedStatuses, override_send_rules: isSendRuleOverrideOn(), target: targetCount, one_per_company: document.getElementById('pushOnePerCompany')?.checked !== false, target_filters: (() => { const f = { ...getFilterValues(0) }; delete f.limit; delete f.offset; delete f.sortBy; delete f.sortDir; return f; })() }
           : { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, campaign_name: campName, workspace_name: wsName, excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '', allowed_statuses: allowedStatuses, override_send_rules: isSendRuleOverrideOn() };
 
         const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -6158,6 +6177,7 @@
       const wsId   = document.getElementById('pvWorkspace').value;
       const campId = document.getElementById('pvCampaign').value;
       const useN2b = document.getElementById('useN2b').checked;
+      const verifyMaxAge = parseInt(document.getElementById('verifyMaxAge')?.value ?? '14', 10);
       if (!wsId)   { showMessage('Select a client first (Filter for Client)', 'error'); return; }
       if (!campId) { showMessage('Select a campaign first', 'error'); return; }
 
@@ -6178,7 +6198,7 @@
           body: JSON.stringify({
             workspace_id: wsId, campaign_id: campId,
             contact_ids: contactIds, workspace_name: wsName, campaign_name: campName,
-            include_risky: false, max_age_days: 14,
+            include_risky: false, max_age_days: verifyMaxAge,
             emailProviders: pushProviders.join(','),
             excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '',
             use_n2b: useN2b,
