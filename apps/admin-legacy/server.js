@@ -24813,7 +24813,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
         try {
           const r = await fetch(`http://127.0.0.1:${finderPort}/api/verify-email`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: c.email, verifier: 'reacher' }),
+            body: JSON.stringify({ email: c.email, verifier: process.env.CONTACTS_VERIFIER || 'ninja' }),
             signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS)
           });
           const d = await r.json();
@@ -25476,7 +25476,7 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
         try {
           const r = await fetch(`http://127.0.0.1:${finderPort}/api/verify-email`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: c.email, verifier: 'reacher' }),
+            body: JSON.stringify({ email: c.email, verifier: process.env.CONTACTS_VERIFIER || 'ninja' }),
             signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS)
           });
           const d = await r.json();

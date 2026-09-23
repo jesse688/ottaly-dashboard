@@ -16,9 +16,25 @@ const CHECK_DELAY_MS = Math.max(0, parseInt(process.env.CHECK_DELAY_MS || '0', 1
 const MAX_CANDIDATES = Math.min(250, Math.max(1, parseInt(process.env.MAX_CANDIDATES || '80', 10)));
 const MAX_CONTACTS = Math.min(20000, Math.max(1, parseInt(process.env.MAX_CONTACTS || '20000', 10)));
 const VERIFY_CANDIDATES = Math.min(MAX_CANDIDATES, Math.max(1, parseInt(process.env.VERIFY_CANDIDATES || '12', 10)));
-const DEFAULT_VERIFIER = process.env.DEFAULT_VERIFIER || 'reacher';
-const ROW_CONCURRENCY = Math.min(50, Math.max(1, parseInt(process.env.ROW_CONCURRENCY || (DEFAULT_VERIFIER === 'reacher' ? '5' : '3'), 10)));
-const CANDIDATE_CONCURRENCY = Math.min(12, Math.max(1, parseInt(process.env.CANDIDATE_CONCURRENCY || (DEFAULT_VERIFIER === 'reacher' ? '1' : '2'), 10)));
+const DEFAULT_VERIFIER = process.env.DEFAULT_VERIFIER || 'ninja';
+const ROW_CONCURRENCY = Math.min(50, Math.max(1, parseInt(process.env.ROW_CONCURRENCY || (DEFAULT_VERIFIER === 'ninja' ? '4' : DEFAULT_VERIFIER === 'reacher' ? '5' : '3'), 10)));
+const CANDIDATE_CONCURRENCY = Math.min(12, Math.max(1, parseInt(process.env.CANDIDATE_CONCURRENCY || (DEFAULT_VERIFIER === 'ninja' ? '2' : DEFAULT_VERIFIER === 'reacher' ? '1' : '2'), 10)));
+// ── MailTester Ninja verifier ─────────────────────────────────────────────
+// Replaces Reacher (proxy4smtp subscription expired 2026-09). Single GET
+// endpoint, key is the Stripe subscription id WITHOUT braces. Their own API
+// page publishes the rate: Pro 11 per 10s, Ultimate 23 per 10s. The live
+// response also carries `connections` and `limit`, so we learn the real
+// plan from the wire rather than trusting config.
+const NINJA_KEY = (process.env.NINJA_KEY || '').replace(/^\{|\}$/g, '').trim();
+const NINJA_URL = process.env.NINJA_URL || 'https://happy.mailtester.ninja/ninja';
+const NINJA_PER_MIN = Math.max(1, parseInt(process.env.NINJA_PER_MIN || '66', 10));
+// Their limit is enforced on a short window (Pro: 11 per 10s), not per minute,
+// so a per-minute cap alone still allows a burst that gets the key banned.
+// Hold a minimum gap between dispatches: 66/min -> ~909ms.
+const NINJA_MIN_GAP_MS = Math.max(0, parseInt(process.env.NINJA_MIN_GAP_MS || String(Math.ceil(60000 / NINJA_PER_MIN)), 10));
+const NINJA_TIMEOUT_MS = Math.max(2000, parseInt(process.env.NINJA_TIMEOUT_MS || '30000', 10));
+const NINJA_RETRIES = Math.min(3, Math.max(0, parseInt(process.env.NINJA_RETRIES || '1', 10)));
+
 const SMTP_RETRIES = Math.min(3, Math.max(0, parseInt(process.env.SMTP_RETRIES || '1', 10)));
 const SMTP_STARTTLS = process.env.SMTP_STARTTLS !== 'false';
 const SOCKS5_HOST = process.env.SOCKS5_HOST || '';
@@ -748,8 +764,11 @@ function buildEmailCandidates(firstName, lastName, domain) {
 
 function normalizeVerifier(input, verifyFallback = false) {
   const value = String(input || '').toLowerCase();
-  if (['reacher', 'smtp', 'permutation', 'verify_emails'].includes(value)) return value;
-  return verifyFallback ? 'smtp' : 'permutation';
+  if (['ninja', 'reacher', 'smtp', 'permutation', 'verify_emails'].includes(value)) return value;
+  // Fall back to the configured default rather than raw SMTP. Direct SMTP from
+  // an unlisted IP returns false 'invalid' verdicts (Spamhaus 550), so it must
+  // never be the silent default.
+  return verifyFallback ? (DEFAULT_VERIFIER === 'permutation' ? 'smtp' : DEFAULT_VERIFIER) : 'permutation';
 }
 
 async function resolveMx(domain) {
@@ -1340,6 +1359,131 @@ async function fetchEv2Proxy() {
   const r = await fetch(EV2_PROXY_URL, { signal: ctrl.signal }).finally(() => clearTimeout(timer));
   const d = await r.json();
   return d.proxy || null;
+}
+
+// Ninja rate limiter. Their limit is a sliding window; exceeding it gets the
+// account temporarily banned, so we pace strictly and never burst.
+const _ninjaCallTimes = [];
+let _ninjaBlockedUntil = 0;
+let _ninjaLastDispatch = 0;
+let _ninjaGate = Promise.resolve();
+const _ninjaStats = { usageDate: null, usageCount: 0, limit: null, connections: null, failureCount: 0, lastError: null, lastErrorAt: null };
+
+// Serialised: each caller chains onto the previous one, so N parallel rows
+// still dispatch one-at-a-time with NINJA_MIN_GAP_MS between them. Without
+// this, ROW_CONCURRENCY workers all pass the per-minute check at once.
+function _acquireNinjaSlot() {
+  const mine = _ninjaGate.then(async () => {
+    for (;;) {
+      const now = Date.now();
+      if (_ninjaBlockedUntil > now) { await delay(_ninjaBlockedUntil - now); continue; }
+      while (_ninjaCallTimes.length && now - _ninjaCallTimes[0] >= 60000) _ninjaCallTimes.shift();
+      const gapWait = NINJA_MIN_GAP_MS - (now - _ninjaLastDispatch);
+      if (gapWait > 0) { await delay(gapWait); continue; }
+      if (_ninjaCallTimes.length < NINJA_PER_MIN) break;
+      await delay(60000 - (Date.now() - _ninjaCallTimes[0]) + 50);
+    }
+    _ninjaLastDispatch = Date.now();
+    _ninjaCallTimes.push(_ninjaLastDispatch);
+  });
+  _ninjaGate = mine.catch(() => {});
+  return mine;
+}
+
+// code: ok = mailbox accepted, ko = rejected/no-mx, mb = cannot be determined
+// (catch-all, greylist, timeout, spam block). Verified against live responses
+// 2026-09-23: microsoft.com ok/ko split correctly, stripe.com is catch-all.
+function mapNinjaResult(email, data) {
+  const code = String(data?.code || '').toLowerCase();
+  const message = String(data?.message || '');
+  const mx = data?.mx ? { records: [{ exchange: data.mx }] } : { records: [] };
+  // Shape `raw` like Reacher's so downstream parsing (smtp.is_catch_all,
+  // mx.records[].exchange) keeps working untouched.
+  const raw = { is_reachable: null, mx, smtp: { is_catch_all: /catch.?all/i.test(message) }, ninja: data };
+  const reason = `Ninja: ${message || code || 'no response'}`;
+  if (code === 'ok') return { email, status: 'valid', confidence: 'high', reason, raw: { ...raw, is_reachable: 'safe' } };
+  if (code === 'ko') return { email, status: 'invalid', confidence: 'high', reason, raw: { ...raw, is_reachable: 'invalid' } };
+  if (/catch.?all/i.test(message)) return { email, status: 'risky', confidence: 'medium', reason, raw: { ...raw, is_reachable: 'risky' } };
+  return { email, status: 'unknown', confidence: 'low', reason, raw: { ...raw, is_reachable: 'unknown' } };
+}
+
+async function callNinjaOnce(email) {
+  if (!NINJA_KEY) {
+    return { email, status: 'unknown', confidence: 'low', reason: 'Ninja: NINJA_KEY not set' };
+  }
+  await _acquireNinjaSlot();
+  const url = `${NINJA_URL}?email=${encodeURIComponent(email)}&key=${encodeURIComponent(NINJA_KEY)}`;
+  try {
+    const response = await fetchWithTimeout(url, { method: 'GET' }, NINJA_TIMEOUT_MS);
+    const text = await response.text();
+    let data = {};
+    try { data = text ? JSON.parse(text) : {}; } catch {
+      const reason = `Ninja returned non-JSON: ${text.slice(0, 120)}`;
+      _recordNinjaFailure(reason);
+      return { email, status: 'unknown', confidence: 'low', reason };
+    }
+    if (!response.ok) {
+      // 429 or a ban: back off hard rather than burning the daily allowance.
+      if (response.status === 429 || response.status === 403) _ninjaBlockedUntil = Date.now() + 60000;
+      const reason = `Ninja HTTP ${response.status}: ${JSON.stringify(data).slice(0, 160)}`;
+      _recordNinjaFailure(reason);
+      return { email, status: 'unknown', confidence: 'low', reason };
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    if (_ninjaStats.usageDate !== today) { _ninjaStats.usageDate = today; _ninjaStats.usageCount = 0; }
+    _ninjaStats.usageCount++;
+    if (typeof data.limit === 'number') _ninjaStats.limit = data.limit;
+    if (typeof data.connections === 'number') _ninjaStats.connections = data.connections;
+    return mapNinjaResult(email, data);
+  } catch (err) {
+    const reason = isAbortError(err) ? `Ninja timed out after ${NINJA_TIMEOUT_MS}ms` : `Ninja error: ${err.message}`;
+    _recordNinjaFailure(reason);
+    return { email, status: 'unknown', confidence: 'low', reason };
+  }
+}
+
+function _recordNinjaFailure(reason) {
+  _ninjaStats.failureCount++;
+  _ninjaStats.lastError = String(reason || '').slice(0, 240);
+  _ninjaStats.lastErrorAt = Date.now();
+  console.warn(`[Ninja] FAIL #${_ninjaStats.failureCount}: ${_ninjaStats.lastError}`);
+}
+
+async function checkWithNinja(email, job = null) {
+  let last = null;
+  for (let attempt = 0; attempt <= NINJA_RETRIES; attempt += 1) {
+    throwIfCancelled(job);
+    if (attempt > 0) await delay(2000 * Math.pow(2, attempt - 1));
+    last = await callNinjaOnce(email);
+    // Only a transient unknown is worth a retry; catch-all is a final answer.
+    if (last.status !== 'unknown') return last;
+    if (/NINJA_KEY not set/.test(last.reason || '')) return last;
+  }
+  return last || { email, status: 'unknown', confidence: 'low', reason: 'No Ninja response' };
+}
+
+// Candidate-pattern finder using Ninja, mirroring verifyContactWithReacher.
+// Stops at the first valid hit so a found address costs the fewest calls —
+// the daily allowance is the scarce resource here.
+async function verifyContactWithNinja(contact, log = () => {}, job = null) {
+  const domain = normalizeDomain(contact.domain);
+  const candidates = buildEmailCandidates(contact.firstName, contact.lastName, domain).slice(0, VERIFY_CANDIDATES);
+  if (!candidates.length) {
+    return { ...contact, domain, error: 'First name, last name and valid domain are required', results: [] };
+  }
+  const results = [];
+  for (const email of candidates) {
+    throwIfCancelled(job);
+    log(`Ninja checking ${email}`);
+    const result = await checkWithNinja(email, job);
+    log(`${email} -> ${result.status}${result.reason ? ` (${result.reason})` : ''}`);
+    results.push(result);
+    if (result.status === 'valid') break;
+    // A catch-all domain answers 'risky' for every pattern, so trying more
+    // candidates cannot distinguish them — stop and let the caller decide.
+    if (result.status === 'risky') break;
+  }
+  return { ...contact, domain, results };
 }
 
 async function callReacherOnce(email, job = null) {
@@ -2042,11 +2186,13 @@ async function enrichCsvText(csvText, verifier, onProgress = () => {}, log = () 
     const domain = normalizeDomain(contact.domain);
     const displayName = `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || `row ${index + 1}`;
     log(`Row ${index + 1}/${sourceRows.length}: ${displayName} @ ${domain || 'missing-domain'}`);
-    const result = verifier === 'reacher'
-      ? await verifyContactWithReacher(contact, message => log(`Row ${index + 1}: ${message}`), job)
-      : verifier === 'smtp'
-        ? await verifyContact(contact, message => log(`Row ${index + 1}: ${message}`), job)
-        : generateContact(contact);
+    const result = verifier === 'ninja'
+      ? await verifyContactWithNinja(contact, message => log(`Row ${index + 1}: ${message}`), job)
+      : verifier === 'reacher'
+        ? await verifyContactWithReacher(contact, message => log(`Row ${index + 1}: ${message}`), job)
+        : verifier === 'smtp'
+          ? await verifyContact(contact, message => log(`Row ${index + 1}: ${message}`), job)
+          : generateContact(contact);
     throwIfCancelled(job);
     const found = pickFoundEmail(result, verifier !== 'permutation');
     const permutations = (result.results || []).map(candidate => candidate.email).filter(Boolean).join('; ');
@@ -2301,11 +2447,13 @@ async function handleFind(req, res) {
 
     const results = [];
     for (const contact of cleaned) {
-      results.push(verifier === 'reacher'
-        ? await verifyContactWithReacher(contact)
-        : verifier === 'smtp'
-          ? await verifyContact(contact)
-          : generateContact(contact));
+      results.push(verifier === 'ninja'
+        ? await verifyContactWithNinja(contact)
+        : verifier === 'reacher'
+          ? await verifyContactWithReacher(contact)
+          : verifier === 'smtp'
+            ? await verifyContact(contact)
+            : generateContact(contact));
     }
     sendJson(res, 200, { verifier, sender: SMTP_SENDER, reacher_url: REACHER_URL, results });
   } catch (err) {
@@ -2320,13 +2468,15 @@ async function handleVerifyEmail(req, res) {
     const verifier = normalizeVerifier(body.verifier, true);
     if (!email) return sendJson(res, 400, { error: 'Enter a valid email address' });
     if (verifier === 'permutation') {
-      return sendJson(res, 400, { error: 'Choose Reacher or Built-in SMTP for a single-email verification' });
+      return sendJson(res, 400, { error: 'Choose Ninja, Reacher or Built-in SMTP for a single-email verification' });
     }
 
     const started = Date.now();
-    const result = verifier === 'reacher'
-      ? await checkWithReacher(email)
-      : await checkExactWithSmtp(email);
+    const result = verifier === 'ninja'
+      ? await checkWithNinja(email)
+      : verifier === 'reacher'
+        ? await checkWithReacher(email)
+        : await checkExactWithSmtp(email);
 
     sendJson(res, 200, {
       verifier,
