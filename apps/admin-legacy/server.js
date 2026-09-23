@@ -24650,7 +24650,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
           (PUSH_DEDUP_SCOPE === 'workspace'
             || p.campaign_id === job.campaign_id
             || (targetCampLc && (p.campaign_name || '').toLowerCase() === targetCampLc))
-        )) { skipped.alreadyInCampaign++; return false; }
+        ) && !job.replaceExisting) { skipped.alreadyInCampaign++; return false; }
         // Legacy guard kept for contacts imported pre-pushed_campaigns —
         // last_campaign_name comes from PlusVibe CSV imports.
         // replaceExisting: PV was asked to overwrite leads it already holds,
