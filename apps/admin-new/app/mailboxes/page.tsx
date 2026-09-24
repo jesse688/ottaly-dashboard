@@ -35,6 +35,11 @@ const ACCENT: Record<string, string> = {
   'Inboxing.com': '#7C89CD', Untagged: '#C4C9D4',
 }
 
+// Display names for tag cards whose bucket key reads wrong on screen. The key
+// itself stays put: mailbox_supplier_daily history is stored under it, and
+// renaming a key strands that history until a backfill rewrites it.
+const TAG_LABEL: Record<string, string> = { Winnr: 'SMTP' }
+
 interface DaySeries { sent: number[]; replies: number[]; ooo: number[]; bounces: number[]; contacted: number[] }
 interface HistoryResponse { dimension: string; days: string[]; series: Record<string, DaySeries> }
 // Billable leads (revenue leads) attributed to each supplier / provider type by
@@ -456,7 +461,7 @@ export default function MailboxesPage() {
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: C.muted, margin: '0 0 .5rem' }}>By tag</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: '1rem' }}>
-                {data.stats.byTag.map(g => <ProviderCard key={g.key} g={g} accent={ACCENT[g.key] || C.navy} days={tagHistory?.days ?? []} ds={tagHistory?.series[g.key]} leads={leads?.byTag[g.key]} periodDays={periodDays} />)}
+                {data.stats.byTag.map(g => <ProviderCard key={g.key} g={g} title={TAG_LABEL[g.key]} accent={ACCENT[g.key] || C.navy} days={tagHistory?.days ?? []} ds={tagHistory?.series[g.key]} leads={leads?.byTag[g.key]} periodDays={periodDays} />)}
               </div>
             </div>
 
@@ -667,7 +672,7 @@ const sum = (a: number[] | undefined) => (a ?? []).reduce((s, v) => s + v, 0)
 // Combined per-group card: window-total stats (SENT, human RR, RR+OOO, bounce)
 // + a toggleable daily multi-line chart (Sent / RR human / RR+OOO). Click a
 // legend item to hide/show that series — see results per day for what's left.
-function ProviderCard({ g, accent, days, ds, leads, periodDays }: { g: MailboxGroupStats; accent: string; days: string[]; ds?: DaySeries; leads?: number; periodDays: number }) {
+function ProviderCard({ g, title, accent, days, ds, leads, periodDays }: { g: MailboxGroupStats; title?: string; accent: string; days: string[]; ds?: DaySeries; leads?: number; periodDays: number }) {
   const [hidden, setHidden] = useState<Set<string>>(new Set())
   const toggle = (k: string) => setHidden(p => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n })
 
@@ -713,7 +718,7 @@ function ProviderCard({ g, accent, days, ds, leads, periodDays }: { g: MailboxGr
   )
   return (
     <div style={{ background: '#fff', border: '1px solid #E2E6F0', borderRadius: 10, padding: '1rem 1.1rem', borderTop: `3px solid ${accent}` }}>
-      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>{g.key} · <span style={{ color: '#6B7280', fontWeight: 500 }}>{g.count} mailboxes</span></div>
+      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>{title ?? g.key} · <span style={{ color: '#6B7280', fontWeight: 500 }}>{g.count} mailboxes</span></div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 8, marginBottom: 10 }}>
         {/* With no daily series there is nothing true to show for this window —
             an em dash beats a 0.00% that reads as "this group gets no replies". */}
