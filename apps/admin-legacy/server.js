@@ -80,7 +80,7 @@ const { google } = require('googleapis');
 const Sentry = require('@sentry/node');
 const compression = require('compression');
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 
 const app  = express();
 // Behind Easypanel's reverse proxy — trust the first proxy hop so
@@ -1073,6 +1073,10 @@ const apiLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   skip: (req) => req.path === '/api/stripe/webhook' || req.path.startsWith('/api/domains/'),
+  // Behind Cloudflare, req.ip is a Cloudflare edge IP shared by many users, so
+  // the whole team would share one bucket. Cloudflare puts the visitor's real
+  // IP in cf-connecting-ip; fall back to req.ip for direct (non-Cloudflare) hits.
+  keyGenerator: (req) => ipKeyGenerator(req.headers['cf-connecting-ip'] || req.ip),
 });
 app.use('/api/', apiLimiter);
 
