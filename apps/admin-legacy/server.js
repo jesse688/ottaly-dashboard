@@ -1085,7 +1085,11 @@ app.use((req, res, next) => {
   if (req.method === 'GET' || req.method === 'HEAD' || req.headers['x-claude-write'] !== '1') return next();
   return enforceClaudePerms(req, res, next);
 });
-app.use(express.static(path.join(__dirname), {
+// The app folder is also the static root, so it holds server code, package
+// files and the Dockerfile. Serve ONLY what the pages load: top-level pages and
+// styles, /assets/, and the four browser scripts. Everything else falls through
+// (and 404s) — server.js was publicly downloadable before this.
+const serveStatic = express.static(path.join(__dirname), {
   setHeaders(res, filePath) {
     if (filePath.endsWith('.html')) {
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
@@ -1093,7 +1097,14 @@ app.use(express.static(path.join(__dirname), {
       res.setHeader('Expires', '0');
     }
   }
-}));
+});
+const PUBLIC_BROWSER_JS = new Set(['/nav.js', '/splash.js', '/next-step.js', '/ch-fields-client.js']);
+const PUBLIC_STATIC_RE  = /^\/(?:[A-Za-z0-9_-]+\.(?:html|css|svg|png|ico)|assets\/[A-Za-z0-9_.-]+\.(?:svg|png|jpe?g|webp|gif|ico))$/;
+app.use((req, res, next) => {
+  const p = req.path;
+  if (p === '/' || PUBLIC_BROWSER_JS.has(p) || PUBLIC_STATIC_RE.test(p)) return serveStatic(req, res, next);
+  next();
+});
 
 // Solar Qualification API + page. DB-independent (uses the CCOD SQLite index +
 // Google/CH APIs), so register at top level rather than inside the DB init block.
