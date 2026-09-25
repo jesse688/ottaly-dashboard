@@ -919,7 +919,7 @@ function startEmailFinderApp() {
       REACHER_PER_MIN: process.env.REACHER_PER_MIN || '150',
       SMTP_RETRIES: process.env.SMTP_RETRIES || '1',
       CHECK_CATCH_ALL: process.env.CHECK_CATCH_ALL || 'false',
-      DEFAULT_VERIFIER: process.env.DEFAULT_VERIFIER || 'reacher',
+      DEFAULT_VERIFIER: process.env.DEFAULT_VERIFIER || 'ninja',
       REACHER_URL: process.env.REACHER_URL || 'http://127.0.0.1:8080',
       // Comma-separated Reacher instances to round-robin across. Each container
       // is pinned to its own proxy4smtp account (5 simultaneous SMTP sessions
@@ -5659,7 +5659,7 @@ async function runVerificationDrain() {
         try {
           const r = await fetch(`http://127.0.0.1:${port}/api/verify-email`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: row.email, verifier: 'reacher' }),
+            body: JSON.stringify({ email: row.email, verifier: process.env.CONTACTS_VERIFIER || 'ninja' }),
             signal: AbortSignal.timeout(20000),
           });
           if (!r.ok) throw new Error(`finder HTTP ${r.status}`);
@@ -5676,8 +5676,8 @@ async function runVerificationDrain() {
           // outage -- accept it and stop retrying, or we would loop forever
           // on addresses that genuinely cannot be resolved.
           await db.query(
-            `UPDATE contacts SET email_status = $2, email_verified_at = NOW()::text WHERE id = $1`,
-            [row.contact_id, status], { background: true }
+            `UPDATE contacts SET email_status = $2, email_verified_at = NOW()::text, email_verify_reason = $3 WHERE id = $1`,
+            [row.contact_id, status, reason ? String(reason).slice(0, 500) : null], { background: true }
           );
           settled.push(row.contact_id);
         } catch (e) {
@@ -16951,9 +16951,7 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
   // strict "already verified-safe" count must ask for it with loose:false.
   const loose = body.loose !== false;
   // Mirrors the push modal's default pair; callers may pass their own buckets.
-  const allowedStatuses = Array.isArray(body.allowedStatuses) && body.allowedStatuses.length
-    ? body.allowedStatuses.map(x => String(x).toLowerCase())
-    : ['safe', 'safe_catchall'];
+  const allowedStatuses = clampPushStatuses(body.allowedStatuses);
   const pushableStatuses = new Set(allowedStatuses);
 
   // Sampling bound. A filter can match 200k rows; running the guards over all
@@ -17206,10 +17204,28 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
 // Treating NULL as unsendable also made it unfixable: those contacts could
 // never be pushed, so they could never be verified either.
 const UNVERIFIED = 'unverified';
-// Everything except 'invalid'. Callers can still narrow this via the modal.
-const DEFAULT_PUSHABLE_STATUSES = new Set([
-  'safe', 'safe_catchall', 'unknown', 'risky', UNVERIFIED,
-]);
+// 2026-09-25: STRICT. Only a fresh Ninja "Accepted" is pushable. The old
+// default (everything except 'invalid') let any caller that omitted
+// allowed_statuses (autopilot, API/skill pushes) send unknown, risky and
+// never-verified contacts. A bounce audit that week found 39 of 131 recipient
+// bounces were contacts already marked invalid/unknown/risky, and 21 more were
+// safe_catchall. The ceiling below is enforced server-side: a caller can
+// narrow it but never widen it.
+const PUSH_STATUS_CEILING = ['safe'];
+const DEFAULT_PUSHABLE_STATUSES = new Set(PUSH_STATUS_CEILING);
+// A stored verdict older than this is re-verified before a push (and blocks a
+// no-verify push). Mailboxes get disabled constantly; 14 days was too long.
+const PUSH_MAX_VERDICT_AGE_DAYS = 3;
+function clampPushStatuses(requested) {
+  const req = Array.isArray(requested) ? requested.map(s => String(s).toLowerCase()) : [];
+  const allowed = req.filter(s => PUSH_STATUS_CEILING.includes(s));
+  return allowed.length ? allowed : [...PUSH_STATUS_CEILING];
+}
+function isRecentVerdict(verifiedAt, maxAgeDays = PUSH_MAX_VERDICT_AGE_DAYS) {
+  if (!verifiedAt) return false;
+  const t = new Date(verifiedAt).getTime();
+  return Number.isFinite(t) && Date.now() - t <= maxAgeDays * 86400000;
+}
 // NULL/'' collapses to the UNVERIFIED bucket so it can be selected explicitly
 // rather than silently failing every membership test.
 function statusBucket(status) {
@@ -17278,14 +17294,13 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
     // ('safe','safe_catchall') was withholding the best-performing segment —
     // 39,542 contacts from a single day's import had no status at all and were
     // therefore unreachable, which also meant they could never get verified.
-    const KNOWN_STATUSES = ['safe', 'safe_catchall', 'unknown', 'risky', 'invalid', UNVERIFIED];
-    const reqStatuses = Array.isArray(req.body.allowed_statuses)
-      ? req.body.allowed_statuses.map(s => String(s).toLowerCase()).filter(s => KNOWN_STATUSES.includes(s))
-      : [];
-    const PUSHABLE_STATUSES = new Set(reqStatuses.length ? reqStatuses : DEFAULT_PUSHABLE_STATUSES);
+    // 2026-09-25: clamped to PUSH_STATUS_CEILING, and this path verifies
+    // nothing, so a stored 'safe' must also be recent (see isRecentVerdict).
+    const PUSHABLE_STATUSES = new Set(clampPushStatuses(req.body.allowed_statuses));
     const departed = await getDepartedEmails(db);
     const contacts = allContacts.filter(c => {
       if (!PUSHABLE_STATUSES.has(statusBucket(c.email_status))) { skipped.unsafe++; return false; }
+      if (!isRecentVerdict(c.email_verified_at)) { skipped.stale = (skipped.stale || 0) + 1; return false; }
       if (c.do_not_contact) { skipped.dnc++; return false; }
       if (departed.has(String(c.email || '').toLowerCase())) { skipped.departed = (skipped.departed || 0) + 1; return false; }
       // Bison requires non-empty first_name AND last_name (422s otherwise), and a
@@ -17874,15 +17889,13 @@ function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName
   // Guard against the workspace actually being pushed to; cooldownWorkspaceId
   // is optional on this path, so fall back to it only when no target is given.
   const crossClientGuard = buildCrossClientGuard(pushWorkspaceId || cooldownWorkspaceId || '', workspaceName || '', overrideGuards);
-  // Caller-chosen verification buckets; defaults to everything but 'invalid'.
-  const KNOWN_STATUSES = ['safe', 'safe_catchall', 'unknown', 'risky', 'invalid', UNVERIFIED];
-  const validStatuses = Array.isArray(allowedStatuses)
-    ? allowedStatuses.map(s => String(s).toLowerCase()).filter(s => KNOWN_STATUSES.includes(s))
-    : [];
-  const PUSHABLE_STATUSES = new Set(validStatuses.length ? validStatuses : DEFAULT_PUSHABLE_STATUSES);
+  // Caller-chosen verification buckets, clamped to PUSH_STATUS_CEILING. This
+  // path verifies nothing, so the stored verdict must also be recent.
+  const PUSHABLE_STATUSES = new Set(clampPushStatuses(allowedStatuses));
   const contacts = allContacts.filter(c => {
     if (isFreeDomain(c.email)) { skipped.freeDomain++; return false; }
     if (!PUSHABLE_STATUSES.has(statusBucket(c.email_status))) { skipped.unsafe++; return false; }
+    if (!isRecentVerdict(c.email_verified_at)) { skipped.stale = (skipped.stale || 0) + 1; return false; }
     if (c.do_not_contact) { skipped.dnc++; return false; }
     if (departed.has(String(c.email || '').toLowerCase())) { skipped.departed = (skipped.departed || 0) + 1; return false; }
     // Bison requires non-empty first_name AND last_name (422s otherwise).
@@ -23385,7 +23398,7 @@ function restorePausedJobs(sq) {
         // predates this migration and carries no preference, which is OFF.
         excludeMicrosoft: row.exclude_microsoft === 1,
         allowedProviders: (() => { try { return JSON.parse(row.allowed_providers || '[]'); } catch { return []; } })(),
-        useN2b: row.use_n2b === 0 ? false : true,
+        useN2b: false, // 2026-09-25: No2Bounce (Reacher) retired
         total: contactIds.length,
         verified: row.verified_count || 0,
         pushed: row.pushed_count || 0,
@@ -24313,7 +24326,8 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
   // of 36 bounced with verdicts averaging 52 days old; re-running the same list
   // through the verifier returned 11 invalid. Mailboxes get disabled constantly,
   // so 14 days keeps the credit saving on genuinely recent checks only.
-  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 14, emailProviders, excludeMicrosoft, loose, skipVerify, use_n2b, override_send_rules, target, target_filters, one_per_company, replace_existing } = req.body;
+  // 2026-09-25: now capped at PUSH_MAX_VERDICT_AGE_DAYS (3).
+  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days: rawMaxAgeDays = PUSH_MAX_VERDICT_AGE_DAYS, emailProviders, excludeMicrosoft, loose, skipVerify, use_n2b, override_send_rules, target, target_filters, one_per_company, replace_existing } = req.body;
   // TARGET: "push 1,500" as an order rather than a batch size. With it, the job
   // keeps pulling ranked candidates and verifying until 1,500 are actually in
   // PlusVibe, the pool is empty, or the verifier stalls. Without it, behaviour
@@ -24324,8 +24338,10 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
   // help text ("if unchecked, catch-alls are skipped entirely") described
   // behaviour that did not exist. Honour it, defaulting to ON so existing
   // callers that omit it keep validating catch-alls.
-  const useN2b = use_n2b === undefined ? true
-    : (use_n2b === true || use_n2b === 'true' || use_n2b === 1 || use_n2b === '1');
+  // 2026-09-25: forced OFF. No2Bounce runs on Reacher, which is dead
+  // (proxy4smtp auth rejected), and its only output here is promoting 'risky'
+  // to 'safe_catchall', which PUSH_STATUS_CEILING no longer allows anyway.
+  const useN2b = false;
   if (!workspace_id || !campaign_id || !Array.isArray(contact_ids) || !contact_ids.length) {
     return res.status(400).json({ error: 'workspace_id, campaign_id and contact_ids required' });
   }
@@ -24339,8 +24355,14 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
   // contact's already-stored email_status (so anything previously marked invalid
   // is still dropped) plus the free-domain + do_not_contact gates. Near-instant.
   // Implies loose (no fresh verdicts, so we can't require 'safe').
-  const skipVerifyMode = skipVerify === true || skipVerify === 'true' || skipVerify === 1 || skipVerify === '1';
-  const looseEffective = looseMode || skipVerifyMode;
+  // 2026-09-25: skipVerify is IGNORED. Every push verifies. `loose` still
+  // relaxes the name requirement for company inboxes, but no longer widens the
+  // deliverability gate: that is always PUSH_STATUS_CEILING.
+  const skipVerifyMode = false;
+  const looseEffective = looseMode;
+  // Clamped: a caller may ask for fresher (0 = always re-verify), never older.
+  const _parsedAge = parseInt(rawMaxAgeDays, 10);
+  const max_age_days = Math.min(Number.isFinite(_parsedAge) && _parsedAge >= 0 ? _parsedAge : PUSH_MAX_VERDICT_AGE_DAYS, PUSH_MAX_VERDICT_AGE_DAYS);
 
   const db = req.app.locals.pgDb;
   if (!db) return res.status(500).json({ error: 'Database not available' });
@@ -24354,11 +24376,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
 
   // Which verification-result buckets to push (from the modal). Validate against
   // the known vocabulary; defaults to everything but 'invalid'.
-  const KNOWN_STATUSES = ['safe', 'safe_catchall', 'unknown', 'risky', 'invalid', UNVERIFIED];
-  const reqStatuses = Array.isArray(req.body.allowed_statuses)
-    ? req.body.allowed_statuses.map(s => String(s).toLowerCase()).filter(s => KNOWN_STATUSES.includes(s))
-    : [];
-  const allowedStatuses = reqStatuses.length ? reqStatuses : [...DEFAULT_PUSHABLE_STATUSES];
+  const allowedStatuses = clampPushStatuses(req.body.allowed_statuses);
 
   const sq = req.app.locals.sqliteDb;
   const jobId = require('crypto').randomUUID();
@@ -24534,7 +24552,6 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       // email_status (null/unknown stays pushable in loose mode), so the Reacher
       // loop below runs zero times and the push starts immediately.
       const isFreshVerdict = c =>
-        job.skipVerify ||
         (c.email_verified_at && c.email_verified_at >= cutoff && c.email_status && c.email_status !== 'unknown');
       const needsVerify     = contacts.filter(c => !isFreshVerdict(c));
       const alreadyVerified = contacts.filter(isFreshVerdict);
@@ -24587,16 +24604,12 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
         // engine. Driven by the explicit job.loose flag (sent by the engine-leads
         // push) so it does NOT depend on the stored source column, which staging
         // may have left non-engine on a pre-existing row.
+        // 2026-09-25: ONE deliverability gate for every contact. `loose` and
+        // source='engine' used to push anything not hard-'invalid' (risky,
+        // unknown, catch-all). They now only relax the name requirement below.
         const looseHere = job.loose || c.source === 'engine';
-        if (looseHere) {
-          if (verifyResults[c.id] === 'invalid')        { skipped.unsafe++; return false; }
-          if (isFreeDomain(c.email))                    { skipped.unsafe++; return false; }
-        } else {
-          // User-chosen verification buckets (push modal). Default safe pair.
-          const allowedSet = (Array.isArray(job.allowedStatuses) && job.allowedStatuses.length)
-            ? job.allowedStatuses : ['safe', 'safe_catchall'];
-          if (!allowedSet.includes(verifyResults[c.id])) { skipped.unsafe++; return false; }
-        }
+        if (isFreeDomain(c.email))                      { skipped.unsafe++; return false; }
+        if (!clampPushStatuses(job.allowedStatuses).includes(verifyResults[c.id])) { skipped.unsafe++; return false; }
         if (c.do_not_contact)               { skipped.dnc++; return false; }
         if (departed.has(String(c.email || '').toLowerCase())) { skipped.departed = (skipped.departed || 0) + 1; return false; }
         // Name requirement is a STALE Bison rule (Bison 422'd on empty names).
@@ -24879,7 +24892,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
           // Persist WHY, not just the verdict. Only for non-safe results — a
           // clean pass writes null so a stale reason can't outlive its cause.
           batchUpdates.push({ id: c.id, email_status: status, email_verified_at: new Date().toISOString(), mx_provider: mxProvider, email: c.email,
-                              email_verify_reason: status === 'safe' ? null : (reason || null) });
+                              email_verify_reason: reason ? String(reason).slice(0, 500) : null });
         } catch (err) {
           // Network/timeout reaching the finder itself = a real outage signal
           // (distinct from an SMTP-level "unknown" the finder returns normally).
@@ -24955,8 +24968,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
         // Running count of contacts in THIS chunk that could be pushed, kept in
         // step as each concurrency group lands so the early-stop check is O(1).
         let _chunkPassable = 0;
-        const _allowedSet = (Array.isArray(job.allowedStatuses) && job.allowedStatuses.length)
-          ? job.allowedStatuses : ['safe', 'safe_catchall'];
+        const _allowedSet = clampPushStatuses(job.allowedStatuses);
 
         job.status = 'verifying';
         for (let j = 0; j < chunk.length; j += CONCURRENCY) {
@@ -24982,8 +24994,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
             for (const c of chunk.slice(j, j + CONCURRENCY)) {
               const v = verifyResults[c.id];
               if (v === undefined) continue;
-              const looseHere = job.loose || c.source === 'engine';
-              if (looseHere ? v !== 'invalid' : _allowedSet.includes(v)) _chunkPassable++;
+              if (_allowedSet.includes(v)) _chunkPassable++;
             }
           }
         }
@@ -25281,7 +25292,7 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
   if (!Array.isArray(job.allowedProviders)) {
     try { job.allowedProviders = JSON.parse(row.allowed_providers || '[]'); } catch { job.allowedProviders = []; }
   }
-  if (job.useN2b === undefined) job.useN2b = row.use_n2b === 0 ? false : true;
+  job.useN2b = false; // 2026-09-25: No2Bounce (Reacher) retired
   if (!Array.isArray(job.allowedStatuses)) {
     try { job.allowedStatuses = row.allowed_statuses ? JSON.parse(row.allowed_statuses) : undefined; } catch {}
   }
@@ -25294,7 +25305,7 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
   const contact_ids = JSON.parse(row.contact_ids || '[]');
   const include_risky = !!row.include_risky;
   // max_age_days 0 = always re-verify; use ?? so a stored 0 is not coerced to 14
-  const max_age_days = row.max_age_days ?? 14;
+  const max_age_days = Math.min(row.max_age_days ?? PUSH_MAX_VERDICT_AGE_DAYS, PUSH_MAX_VERDICT_AGE_DAYS);
   const workspace_id = row.workspace_id;
   const campaign_id  = row.campaign_id;
 
@@ -25319,7 +25330,6 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
       // email_status (null/unknown stays pushable in loose mode), so the Reacher
       // loop below runs zero times and the push starts immediately.
       const isFreshVerdict = c =>
-        job.skipVerify ||
         (c.email_verified_at && c.email_verified_at >= cutoff && c.email_status && c.email_status !== 'unknown');
       const needsVerify     = contacts.filter(c => !isFreshVerdict(c));
       const alreadyVerified = contacts.filter(isFreshVerdict);
@@ -25356,16 +25366,12 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
         // Engine leads: looser gate (push anything not hard-'invalid'; block
         // free/disposable/trap domains). Apollo stays strict. Mirrors the main
         // verify-and-push gate so a resumed job behaves identically.
+        // 2026-09-25: ONE deliverability gate for every contact. `loose` and
+        // source='engine' used to push anything not hard-'invalid' (risky,
+        // unknown, catch-all). They now only relax the name requirement below.
         const looseHere = job.loose || c.source === 'engine';
-        if (looseHere) {
-          if (verifyResults[c.id] === 'invalid')        { skipped.unsafe++; return false; }
-          if (isFreeDomain(c.email))                    { skipped.unsafe++; return false; }
-        } else {
-          // User-chosen verification buckets (push modal). Default safe pair.
-          const allowedSet = (Array.isArray(job.allowedStatuses) && job.allowedStatuses.length)
-            ? job.allowedStatuses : ['safe', 'safe_catchall'];
-          if (!allowedSet.includes(verifyResults[c.id])) { skipped.unsafe++; return false; }
-        }
+        if (isFreeDomain(c.email))                      { skipped.unsafe++; return false; }
+        if (!clampPushStatuses(job.allowedStatuses).includes(verifyResults[c.id])) { skipped.unsafe++; return false; }
         if (c.do_not_contact) { skipped.dnc++; return false; }
         if (departed.has(String(c.email || '').toLowerCase())) { skipped.departed++; return false; }
         // The four gates below existed only in the main worker. A resumed job
@@ -25543,7 +25549,7 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
           // Persist WHY, not just the verdict. Only for non-safe results — a
           // clean pass writes null so a stale reason can't outlive its cause.
           batchUpdates.push({ id: c.id, email_status: status, email_verified_at: new Date().toISOString(), mx_provider: mxProvider, email: c.email,
-                              email_verify_reason: status === 'safe' ? null : (reason || null) });
+                              email_verify_reason: reason ? String(reason).slice(0, 500) : null });
         } catch (err) {
           // Network/timeout reaching the finder itself = a real outage signal
           // (distinct from an SMTP-level "unknown" the finder returns normally).
@@ -27461,7 +27467,7 @@ function scheduleAudienceScoring(pgdb) {
     try {
       const r = await fetch(`http://127.0.0.1:${finderPort}/api/verify-email`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, verifier: 'reacher' }),
+        body: JSON.stringify({ email, verifier: process.env.CONTACTS_VERIFIER || 'ninja' }),
         signal: AbortSignal.timeout(65000),
       });
       const d = await r.json();
@@ -27560,7 +27566,7 @@ function scheduleAudienceScoring(pgdb) {
           try {
             const r = await fetch(`http://127.0.0.1:${finderPort}/api/verify-email`, {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ email, verifier: 'reacher' }),
+              body: JSON.stringify({ email, verifier: process.env.CONTACTS_VERIFIER || 'ninja' }),
               signal: AbortSignal.timeout(65000),
             });
             const d = await r.json();
