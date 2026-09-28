@@ -1401,9 +1401,12 @@ function mapNinjaResult(email, data) {
   // mx.records[].exchange) keeps working untouched.
   const raw = { is_reachable: null, mx, smtp: { is_catch_all: /catch.?all/i.test(message) }, ninja: data };
   const reason = `Ninja: ${message || code || 'no response'}`;
-  if (code === 'ok') return { email, status: 'valid', confidence: 'high', reason, raw: { ...raw, is_reachable: 'safe' } };
+  // 2026-09-25: only ok + "Accepted" is safe. `ok` alone also covers
+  // "Limited", which is not a confirmed mailbox; treat anything else as risky
+  // so it can never pass the push gate.
+  if (code === 'ok' && /^accepted$/i.test(message.trim())) return { email, status: 'valid', confidence: 'high', reason, raw: { ...raw, is_reachable: 'safe' } };
   if (code === 'ko') return { email, status: 'invalid', confidence: 'high', reason, raw: { ...raw, is_reachable: 'invalid' } };
-  if (/catch.?all/i.test(message)) return { email, status: 'risky', confidence: 'medium', reason, raw: { ...raw, is_reachable: 'risky' } };
+  if (code === 'ok' || /catch.?all/i.test(message)) return { email, status: 'risky', confidence: 'medium', reason, raw: { ...raw, is_reachable: 'risky' } };
   return { email, status: 'unknown', confidence: 'low', reason, raw: { ...raw, is_reachable: 'unknown' } };
 }
 
