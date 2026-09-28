@@ -9,6 +9,7 @@ const dnsPromises = require('dns').promises;
 // rather than re-typing it makes drift impossible.
 const { DOMAIN_NORM_SQL } = require('./lib/adscheck/schema');
 const { DISQUALIFIER_TIERS, SNOOZE_MONTHS } = require('./scripts/extract-reply-facts');
+const { isGuardExemptWorkspace } = require('./push-guard-exempt');
 
 // Freshness is measured from `imported_at` and nothing else.
 //
@@ -2666,6 +2667,7 @@ class PostgresDatabase {
     // (stamped at push time + updated by webhook), so lexicographic comparison works.
     safe('cooldownWorkspace', () => {
       if (!filters.cooldownWorkspace) return;
+      if (isGuardExemptWorkspace(filters.cooldownWorkspace)) return;
       // 30 days, matching PUSH_GUARD_DEFAULTS.sameClientDays in server.js.
       // This filter exists to hide rows the push would skip anyway, so the two
       // numbers MUST agree. It was 60 here against the guard's 30, which hid

@@ -1,4 +1,5 @@
 const express   = require('express');
+const { isGuardExemptWorkspace } = require('./push-guard-exempt');
 let Database;
 try {
   Database = require('better-sqlite3');
@@ -17020,7 +17021,7 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
     const overrideGuards = isGuardOverride(body.override_send_rules);
     const crossClientGuard = buildCrossClientGuard(workspaceId, workspaceName, overrideGuards);
     const campaignVertical = detectVertical((campaignName || '') + ' ' + (workspaceName || ''), workspaceId);
-    const cooloffDate = sameClientCooloffDate(overrideGuards);
+    const cooloffDate = sameClientCooloffDate(overrideGuards, workspaceId);
     const today = new Date().toISOString().slice(0, 10);
     const targetCampLc = campaignName.toLowerCase();
     const targetCampId = String(body.campaign_id || '').trim();
@@ -17278,7 +17279,7 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
     // job on this path (this endpoint is 'push without verify').
     const overrideGuards = isGuardOverride(req.body.override_send_rules);
     if (overrideGuards) logGuardOverride('push-contacts', req, { contacts: allContacts.length, ws: workspace_id, campaign: campaign_id });
-    const cooloffDate = sameClientCooloffDate(overrideGuards);
+    const cooloffDate = sameClientCooloffDate(overrideGuards, workspace_id);
     const campaignNameLc = (req.body.campaign_name || '').toString().trim().toLowerCase();
     const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, verticalCollision: 0, burstGap: 0, densityCeiling: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
     const crossClientGuard = buildCrossClientGuard(workspace_id, req.body.workspace_name || '', overrideGuards);
@@ -17883,7 +17884,7 @@ app.post('/api/admin/flag-free-domain-contacts', requireAdmin, async (req, res) 
 // an empty set means "no block", so the caller must fetch it via
 // getDepartedEmails().
 function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName, allowedStatuses, pushWorkspaceId, workspaceName, departed = new Set(), overrideGuards = false }) {
-  const cooloffDate = sameClientCooloffDate(overrideGuards);
+  const cooloffDate = sameClientCooloffDate(overrideGuards, pushWorkspaceId || cooldownWorkspaceId);
   const campaignNameLc = (campaignName || '').toString().trim().toLowerCase();
   const skipped = { unsafe: 0, dnc: 0, freeDomain: 0, cooldownWorkspace: 0, verticalCollision: 0, burstGap: 0, densityCeiling: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
   // Guard against the workspace actually being pushed to; cooldownWorkspaceId
@@ -22013,8 +22014,8 @@ function stampDaysAgo(days) {
 // on same-client history. It exists for the case where a push was lost AFTER
 // the stamp was written (leads deleted in PlusVibe), so the stamp records a
 // send that never actually happened and the cooldown is guarding nothing.
-function sameClientCooloffDate(override = false) {
-  if (override) return null;
+function sameClientCooloffDate(override = false, workspaceId = '') {
+  if (override || isGuardExemptWorkspace(workspaceId)) return null;
   const settings = pushGuardSettings();
   return settings.sameClientEnabled ? stampDaysAgo(settings.sameClientDays) : null;
 }
@@ -22065,7 +22066,7 @@ function buildCrossClientGuard(workspaceId, workspaceName, override = false) {
   // Manual override → behave exactly as the master switch being off: every
   // contact passes. Checked before pushGuardSettings() so the override can
   // never be defeated by saved settings, and costs no lookup.
-  if (override) return () => true;
+  if (override || isGuardExemptWorkspace(workspaceId)) return () => true;
   const settings = pushGuardSettings();
   // Master switch off → every contact passes. Returned before any lookup so
   // the disabled path costs nothing and can't trip on a bad client_verticals row.
@@ -24588,7 +24589,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       const campaignVertical = detectVertical((job.campaign_name || '') + ' ' + (job.workspace_name || ''), job.workspace_id);
       const crossClientGuard = buildCrossClientGuard(job.workspace_id || '', job.workspace_name || '', job.overrideGuards);
       const today        = new Date().toISOString().slice(0, 10);
-      const cooloffDate  = sameClientCooloffDate(job.overrideGuards);
+      const cooloffDate  = sameClientCooloffDate(job.overrideGuards, job.workspace_id);
       const targetCampLc = (job.campaign_name || '').trim().toLowerCase();
       const departed     = await getDepartedEmails(db);
 
@@ -25358,7 +25359,7 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
       const campaignVertical = detectVertical((job.campaign_name || '') + ' ' + (job.workspace_name || ''), job.workspace_id);
       const crossClientGuard = buildCrossClientGuard(job.workspace_id || '', job.workspace_name || '', job.overrideGuards);
       const today       = new Date().toISOString().slice(0, 10);
-      const cooloffDate = sameClientCooloffDate(job.overrideGuards);
+      const cooloffDate = sameClientCooloffDate(job.overrideGuards, job.workspace_id);
       const targetCampLc = (job.campaign_name || '').trim().toLowerCase();
       const departed    = await getDepartedEmails(db);
 
