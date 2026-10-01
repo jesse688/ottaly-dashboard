@@ -72,6 +72,12 @@ eq(tagKey(mb({ tags: ['Inboxing.com', 'Google Generic'] })), 'Inboxing.com', 'ta
 // 'generic' is checked before the legacy fallbacks.
 eq(tagKey(mb({ tags: ['Google Generic', 'Google Legacy'] })), 'Google Generic', 'tag: generic before legacy')
 
+// Ottaly Mail SMTP (2026-10-01): our own SMTP wins over any older provider tag.
+eq(tagKey(mb({ tags: ['Ottaly Mail SMTP'] })), 'Ottaly Mail SMTP', 'tag: Ottaly Mail SMTP')
+eq(tagKey(mb({ tags: ['MS New SEP', 'SMTP to MS - SEP', 'Ottaly Mail SMTP'] })), 'Ottaly Mail SMTP', 'tag: Ottaly Mail beats old Microsoft tags')
+eq(tagKey(mb({ tags: ['client:YVF', 'ip:mx22'] })), 'Untagged', 'tag: client/ip tags alone stay Untagged')
+eq(tagKey(mb({ tags: ['Winnr'] })), 'Winnr', 'tag: Winnr unchanged')
+
 // Untagged is a real bucket, not a drop — the tag cards must sum to the fleet.
 eq(tagKey(mb({ tags: null })), 'Untagged', 'tag: null tags → Untagged')
 eq(tagKey(mb({ tags: [] })), 'Untagged', 'tag: empty tags → Untagged')

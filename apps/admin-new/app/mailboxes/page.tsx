@@ -32,7 +32,7 @@ const ACCENT: Record<string, string> = {
   // NB 'Winnr' is already keyed above as a supplier accent and doubles as the
   // tag accent — do not re-add it here, a duplicate key is a TS error.
   'SMTP to MS - SEP': '#0078D4', 'MS Legacy': '#7A8BA6', 'MS New': '#F5A623',
-  'Inboxing.com': '#7C89CD', Untagged: '#C4C9D4',
+  'Inboxing.com': '#7C89CD', 'Ottaly Mail SMTP': '#0EA5E9', Untagged: '#C4C9D4',
 }
 
 // Display names for tag cards whose bucket key reads wrong on screen. The key
