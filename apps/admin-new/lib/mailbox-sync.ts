@@ -84,11 +84,7 @@ async function fetchMailboxStats(workspaceId: string, accountId: string, start: 
 // Per-mailbox DAILY chart series (each row has .date) for backfilling history.
 interface DayRow { date: string; sent: number; replies: number; ooo: number; bounces: number; contacted: number }
 type ChartRow = { date?: string; total_sent_count?: number; total_reply_count?: number; total_ooo_reply_count?: number; total_bounce_count?: number; total_contacted_count?: number }
-async function fetchMailboxDailyChart(workspaceId: string, accountId: string, start: string, end: string): Promise<DayRow[]> {
-  const data = await pvFetch<{ chart?: ChartRow[] } | ChartRow[]>(
-    `/account/email-stats?workspace_id=${encodeURIComponent(workspaceId)}&email_acc_id=${encodeURIComponent(accountId)}&start_date=${start}&end_date=${end}`
-  )
-  const chart = Array.isArray(data) ? data : (data?.chart ?? [])
+const toDayRows = (chart: ChartRow[]): DayRow[] => {
   const out: DayRow[] = []
   for (const r of chart) {
     if (!r.date) continue
@@ -96,6 +92,19 @@ async function fetchMailboxDailyChart(workspaceId: string, accountId: string, st
     out.push({ date: r.date.slice(0, 10), sent, replies: r.total_reply_count ?? 0, ooo: r.total_ooo_reply_count ?? 0, bounces: r.total_bounce_count ?? 0, contacted: r.total_contacted_count ?? sent })
   }
   return out
+}
+
+// Daily charts for up to 100 mailboxes of one workspace in ONE call. This used
+// to be one /account/email-stats call per mailbox: ~1,870 serialized calls that
+// took 50-70 minutes, so the "30-min" refresh really ran hourly and a mailbox
+// fetched at the start of a pass showed today's sends as of an hour earlier.
+// Returns null when the call fails, so the caller counts every id as failed.
+const BULK_CHUNK = 100
+async function fetchDailyChartsBulk(workspaceId: string, accountIds: string[], start: string, end: string): Promise<Map<string, DayRow[]> | null> {
+  const qs = new URLSearchParams({ workspace_id: workspaceId, start_date: start, end_date: end, email_acc_ids: accountIds.join(','), limit: String(BULK_CHUNK) })
+  const data = await pvFetch<{ accounts?: { email_acc_id: string; chart?: ChartRow[] }[] }>(`/account/email-stats/bulk?${qs}`)
+  if (!data?.accounts) return null
+  return new Map(data.accounts.map(a => [a.email_acc_id, toDayRows(a.chart ?? [])]))
 }
 
 // Backfill mailbox_supplier_daily history: pull each mailbox's daily chart over
@@ -129,18 +138,26 @@ export async function backfillSupplierDaily(days = 30): Promise<{ ok: boolean; m
     // that silently understates every group it belongs to. Track failures and
     // refuse to write a corrupt snapshot below.
     let failed = 0
-    // Progress logging: this loop is ~1,700 serialized PV calls and used to run
-    // for many minutes emitting NOTHING, so "still working" and "wedged" looked
-    // identical from outside.
     console.log(`[backfill] starting — ${rows.length} mailboxes, ${days}d window (${start}..${end})`)
-    let done = 0
-    const charts = await mapPool(rows, 3, m =>
-      fetchMailboxDailyChart(m.workspace_id, m.account_id, start, end)
-        .catch(() => { failed++; return null as DayRow[] | null })
-        .finally(() => {
-          if (++done % 250 === 0) console.log(`[backfill] ${done}/${rows.length} fetched (${failed} failed)`)
-        })
-    )
+    // Chunk per workspace (the bulk endpoint is workspace-scoped), 100 ids a call.
+    const byWs = new Map<string, typeof rows>()
+    for (const m of rows) byWs.set(m.workspace_id, [...(byWs.get(m.workspace_id) ?? []), m])
+    const chunks: { ws: string; ids: string[] }[] = []
+    for (const [ws, list] of byWs) {
+      for (let i = 0; i < list.length; i += BULK_CHUNK) chunks.push({ ws, ids: list.slice(i, i + BULK_CHUNK).map(m => m.account_id) })
+    }
+    const byAccount = new Map<string, DayRow[]>()
+    await mapPool(chunks, 3, async c => {
+      const got = await fetchDailyChartsBulk(c.ws, c.ids, start, end).catch(() => null)
+      if (!got) { failed += c.ids.length; return }
+      for (const id of c.ids) {
+        const chart = got.get(id)
+        // An id PV left out is unknown, not "sent nothing" — count it as failed.
+        if (chart) byAccount.set(id, chart); else failed++
+      }
+    })
+    const charts = rows.map(m => byAccount.get(m.account_id) ?? null)
+    console.log(`[backfill] fetched ${rows.length - failed}/${rows.length} mailboxes in ${chunks.length} bulk calls`)
     if (failed) console.warn(`[backfill] ${failed}/${rows.length} mailbox chart fetches failed`)
     // If a large share failed (PlusVibe rate-limiting us, typically), the totals
     // would be wrong in a way nobody can see on the page. Bail instead.
@@ -167,6 +184,18 @@ export async function backfillSupplierDaily(days = 30): Promise<{ ok: boolean; m
     const client = await pool.connect()
     try {
       await client.query('BEGIN')
+      // Zero every count in the window first. The upsert below only touches keys
+      // that still have sends, so a row for a key a mailbox has LEFT (re-tagged
+      // out of Untagged, say) kept its old total forever and was counted twice:
+      // tag cards for 23 Sep summed 1,039 sends higher than supplier cards.
+      // Same transaction, so readers never see the zeros. count/active/warmup_pct
+      // belong to syncMailboxes and are left alone.
+      await client.query(
+        `UPDATE mailbox_supplier_daily
+            SET total_sent = 0, reply_rate = 0, bounce_rate = 0, total_replies = 0, total_ooo = 0, total_bounces = 0, total_contacted = 0
+          WHERE day BETWEEN $1::date AND $2::date`,
+        [start, end]
+      )
       for (const [k, c] of agg) {
         const [dimension, key, day] = k.split('|')
         // reply_rate here = RR including OOO (replies/contacted) — the card

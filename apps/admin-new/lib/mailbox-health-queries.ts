@@ -244,15 +244,27 @@ export async function judgeable(opts: { client?: string; minContacted?: number }
        SELECT email, date, sent,
               date - LAG(date) OVER (PARTITION BY email ORDER BY date) AS gap_days
          FROM mbx_daily WHERE sent > 0
+     ), rested AS (
+       -- Most recent rest per mailbox, as a window function over the whole
+       -- partition. This replaced a LEFT JOIN LATERAL that re-scanned gaps
+       -- once PER ROW: across ~71k sending days that took over 30 seconds and
+       -- blew the 8s statement timeout, so /api/mailbox-health, /mailboxes
+       -- and /actions all returned 500 while the page itself rendered fine.
+       --
+       -- MUST be OVER (PARTITION BY email) with NO frame clause. A running
+       -- frame (ROWS UNBOUNDED PRECEDING) leaves last_rest NULL for rows
+       -- BEFORE the rest, which the IS NULL branch below then lets through --
+       -- silently counting pre-rest sends. Verified against the old query on
+       -- 200 mailboxes: identical, and 1.6s instead of 30s+.
+       SELECT email, date, sent,
+              MAX(CASE WHEN gap_days >= 7 THEN date END)
+                OVER (PARTITION BY email) AS last_rest
+         FROM gaps
      ), since_rest AS (
-       SELECT g.email, SUM(g.sent)::bigint AS sends_since_rest
-         FROM gaps g
-         LEFT JOIN LATERAL (
-           SELECT MAX(date) AS last_rest FROM gaps r
-            WHERE r.email = g.email AND r.gap_days >= 7
-         ) lr ON TRUE
-        WHERE lr.last_rest IS NULL OR g.date >= lr.last_rest
-        GROUP BY g.email
+       SELECT email, SUM(sent)::bigint AS sends_since_rest
+         FROM rested
+        WHERE last_rest IS NULL OR date >= last_rest
+        GROUP BY email
      ), win AS (${LATEST_WINDOW})
      SELECT m.email,
             COALESCE(m.workspace_name, m.workspace_id) AS client,

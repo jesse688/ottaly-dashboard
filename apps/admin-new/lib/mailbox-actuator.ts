@@ -138,6 +138,13 @@ async function writeLimit(
   }
 
   let changed = 0, failed = 0
+  // WHY a reason is collected: a failed write used to record nothing at all,
+  // so "Changed 0 of 25. 25 failed" gave the operator no way to tell a
+  // PlusVibe rejection from a rate-limit timeout. On 2026-09-21 it was the
+  // latter -- a 1,626-mailbox backfill was saturating the shared gate -- and
+  // it took an hour of log archaeology to establish that.
+  const reasons = new Set<string>()
+  const note = (m: string) => { if (reasons.size < 5) reasons.add(m) }
   // Only the emails PlusVibe actually accepted. Mirroring the write to every
   // target instead was how 150 mailboxes could read "paused" here while still
   // sending at full rate in PlusVibe — and resolveTarget filters on
@@ -151,15 +158,17 @@ async function writeLimit(
           workspace_id: ws,
           ids: chunk.map(c => c.account_id),
           daily_limit: to,
-        })
+        }, { label: 'setLimit' })
         if (mcpFailed(res)) {
           failed += chunk.length
+          note(`PlusVibe rejected the write: ${JSON.stringify(res).slice(0, 200)}`)
         } else {
           changed += chunk.length
           for (const c of chunk) done.push(c.email)
         }
-      } catch {
+      } catch (e) {
         failed += chunk.length
+        note(e instanceof Error ? e.message : String(e))
       }
     }
   }
@@ -179,7 +188,12 @@ async function writeLimit(
     }
   }
 
-  return { dry_run: false, targeted: targets.length, changed, failed, change_id: changeId, preview }
+  return {
+    dry_run: false, targeted: targets.length, changed, failed,
+    change_id: changeId, preview,
+    // Surface WHY, so the operator is not left guessing at "25 failed".
+    ...(failed > 0 && reasons.size ? { error: [...reasons].join(' | ') } : {}),
+  }
 }
 
 /** Pause: stop cold sending, leave warmup running. */
@@ -232,6 +246,7 @@ export async function randomiseLimits(pct: number, apply: boolean, client?: stri
     byWs.set(t.workspace_id, list)
   }
   let changed = 0, failed = 0
+  let lastErr = ''
   for (const [ws, list] of byWs) {
     for (let i = 0; i < list.length; i += 100) {
       const chunk = list.slice(i, i + 100)
@@ -240,11 +255,12 @@ export async function randomiseLimits(pct: number, apply: boolean, client?: stri
           workspace_id: ws,
           ids: chunk.map(c => c.account_id),
           bulk_limit_rand_pct: value,
-        })
+        }, { label: 'randomise' })
         if (mcpFailed(res)) failed += chunk.length
         else changed += chunk.length
-      } catch {
+      } catch (e) {
         failed += chunk.length
+        if (!lastErr) lastErr = e instanceof Error ? e.message : String(e)
       }
     }
   }
@@ -285,6 +301,7 @@ export async function setRestCycle(
     byWs.set(t.workspace_id, list)
   }
   let changed = 0, failed = 0
+  let lastErr = ''
   for (const [ws, list] of byWs) {
     for (let i = 0; i < list.length; i += 100) {
       const chunk = list.slice(i, i + 100)
@@ -295,11 +312,12 @@ export async function setRestCycle(
           bulk_is_auto_pause: 'yes',
           bulk_auto_pause_send_days: sendDays,
           bulk_auto_pause_days: restDays,
-        })
+        }, { label: 'restCycle' })
         if (mcpFailed(res)) failed += chunk.length
         else changed += chunk.length
-      } catch {
+      } catch (e) {
         failed += chunk.length
+        if (!lastErr) lastErr = e instanceof Error ? e.message : String(e)
       }
     }
   }

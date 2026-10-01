@@ -68,14 +68,17 @@ const RULES: Rule[] = [
       + 'misbehaving — the fix is less volume, not a pause.',
   },
   {
+    // SURBL is deliberately NOT matched here -- it has its own low-priority
+    // rule at the END of this list. Keep this rule ABOVE that one so a bounce
+    // naming both a real blocklist and SURBL is judged on the real one.
     key: 'blocklisted',
     label: 'Domain blocklisted',
     action: 'retire_domain',
-    match: m => m.includes('surbl.org') || m.includes('spamhaus')
+    match: m => m.includes('spamhaus')
       || m.includes('barracudacentral') || m.includes('spamcop'),
-    explain: 'The domain named in the bounce is on a public blocklist (SURBL or '
-      + 'Spamhaus DBL). Volume changes will not help; it has to come out of '
-      + 'rotation.',
+    explain: 'The domain named in the bounce is on a public blocklist '
+      + '(Spamhaus DBL, Barracuda or SpamCop). Volume changes will not help; '
+      + 'it has to come out of rotation.',
   },
   {
     key: 'dmarc_fail',
@@ -182,6 +185,27 @@ const RULES: Rule[] = [
       || m.includes('5.7.129') || m.includes(':blocked)'),
     explain: 'Their mailbox, their org policy, or their server not answering. '
       + 'Nothing on our side to change.',
+  },
+  {
+    // LAST, deliberately. SURBL used to live in the `blocklisted` rule above
+    // and therefore told us to RETIRE THE DOMAIN, which is the wrong call:
+    //
+    //   - SURBL lists URLs found in message BODIES, not sending domains or
+    //     IPs. A hit says a link was listed, not that the mailbox is bad.
+    //   - Its public zone (multi.surbl.org) is dead: every query returns
+    //     SERVFAIL, so a listing cannot be verified without a paid DQS key.
+    //     Checked 2026-09-21 against SURBL's own permanent test point.
+    //   - It is a minority of bounce volume and only one receiver enforces it.
+    //
+    // Classified but action 'none', so it stays visible and counted without
+    // proposing a domain retirement nobody can confirm is warranted.
+    key: 'surbl_listed',
+    label: 'SURBL (link in body listed)',
+    action: 'none',
+    match: m => m.includes('surbl'),
+    explain: 'A URL in the message body is on SURBL. That lists LINKS, not '
+      + 'sending domains, and SURBL\'s public lookup no longer answers, so a '
+      + 'listing cannot be verified. Logged for visibility; no action taken.',
   },
 ]
 
