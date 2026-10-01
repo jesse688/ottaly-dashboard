@@ -9,7 +9,7 @@
 // contract under test is: every key these functions produce is a key the cards
 // actually render, and nothing else.
 
-import { keyFor, providerKey, supplierKey, tagKey, typeKeyTiered, DIMENSIONS, type DimMailbox } from './mailbox-dimensions.ts'
+import { keyFor, providerKey, supplierKey, tagKey, typeKeyTiered, asOf, DIMENSIONS, type DimMailbox } from './mailbox-dimensions.ts'
 
 let failures = 0
 function eq(actual: unknown, expected: unknown, label: string) {
@@ -101,6 +101,17 @@ eq(keyFor('supplier', sample), supplierKey(sample), 'keyFor supplier matches sup
 eq(keyFor('type', sample), providerKey(sample), 'keyFor type matches providerKey')
 eq(keyFor('tag', sample), tagKey(sample), 'keyFor tag matches tagKey')
 eq([...DIMENSIONS], ['supplier', 'type', 'tag'], 'DIMENSIONS covers all three card rows')
+
+// asOf (2026-10-01): a mailbox moved onto Ottaly Mail counts as Ottaly Mail
+// only from its move date; before it, it is what it was.
+const moved = mb({ type: 'smtp', supplier: null, tags: ['MS New SEP', 'Ottaly Mail SMTP'] })
+const mv = { since: '2026-09-27', prevType: 'microsoft', prevSupplier: 'Mithun' }
+eq(tagKey(asOf(moved, '2026-09-20', mv)), 'MS New', 'asOf: before the move -> old tag card')
+eq(providerKey(asOf(moved, '2026-09-20', mv)), 'microsoft', 'asOf: before the move -> old provider')
+eq(supplierKey(asOf(moved, '2026-09-20', mv)), 'Mithun', 'asOf: before the move -> old supplier')
+eq(tagKey(asOf(moved, '2026-09-27', mv)), 'Ottaly Mail SMTP', 'asOf: move day counts as Ottaly Mail')
+eq(providerKey(asOf(moved, '2026-09-30', mv)), 'smtp', 'asOf: after the move -> smtp')
+eq(tagKey(asOf(moved, '2026-09-20', undefined)), 'Ottaly Mail SMTP', 'asOf: no move recorded -> unchanged')
 
 if (failures) { console.error(`\n${failures} failing assertion(s)`); process.exit(1) }
 console.log('mailbox-dimensions: all assertions passed')

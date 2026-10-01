@@ -117,6 +117,27 @@ export type Dimension = (typeof DIMENSIONS)[number]
 
 // Bucket a mailbox for one dimension. This is the function both the writer and
 // the API route go through, so a key can never exist on only one side.
+/**
+ * A mailbox that MOVED onto Ottaly Mail (2026-09-25..27: 340 MithMill Microsoft
+ * addresses re-created on our own SMTP) keeps its address, so PlusVibe hands us
+ * its whole history. Days before the move belong to what it was then, not to
+ * the Ottaly Mail card. Table mailbox_ottaly_mail_moves records the move date
+ * and what the mailbox was before; asOf() returns the mailbox as it was on a
+ * given day: before the move, the Ottaly Mail tag is dropped (so its older
+ * provider tag buckets it) and type/supplier revert to the recorded values.
+ */
+export interface MailboxMove { since: string; prevType: string | null; prevSupplier: string | null }
+
+export function asOf(m: DimMailbox, day: string, move: MailboxMove | undefined): DimMailbox {
+  if (!move || day >= move.since) return m
+  return {
+    ...m,
+    tags: Array.isArray(m.tags) ? m.tags.filter(t => !(normTag(t).includes('ottaly') && normTag(t).includes('mail') && normTag(t).includes('smtp'))) : m.tags,
+    type: move.prevType ?? m.type,
+    supplier: move.prevSupplier ?? m.supplier,
+  }
+}
+
 export function keyFor(dimension: Dimension, m: DimMailbox): string | null {
   switch (dimension) {
     case 'supplier': return supplierKey(m)

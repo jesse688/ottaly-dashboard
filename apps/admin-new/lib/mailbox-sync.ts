@@ -1,5 +1,6 @@
 import pool from './db'
-import { DIMENSIONS, keyFor, type DimMailbox } from './mailbox-dimensions'
+import { DIMENSIONS, keyFor, asOf, type DimMailbox } from './mailbox-dimensions'
+import { loadMailboxMoves } from './mailbox-moves'
 import {
   pvGate,
   pvBackoffSignal,
@@ -166,7 +167,11 @@ export async function backfillSupplierDaily(days = 30): Promise<{ ok: boolean; m
       console.error(`[backfill] ${msg}`)
       return { ok: false, mailboxes: rows.length, rows: 0, error: msg }
     }
+    // Days before a mailbox moved onto Ottaly Mail are bucketed as what it was
+    // then (asOf), so the Ottaly Mail card only counts its Ottaly Mail days.
+    const moves = await loadMailboxMoves()
     rows.forEach((m, i) => {
+      const move = moves.get((m.email || '').toLowerCase())
       for (const day of charts[i] ?? []) {
         if (!day.sent && !day.replies && !day.bounces) continue
         // Every dimension the cards render, bucketed by the shared keyFor so a
@@ -174,7 +179,7 @@ export async function backfillSupplierDaily(days = 30): Promise<{ ok: boolean; m
         // mailbox has no bucket for that dimension (a missing type) — skip it
         // rather than inventing one.
         for (const dim of DIMENSIONS) {
-          const key = keyFor(dim, m as DimMailbox)
+          const key = keyFor(dim, asOf(m as DimMailbox, day.date, move))
           if (key) add(dim, key, day.date, day)
         }
       }
