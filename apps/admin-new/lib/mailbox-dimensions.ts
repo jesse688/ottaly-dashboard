@@ -62,7 +62,13 @@ const domainOf = (email: string) => (email.split('@')[1] || '').toLowerCase()
 // carry it alongside their provider tag. Matching it earlier would pull those
 // out of the provider bucket the card is actually reporting on. Reaching it
 // means the mailbox has no provider tag of its own.
+// 'Ottaly Mail SMTP' comes FIRST (2026-10-01): mailboxes on our own sending
+// infrastructure (KumoMTA + mailcow). Many of them are addresses that used to
+// be MithMill Microsoft mailboxes and still carry tags like "MS New SEP"; once
+// a mailbox is on Ottaly Mail that is where its results come from, so this tag
+// must win over any older provider tag.
 export const TAG_RULES: { needs: string[]; key: string }[] = [
+  { needs: ['ottaly', 'mail', 'smtp'], key: 'Ottaly Mail SMTP' },
   { needs: ['inboxing'], key: 'Inboxing.com' },
   { needs: ['google', 'generic'], key: 'Google Generic' },
   { needs: ['google', 'new'], key: 'Google New Sep' },
