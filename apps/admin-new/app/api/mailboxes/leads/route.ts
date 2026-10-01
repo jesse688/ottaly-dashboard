@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import pool from '@/lib/db'
-import { providerKey, supplierKey, tagKey, typeKeyTiered, type DimMailbox } from '@/lib/mailbox-dimensions'
+import { providerKey, supplierKey, tagKey, typeKeyTiered, asOf, type DimMailbox } from '@/lib/mailbox-dimensions'
+import { loadMailboxMoves } from '@/lib/mailbox-moves'
 
 export const dynamic = 'force-dynamic'
 
@@ -32,6 +33,7 @@ export async function GET(req: Request) {
          mf.supplier AS supplier,
          mf.type     AS type,
          mf.tags     AS tags,
+         to_char(ur.marked_at, 'YYYY-MM-DD') AS marked_day,
          (ur.mailbox_email IS NOT NULL AND mf.email IS NOT NULL) AS matched
        FROM unibox_replies ur
        LEFT JOIN mailbox_full mf ON lower(mf.email) = lower(ur.mailbox_email)
@@ -53,16 +55,20 @@ export async function GET(req: Request) {
     let matched = 0
     let unmatched = 0
 
+    const moves = await loadMailboxMoves()
     for (const r of res.rows) {
       total++
       if (!r.matched) { unmatched++; continue }
       matched++
-      const m: DimMailbox = {
+      const base: DimMailbox = {
         email: (r.email as string | null) || '',
         type: r.type as string | null,
         tags: Array.isArray(r.tags) ? (r.tags as string[]) : null,
         supplier: r.supplier as string | null,
       }
+      // A lead won before the mailbox moved onto Ottaly Mail belongs to what
+      // it was then (asOf), not to the Ottaly Mail card.
+      const m = asOf(base, (r.marked_day as string | null) ?? '9999-12-31', moves.get(base.email.toLowerCase()))
       const sup = supplierKey(m)
       const prov = providerKey(m) || 'unknown'
       bySupplier[sup] = (bySupplier[sup] || 0) + 1
