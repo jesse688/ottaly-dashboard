@@ -17212,7 +17212,12 @@ const UNVERIFIED = 'unverified';
 // bounces were contacts already marked invalid/unknown/risky, and 21 more were
 // safe_catchall. The ceiling below is enforced server-side: a caller can
 // narrow it but never widen it.
-const PUSH_STATUS_CEILING = ['safe'];
+// 'safe_catchall' is NOT a verdict a contact can arrive with from the verifier:
+// it is produced ONLY by the No2Bounce stage, after N2B confirms a catch-all
+// address actually accepts mail. If N2B is off, unreachable, out of credits or
+// returns no row for an address, that contact stays 'risky' and is never
+// pushed — so the gate degrades to safe-only by itself, with no extra branch.
+const PUSH_STATUS_CEILING = ['safe', 'safe_catchall'];
 const DEFAULT_PUSHABLE_STATUSES = new Set(PUSH_STATUS_CEILING);
 // A stored verdict older than this is re-verified before a push (and blocks a
 // no-verify push). Mailboxes get disabled constantly; 14 days was too long.
@@ -24339,10 +24344,13 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
   // help text ("if unchecked, catch-alls are skipped entirely") described
   // behaviour that did not exist. Honour it, defaulting to ON so existing
   // callers that omit it keep validating catch-alls.
-  // 2026-09-25: forced OFF. No2Bounce runs on Reacher, which is dead
-  // (proxy4smtp auth rejected), and its only output here is promoting 'risky'
-  // to 'safe_catchall', which PUSH_STATUS_CEILING no longer allows anyway.
-  const useN2b = false;
+  // 2026-10-05: re-enabled. Both premises of the 25 Sep note were wrong —
+  // Reacher connects fine (proxy4smtp is live), and No2Bounce is an independent
+  // API, not something running on Reacher. Verified live on 2026-10-05: submit
+  // + poll returns Deliverable / UnDeliverable / Risky and the account has
+  // credits. Catch-alls are now pushable, but ONLY once N2B confirms them.
+  const useN2b = use_n2b === undefined ? true
+    : (use_n2b === true || use_n2b === 'true' || use_n2b === 1 || use_n2b === '1');
   if (!workspace_id || !campaign_id || !Array.isArray(contact_ids) || !contact_ids.length) {
     return res.status(400).json({ error: 'workspace_id, campaign_id and contact_ids required' });
   }
