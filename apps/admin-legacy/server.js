@@ -16951,6 +16951,7 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
   // (129 of 1,998 when 1,868 were merely unverified). Callers wanting the
   // strict "already verified-safe" count must ask for it with loose:false.
   const loose = body.loose !== false;
+  const excludeRisky = body.exclude_risky === true;
   // Mirrors the push modal's default pair; callers may pass their own buckets.
   const allowedStatuses = clampPushStatuses(body.allowedStatuses);
   const pushableStatuses = new Set(allowedStatuses);
@@ -17035,6 +17036,10 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
       const status = String(c.email_status || '').toLowerCase();
       if (loose) {
         if (status === 'invalid') { skipped.unsafe++; continue; }
+        // A push refilling while No2Bounce is down asks for this: a stored
+        // 'risky' is a known catch-all that cannot be confirmed, so offering it
+        // again only re-verifies a contact the gate will block.
+        if (excludeRisky && status === 'risky') { skipped.unsafe++; continue; }
       } else if (!pushableStatuses.has(status)) {
         skipped.unsafe++; continue;
       }
@@ -24258,6 +24263,30 @@ const PUSH_TOPUP_MAX_ROUNDS = 12;
 // directly, for the same reason apSelectContacts does: that route runs the very
 // guards the push runs, so the two cannot drift apart. Contacts pushed in an
 // earlier round are already stamped, so they do not come back.
+// Industries that make up at least 2 of the seed list, most common first.
+// The contacts filter splits on commas, so an industry name containing one
+// cannot be expressed and is dropped.
+async function deriveRefillFilters(db, seedIds) {
+  try {
+    const seed = await db.getContactsById(seedIds.slice(0, 2000));
+    const counts = new Map();
+    for (const c of seed) {
+      const ind = String(c.industry || '').trim();
+      if (!ind || ind.includes(',')) continue;
+      counts.set(ind, (counts.get(ind) || 0) + 1);
+    }
+    const top = [...counts.entries()]
+      .filter(([, n]) => n >= 2)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 15)
+      .map(([ind]) => ind);
+    return top.length ? { industry: top.join(',') } : null;
+  } catch (e) {
+    console.warn(`[push] could not derive refill filters: ${e.message}`);
+    return null;
+  }
+}
+
 async function pushTopUpCandidates(db, job, want) {
   // Spend the selection's untouched tail first. Those contacts are already
   // chosen and already ranked, so using them costs no query and respects the
@@ -24278,7 +24307,21 @@ async function pushTopUpCandidates(db, job, want) {
   }
   // Only the remainder needs querying.
   want = want - fromReserve.length;
+  // An order sent as a bare id list carries no filter, so once the list ran
+  // out there was nowhere to look and the push stopped short (MDH 12 Oct:
+  // 0 of 500, every id a catch-all). The operator still wants the number, so
+  // refill from contacts in the same industries as the list they gave.
+  if (!job.targetFilters && job.seedIds && !job.derivedFiltersTried) {
+    job.derivedFiltersTried = true;
+    job.targetFilters = await deriveRefillFilters(db, job.seedIds);
+    if (job.targetFilters) {
+      console.log(`[push] ${job.id} no filters given — refilling from the list's industries: ${job.targetFilters.industry}`);
+    }
+  }
   if (!job.targetFilters) return fromReserve;
+  // No2Bounce down means a catch-all can never become pushable, so stop
+  // re-offering contacts already known to be catch-alls and reach new stock.
+  const excludeRisky = job.n2bDown || n2bHealth.outOfCredits;
   try {
     const r = await fetch(`http://127.0.0.1:${PORT}/api/contacts/sendability`, {
       method: 'POST',
@@ -24292,6 +24335,7 @@ async function pushTopUpCandidates(db, job, want) {
         return_ids: true,
         override_send_rules: job.overrideGuards,
         one_per_company: job.onePerCompany !== false,
+        exclude_risky: !!excludeRisky,
         // Ask for MORE than `want`, scaled by how much this job has already
         // consumed. The route returns the TOP `sample` ranked ids, and every id
         // this job has already handled is filtered out by seenIds below — so
@@ -24432,6 +24476,10 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
     // The untouched tail of the selection. A top-up prefers these — they are
     // already chosen and ranked — before querying for more.
     reserveIds: null,
+    // The list itself, kept only for an order with no filters, so a refill
+    // can find more contacts like it (see deriveRefillFilters).
+    seedIds: pushTarget > 0 && !(target_filters && typeof target_filters === 'object') ? contact_ids : null,
+    n2bDown: false,
     lastRoundPushed: 0, lastRoundVerified: 0, stallRounds: 0,
     shortfall: null, shortfallReason: null,
     skipped: 0, verified: 0, safe: 0, risky: 0, invalid: 0, unknown: 0,
@@ -25078,6 +25126,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       console.log(`[No2Bounce] Risky contacts found: ${riskyContacts.length} of ${contacts.length}`);
       if (riskyContacts.length && !job.loose && job.useN2b === false) {
         job.n2bWarning = `No2Bounce was turned off for this push — ${riskyContacts.length} catch-all contacts skipped. Tick "Use No2Bounce to verify catch-alls" to recover them.`;
+        job.n2bDown = true;
       }
       // Skip the slow No2Bounce catch-all stage for loose/engine pushes — risky
       // contacts push anyway in loose mode, so validating them just adds latency.
@@ -25117,6 +25166,10 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
         job.invalid      = Object.values(verifyResults).filter(s => s === 'invalid').length;
         job.unknown      = Object.values(verifyResults).filter(s => s === 'unknown').length;
         console.log(`[No2Bounce] Results: ${n2bSafe} confirmed safe, ${n2bInvalid} invalid, ${riskyContacts.length - n2bUpdates.length} no result`);
+        // Every catch-all came back with no answer: N2B is out of credits or
+        // unreachable. Refills then skip known catch-alls instead of feeding
+        // the same dead end back in.
+        if (!n2bUpdates.length) job.n2bDown = true;
 
         if (n2bPush.length && !job.cancelled) {
           job.status = 'pushing';
@@ -25170,7 +25223,12 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
         // the broken-verifier signature. One is bad luck on a thin slice; two
         // in a row is a fault, and continuing would spend credits to learn
         // nothing.
-        if (job.lastRoundVerified >= 50 && job.lastRoundPushed === 0) {
+        // Not when No2Bounce is down and the verifier gave real verdicts: a
+        // round of all catch-alls is thin data, not a broken verifier, and
+        // the next refill already skips them. Under half unknown = verifier OK.
+        const roundTotal = Object.keys(verifyResults).length;
+        const catchAllRound = job.n2bDown && roundTotal > 0 && breakdown.unknown / roundTotal < 0.5;
+        if (job.lastRoundVerified >= 50 && job.lastRoundPushed === 0 && !catchAllRound) {
           job.stallRounds = (job.stallRounds || 0) + 1;
         } else {
           job.stallRounds = 0;
