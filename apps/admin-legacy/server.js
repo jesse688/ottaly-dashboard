@@ -24287,6 +24287,49 @@ async function deriveRefillFilters(db, seedIds) {
   }
 }
 
+// No2Bounce credits are finite, so spend them on catch-alls only once the list
+// is running dry. While more than N2B_POOL_THRESHOLD non-catch-all contacts are
+// still sendable for this push's filters, catch-alls stay 'risky' in the DB and
+// are left for later; when the pool drops under the threshold, a later push
+// picks them up and No2Bounce confirms them then. Jesse's rule, 2026-10-15.
+const N2B_POOL_THRESHOLD = Math.max(0, parseInt(process.env.N2B_POOL_THRESHOLD || '3000', 10));
+const N2B_POOL_RECHECK_MS = 10 * 60 * 1000;
+async function n2bPoolDecision(db, job) {
+  if (job.n2bPool && Date.now() - job.n2bPool.at < N2B_POOL_RECHECK_MS) return job.n2bPool;
+  if (!job.targetFilters && job.seedIds && !job.derivedFiltersTried) {
+    job.derivedFiltersTried = true;
+    job.targetFilters = await deriveRefillFilters(db, job.seedIds);
+  }
+  // No filter means no pool to measure, so keep the old behaviour: use N2B.
+  if (!job.targetFilters) return (job.n2bPool = { use: true, left: null, at: Date.now(), reason: 'no filter' });
+  try {
+    const r = await fetch(`http://127.0.0.1:${PORT}/api/contacts/sendability`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-admin-key': ADMIN_KEY },
+      body: JSON.stringify({
+        filters: job.targetFilters,
+        workspace_id: job.workspace_id,
+        workspace_name: job.workspace_name,
+        campaign_id: job.campaign_id,
+        campaign_name: job.campaign_name,
+        override_send_rules: job.overrideGuards,
+        exclude_risky: true,
+      }),
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const out = await r.json();
+    const left = Number(out.sendableTotal) || 0;
+    job.n2bPool = { use: left <= N2B_POOL_THRESHOLD, left, at: Date.now(), reason: 'measured' };
+  } catch (e) {
+    // Could not measure: fall back to the old behaviour rather than drop catch-alls.
+    console.warn(`[No2Bounce] ${job.id} pool check failed (${e.message}) — using N2B`);
+    job.n2bPool = { use: true, left: null, at: Date.now(), reason: 'check failed' };
+  }
+  console.log(`[No2Bounce] ${job.id} pool: ${job.n2bPool.left ?? '?'} non-catch-all left, threshold ${N2B_POOL_THRESHOLD} -> ${job.n2bPool.use ? 'use N2B' : 'save credits, skip catch-alls'}`);
+  return job.n2bPool;
+}
+
 async function pushTopUpCandidates(db, job, want) {
   // Spend the selection's untouched tail first. Those contacts are already
   // chosen and already ranked, so using them costs no query and respects the
@@ -24321,7 +24364,7 @@ async function pushTopUpCandidates(db, job, want) {
   if (!job.targetFilters) return fromReserve;
   // No2Bounce down means a catch-all can never become pushable, so stop
   // re-offering contacts already known to be catch-alls and reach new stock.
-  const excludeRisky = job.n2bDown || n2bHealth.outOfCredits;
+  const excludeRisky = job.n2bDown || job.n2bSaving || n2bHealth.outOfCredits;
   try {
     const r = await fetch(`http://127.0.0.1:${PORT}/api/contacts/sendability`, {
       method: 'POST',
@@ -25132,6 +25175,13 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       // contacts push anyway in loose mode, so validating them just adds latency.
       // job.useN2b honours the push modal's checkbox (defaults true when absent).
       if (riskyContacts.length && !job.cancelled && !job.loose && job.useN2b !== false) {
+        const pool = await n2bPoolDecision(db, job);
+        job.n2bSaving = !pool.use;
+        if (job.n2bSaving) {
+          job.n2bWarning = `${riskyContacts.length} catch-all contacts held back to save No2Bounce credits: ~${pool.left.toLocaleString()} non-catch-all contacts are still left for this list (No2Bounce starts under ${N2B_POOL_THRESHOLD.toLocaleString()}).`;
+        }
+      }
+      if (riskyContacts.length && !job.cancelled && !job.loose && job.useN2b !== false && !job.n2bSaving) {
         job.status = 'n2b_verifying';
         job.n2bTotal = riskyContacts.length;
         job.n2bDone  = 0;
@@ -25227,7 +25277,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
         // round of all catch-alls is thin data, not a broken verifier, and
         // the next refill already skips them. Under half unknown = verifier OK.
         const roundTotal = Object.keys(verifyResults).length;
-        const catchAllRound = job.n2bDown && roundTotal > 0 && breakdown.unknown / roundTotal < 0.5;
+        const catchAllRound = (job.n2bDown || job.n2bSaving) && roundTotal > 0 && breakdown.unknown / roundTotal < 0.5;
         if (job.lastRoundVerified >= 50 && job.lastRoundPushed === 0 && !catchAllRound) {
           job.stallRounds = (job.stallRounds || 0) + 1;
         } else {
