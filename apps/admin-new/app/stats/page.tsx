@@ -233,6 +233,14 @@ const dec = (n: number, d = 1) => (isNaN(n) ? '—' : n.toFixed(d))
 const rrTone = (rr: number): 'ok' | 'warn' | 'error' => (rr >= 0.025 ? 'ok' : rr >= 0.01 ? 'warn' : 'error')
 const brTone = (br: number): 'ok' | 'warn' | 'error' => (br >= 0.05 ? 'error' : br >= 0.02 ? 'warn' : 'ok')
 
+// Internal workspaces: still listed, but kept out of the agency totals.
+// Ottaly, Hawthorne Energy, DeskDuty.
+const EXCLUDED_FROM_TOTALS = new Set([
+  '690ee665bcb253de4fb44538',
+  '6a6920fadd1097091a1c7e58',
+  '6aa9b5e454de383df6c7118f',
+])
+
 // Build the synthetic "All Workspaces" aggregate row (legacy buildAllWorkspaces).
 function buildAllWorkspaces(list: Workspace[]): Workspace | null {
   if (!list.length) return null
@@ -491,6 +499,9 @@ function ClientCard({
         <div className="min-w-0">
           <div className={cn('truncate text-sm font-semibold', isAll ? 'text-primary' : 'text-foreground')}>
             {w.name}
+            {EXCLUDED_FROM_TOTALS.has(w.workspace_id) && (
+              <span className="ml-2 text-[10px] font-normal text-muted-foreground">not in total</span>
+            )}
           </div>
           <div className="text-[11px] text-muted-foreground">
             {num(t.sent)} sent · {num(t.replies)} replies · {num(t.leads)} leads
@@ -788,7 +799,10 @@ export default function StatsPage() {
     }
   }
 
-  const agg = useMemo(() => buildAllWorkspaces(rows), [rows])
+  const agg = useMemo(
+    () => buildAllWorkspaces(rows.filter(w => !EXCLUDED_FROM_TOTALS.has(w.workspace_id))),
+    [rows],
+  )
   const displayRows = useMemo(() => (agg ? [agg, ...rows] : rows), [agg, rows])
   const loading = status === 'loading'
   // Any workspace PlusVibe failed to answer for makes the agency-wide totals
