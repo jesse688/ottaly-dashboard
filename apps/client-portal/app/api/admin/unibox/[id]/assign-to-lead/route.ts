@@ -133,6 +133,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   let suggested: string | null = null
   let suggestedReason = ''
   const matched = (reply.matched_lead_email ?? '').toLowerCase()
+  // matched_lead_email comes from PlusVibe's own campaign lead at ingest, so it is
+  // a real lead even when esp_leads/contacts haven't synced it yet (new client).
+  if (matched && !leads.some(l => l.email.toLowerCase() === matched) && (!q || matched.includes(q.toLowerCase()))) {
+    leads.unshift({ id: 'matched', email: matched })
+  }
   if (matched && leads.some(l => l.email.toLowerCase() === matched)) {
     suggested = matched
     suggestedReason = `same company as ${reply.lead_email} (matched on ingest)`
@@ -175,7 +180,7 @@ async function assign(id: string, rawTarget: string) {
      LIMIT 1`,
     [ws, targetEmail]
   )
-  if (!lead.rows.length) {
+  if (!lead.rows.length && targetEmail !== (reply.matched_lead_email ?? '').toLowerCase()) {
     return NextResponse.json({ error: `No lead or contact with email ${targetEmail} in this workspace` }, { status: 404 })
   }
 
