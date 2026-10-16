@@ -134,6 +134,9 @@ export async function GET(req: NextRequest) {
     } catch { /* if leads can't load, untracked matching just no-ops (skips Others) */ }
 
     let emails: PVReceivedEmail[] = []
+    // Our own sending mailboxes/domains, as seen in this batch's eaccount field.
+    const ourAddrs = new Set<string>()
+    const ourDomains = new Set<string>()
     try {
       // Pull BOTH the tracked "received" feed AND the "untracked" Others folder.
       // A lead's follow-up whose threading headers don't match lands in Others
@@ -169,6 +172,10 @@ export async function GET(req: NextRequest) {
         if (!byId.has(k)) byId.set(k, { ...e, _feed: 'untracked' })
       }
       emails = [...byId.values()]
+      for (const e of emails) {
+        const a = (e.eaccount || '').toLowerCase()
+        if (a) { ourAddrs.add(a); const d = a.split('@')[1]; if (d) ourDomains.add(d) }
+      }
     } catch (err) {
       errors.push(`${ws}: ${String(err).slice(0, 100)}`)
       return c
@@ -212,8 +219,15 @@ export async function GET(req: NextRequest) {
       // tracked 'received' feed. In 'untracked' (Others) PV's lead field is
       // unreliable, so rely on the authored-by-our-mailbox signal alone there.
       // EXCEPTION: never treat a same-company colleague as outbound — surface it.
-      const authoredByNonLead = feed === 'received' && !!sender && !!campaignLead
+      // THIRD-PARTY CC. The lead loops in someone at ANOTHER company (e.g. andrew@
+      // elogii.com cc'd filip@brisqq.com, who then replied). Not the lead, not the
+      // lead's domain, and not one of OUR mailboxes/domains — so it's a genuine
+      // inbound reply, not our echo. Needs a readable eaccount to prove "not ours".
+      const thirdPartyCc = feed === 'received' && !!sender && !!campaignLead && !!ourMailbox
         && sender !== campaignLead && !sameCompanyColleague
+        && !ourAddrs.has(sender) && !ourDomains.has(senderDomain)
+      const authoredByNonLead = feed === 'received' && !!sender && !!campaignLead
+        && sender !== campaignLead && !sameCompanyColleague && !thirdPartyCc
       if (authoredByUs || authoredByNonLead) { c.skipped_outbound++; continue }
 
       // OTHERS-FOLDER POLICY: ACCEPT EVERYTHING except the deterministic noise that
@@ -257,7 +271,7 @@ export async function GET(req: NextRequest) {
       // ASSOCIATING: a dedicated queue of "this probably belongs to lead X —
       // confirm and Assign to lead." Keeps it out of Review (genuine new leads)
       // until a human links it. state='done' so the classifier leaves it put.
-      const matchedLeadEmail = sameCompanyColleague ? campaignLead : untrackedMatch
+      const matchedLeadEmail = (sameCompanyColleague || thirdPartyCc) ? campaignLead : untrackedMatch
       // ONLY a genuine reply (PV routed it to Review — interested/question/
       // unlabelled) goes to Needs Associating. A colleague-domain reply that's
       // actually OOO / unsubscribe / not-interested stays in ITS folder — there's
