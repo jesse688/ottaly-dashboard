@@ -68,6 +68,16 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if ((err as { code?: string }).code === '23505') return NextResponse.json({ error: 'That username is already taken' }, { status: 409 })
     throw err
   }
+  // pv-reconcile keeps a reply's first client_id (COALESCE), so replies ingested
+  // while the workspace was mapped to the wrong client stay with that client.
+  // Re-own them here. Marked leads are left alone: they're already billed.
+  if (body.workspaceId) {
+    await pool.query(
+      `UPDATE unibox_replies SET client_id = $1
+        WHERE workspace_id = $2 AND client_id IS DISTINCT FROM $1 AND NOT marked_as_lead`,
+      [id, body.workspaceId],
+    )
+  }
   return NextResponse.json({ ok: true })
 }
 
