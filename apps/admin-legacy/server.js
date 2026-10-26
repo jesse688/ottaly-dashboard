@@ -749,6 +749,11 @@ try { db.exec(`ALTER TABLE client_verticals ADD COLUMN excluded_keywords      TE
 try { db.exec(`ALTER TABLE client_verticals ADD COLUMN excluded_counties      TEXT DEFAULT ''`); } catch {}
 try { db.exec(`ALTER TABLE client_verticals ADD COLUMN excluded_cities        TEXT DEFAULT ''`); } catch {}
 try { db.exec(`ALTER TABLE client_verticals ADD COLUMN excluded_job_titles    TEXT DEFAULT ''`); } catch {}
+// Fresh-only pushes (2026-10-26). Days: skip any contact ANOTHER client has
+// emailed or been pushed within this window. 0 = off. Built for new clients:
+// 66% of Mercantile's first leads had already been emailed by 2+ other
+// clients since August, which the 2-clients-per-30-days ceiling allows.
+try { db.exec(`ALTER TABLE client_verticals ADD COLUMN fresh_days INTEGER DEFAULT 0`); } catch {}
 
 // ── Reply-disqualifier rule settings ──────────────────────────────────────
 // Per-rule snooze duration + on/off, editable from /disqualifiers.html. Row
@@ -18471,9 +18476,14 @@ app.post('/api/admin/client-verticals', requireAdmin, (req, res) => {
   const {
     workspace_id, workspace_name, vertical, exclude_remote, require_owns_building, snooze_months, notes,
     excluded_industries, excluded_company_sizes, excluded_keywords,
-    excluded_counties, excluded_cities, excluded_job_titles,
+    excluded_counties, excluded_cities, excluded_job_titles, fresh_days,
   } = req.body;
   if (!workspace_id) return res.status(400).json({ error: 'workspace_id required' });
+  // fresh_days is only changed when sent. Every other field here is replaced
+  // on save, and a save that left one out has wiped it before (Shire's
+  // excluded_industries, 2026-10-16); a missing fresh_days keeps its value.
+  const freshDays = fresh_days === undefined || fresh_days === null || fresh_days === ''
+    ? null : Math.max(0, Math.floor(Number(fresh_days) || 0));
   // Normalize comma-separated lists — trim each entry, drop empties,
   // dedupe while preserving order. Stored canonically so the search
   // path can split on ',' without re-trimming on every row.
@@ -18488,9 +18498,9 @@ app.post('/api/admin/client-verticals', requireAdmin, (req, res) => {
       snooze_months, notes,
       excluded_industries, excluded_company_sizes, excluded_keywords,
       excluded_counties, excluded_cities, excluded_job_titles,
-      updated_at
+      fresh_days, updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     ON CONFLICT(workspace_id) DO UPDATE SET
       workspace_name=excluded.workspace_name, vertical=excluded.vertical,
       exclude_remote=excluded.exclude_remote, require_owns_building=excluded.require_owns_building,
@@ -18501,12 +18511,14 @@ app.post('/api/admin/client-verticals', requireAdmin, (req, res) => {
       excluded_counties=excluded.excluded_counties,
       excluded_cities=excluded.excluded_cities,
       excluded_job_titles=excluded.excluded_job_titles,
+      fresh_days=CASE WHEN ? IS NULL THEN client_verticals.fresh_days ELSE ? END,
       updated_at=datetime('now')
   `).run(
     workspace_id, workspace_name || '', vertical || '', exclude_remote ? 1 : 0, require_owns_building ? 1 : 0,
     snooze_months || 6, notes || '',
     norm(excluded_industries), norm(excluded_company_sizes), norm(excluded_keywords),
     norm(excluded_counties), norm(excluded_cities), norm(excluded_job_titles),
+    freshDays ?? 0, freshDays, freshDays,
   );
   res.json({ ok: true });
 });
@@ -22078,9 +22090,33 @@ function buildCrossClientGuard(workspaceId, workspaceName, override = false) {
   // never be defeated by saved settings, and costs no lookup.
   if (override || isGuardExemptWorkspace(workspaceId)) return () => true;
   const settings = pushGuardSettings();
-  // Master switch off → every contact passes. Returned before any lookup so
-  // the disabled path costs nothing and can't trip on a bad client_verticals row.
-  if (!settings.enabled) return () => true;
+
+  // Fresh-only (per client, client_verticals.fresh_days). A promise to the
+  // client, not cross-client policy, so it holds even when the master switch
+  // below turns the cross-client rules off. Only a manual override skips it.
+  let freshCutoff = null;
+  if (db) {
+    try {
+      const r = db.prepare('SELECT fresh_days FROM client_verticals WHERE workspace_id = ?').get(workspaceId);
+      if (r && Number(r.fresh_days) > 0) freshCutoff = stampDaysAgo(Number(r.fresh_days));
+    } catch {}
+  }
+  const passesFresh = (contact, skipped) => {
+    if (!freshCutoff) return true;
+    for (const [wsId, info] of Object.entries(parseEmailedWorkspaces(contact))) {
+      if (wsId === workspaceId) continue;
+      const stamp = workspaceStampDate(info);
+      if (stamp && stamp >= freshCutoff) {
+        skipped.notFresh = (skipped.notFresh || 0) + 1;
+        return false;
+      }
+    }
+    return true;
+  };
+
+  // Master switch off → only the fresh-only rule (if set) applies. Returned
+  // before any other lookup so the disabled path stays cheap.
+  if (!settings.enabled) return passesFresh;
   const burstCutoff   = stampDaysAgo(settings.burstGapDays);
   const ceilingCutoff = stampDaysAgo(settings.ceilingWindowDays);
   const vertical = detectVertical(workspaceName || '', workspaceId);
@@ -22109,6 +22145,8 @@ function buildCrossClientGuard(workspaceId, workspaceName, override = false) {
   }
 
   return function passesCrossClientGuard(contact, skipped) {
+    // 0. Fresh-only, when this client asks for it.
+    if (!passesFresh(contact, skipped)) return false;
     const emailed = parseEmailedWorkspaces(contact);
     // Same-workspace history belongs to the per-client cooldown, not here.
     const others = Object.entries(emailed).filter(([wsId]) => wsId !== workspaceId);
