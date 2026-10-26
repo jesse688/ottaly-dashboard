@@ -176,6 +176,7 @@ export async function GET() {
               (
                 GREATEST(
                   ld.first_responded_at,
+                  ld.marked_replied_at,
                   (
                     SELECT max(e4.timestamp_created) FROM portal_emails e4
                      WHERE e4.workspace_id = l.workspace_id
