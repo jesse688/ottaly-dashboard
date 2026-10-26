@@ -47,14 +47,18 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   // Marking 'replied off-dashboard' also counts as the first response (Speed to Lead).
   const respondedAt = body.replied_off === true ? 'NOW()' : 'NULL'
   const res = await pool.query(
-    `INSERT INTO portal_lead_data (lead_id, client_id, deal_value, notes, archived, replied_off, first_responded_at, updated_at)
-     VALUES ($1, $2, $3, $4, COALESCE($5, FALSE), COALESCE($6, FALSE), ${respondedAt}, NOW())
+    `INSERT INTO portal_lead_data (lead_id, client_id, deal_value, notes, archived, replied_off, first_responded_at, marked_replied_at, updated_at)
+     VALUES ($1, $2, $3, $4, COALESCE($5, FALSE), COALESCE($6, FALSE), ${respondedAt}, ${respondedAt}, NOW())
      ON CONFLICT (lead_id, client_id) DO UPDATE
        SET deal_value = COALESCE(EXCLUDED.deal_value, portal_lead_data.deal_value),
            notes = COALESCE(EXCLUDED.notes, portal_lead_data.notes),
            archived = COALESCE($5, portal_lead_data.archived),
            replied_off = COALESCE($6, portal_lead_data.replied_off),
            first_responded_at = COALESCE(portal_lead_data.first_responded_at, ${respondedAt}),
+           -- Re-marking after a newer prospect reply must clear "Needs reply" again.
+           marked_replied_at = CASE WHEN $6::boolean IS TRUE THEN NOW()
+                                    WHEN $6::boolean IS FALSE THEN NULL
+                                    ELSE portal_lead_data.marked_replied_at END,
            updated_at = NOW()
      RETURNING deal_value, notes, archived, replied_off`,
     [id, session.clientId, body.deal_value ?? null, body.notes ?? null, body.archived ?? null, body.replied_off ?? null]

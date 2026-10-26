@@ -226,6 +226,9 @@ async function runMigration() {
       // When the client first responded (portal reply or 'replied off-dashboard') —
       // used to measure Speed to Lead.
       `ALTER TABLE portal_lead_data ADD COLUMN IF NOT EXISTS first_responded_at TIMESTAMPTZ`,
+      // Latest 'Mark as replied' click. first_responded_at never moves (Speed to Lead),
+      // so this is what clears a lead that re-surfaced after a later prospect reply.
+      `ALTER TABLE portal_lead_data ADD COLUMN IF NOT EXISTS marked_replied_at TIMESTAMPTZ`,
       // Admin-uploaded invoice PDF (stored in-DB) + link a top-up request to its invoice.
       `ALTER TABLE portal_invoices ADD COLUMN IF NOT EXISTS file_data BYTEA`,
       `ALTER TABLE portal_invoices ADD COLUMN IF NOT EXISTS file_name TEXT`,

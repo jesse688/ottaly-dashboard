@@ -584,10 +584,9 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
     finally { setNotesSaving(false) }
   }
 
-  async function toggleRepliedOff(lead: Lead) {
-    const replied_off = !lead.replied_off
-    // replied_off stamps first_responded_at server-side; mirror into has_outbound so it
-    // leaves "Needs reply" now (and a later prospect reply re-surfaces it on reload).
+  async function setRepliedOff(lead: Lead, replied_off: boolean) {
+    // replied_off=true stamps marked_replied_at server-side; mirror into has_outbound so
+    // it leaves "Needs reply" now (and a later prospect reply re-surfaces it on reload).
     setLeads(prev => prev?.map(l => l.id === lead.id ? { ...l, replied_off, has_outbound: replied_off } : l) ?? null)
     setSelected(prev => prev?.id === lead.id ? { ...prev, replied_off, has_outbound: replied_off } : prev)
     await fetch(`/api/portal/leads/${lead.id}/data`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ replied_off }) })
@@ -962,15 +961,17 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
                   </div>
                   {selected.email && <p className="text-xs text-gray-500 truncate">{selected.email}</p>}
                 </div>
-                {/* Replied off-dashboard: moves a new lead out of Unread */}
-                {selected.has_sent || selected.has_outbound ? (
-                  <span className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-green-600"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>Replied</span>
-                ) : selected.replied_off ? (
-                  <button onClick={() => toggleRepliedOff(selected)} title="Mark as not replied" className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-green-600 hover:text-gray-500"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>Replied off-dashboard</button>
-                ) : (
-                  <button onClick={() => toggleRepliedOff(selected)} title="I've replied to this lead outside the dashboard" className="ml-auto inline-flex items-center px-3.5 py-1.5 rounded-lg text-xs font-semibold text-white bg-[#1F6F78] hover:bg-[#195a61] shadow-sm">
+                {/* Replied off-dashboard: moves a lead out of Needs reply. Keyed on isReplied
+                    (not the sticky has_sent/replied_off) so a lead that re-surfaced after a
+                    later prospect reply still offers the button. */}
+                {!isReplied(selected) ? (
+                  <button onClick={() => setRepliedOff(selected, true)} title="I've replied to this lead outside the dashboard" className="ml-auto inline-flex items-center px-3.5 py-1.5 rounded-lg text-xs font-semibold text-white bg-[#1F6F78] hover:bg-[#195a61] shadow-sm">
                     Mark as replied
                   </button>
+                ) : selected.replied_off && !selected.has_sent ? (
+                  <button onClick={() => setRepliedOff(selected, false)} title="Mark as not replied" className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-green-600 hover:text-gray-500"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>Replied off-dashboard</button>
+                ) : (
+                  <span className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-green-600"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>Replied</span>
                 )}
                 <button onClick={() => downloadLeadCsv(selected)} title="Download this lead as a CSV" className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-50">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
