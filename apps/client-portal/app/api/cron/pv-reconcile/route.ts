@@ -1,4 +1,4 @@
-import { NextResponse, type NextRequest } from 'next/server'
+import { NextResponse, after, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
 import { getPlusVibeReceived, type PVReceivedEmail } from '@/lib/plusvibe'
 import { ingestAndLink } from '@/lib/attachments'
@@ -63,12 +63,50 @@ function stableEmailKey(e: PVReceivedEmail): string {
   return `pvc_${sender}|${minute}|${subj}`
 }
 
+// One sweep at a time per process. A run that overlaps a still-running one is
+// skipped, not queued: the next run re-reads the same ?days window, so nothing
+// a skipped run would have seen is lost.
+let running = false
+
 export async function GET(req: NextRequest) {
   const url = new URL(req.url)
   const secret = url.searchParams.get('secret')
   if (!secret || !process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+  if (running) return NextResponse.json({ ok: true, skipped: 'previous run still in progress' })
+
+  // ?wait=1 runs inline and returns the summary (manual runs / debugging).
+  if (url.searchParams.get('wait') === '1') {
+    running = true
+    try { return NextResponse.json(await runReconcile(url)) } finally { running = false }
+  }
+
+  // Default: ACK at once, sweep in the background. A full sweep takes ~95s and
+  // cron-job.org was timing the request out at 30s, so every slow run showed as
+  // "failed" (and repeated failures get the job auto-disabled, which WOULD stop
+  // replies). The sweep itself was finishing fine; only the HTTP wait was the
+  // problem. Outcome is still recorded in esp_sync_log + the server log.
+  running = true
+  after(async () => {
+    try {
+      const r = await runReconcile(url)
+      console.log('[pv-reconcile] done', JSON.stringify({ ...r, errors: r.errors.length }))
+      if (r.errors.length) console.error('[pv-reconcile] errors', r.errors)
+    } catch (err) {
+      console.error('[pv-reconcile] run failed', err)
+      await pool.query(
+        `INSERT INTO esp_sync_log (source, status, leads_synced, finished_at) VALUES ($1,$2,$3,NOW())`,
+        ['pv-reconcile', 'error', 0]
+      ).catch(() => {})
+    } finally {
+      running = false
+    }
+  })
+  return NextResponse.json({ ok: true, started: true }, { status: 202 })
+}
+
+async function runReconcile(url: URL) {
   await ready()
 
   const days = Math.min(Math.max(parseInt(url.searchParams.get('days') || '3', 10) || 3, 1), 90)
@@ -574,5 +612,5 @@ export async function GET(req: NextRequest) {
     ['pv-reconcile', summary.errors.length === 0 ? 'success' : 'partial', summary.inserted]
   ).catch(() => {})
 
-  return NextResponse.json({ ok: true, days, ...summary })
+  return { ok: true, days, ...summary }
 }
