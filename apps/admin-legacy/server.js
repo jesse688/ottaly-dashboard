@@ -23523,6 +23523,23 @@ function releasePushSlot(job) {
   _pushSlotsActive--;
 }
 
+// Take turns. Called by a running job between verify chunks (VERIFY_THEN_PUSH,
+// 100 contacts). If another job is waiting, hand it this slot and go to the
+// back of the queue, so every queued list gets some data instead of one list
+// running to the end while eleven sit at 0. No-op when nobody is waiting, so a
+// lone job runs exactly as fast as before. PUSH_ROUND_ROBIN=0 turns it off.
+// Safe against double-running: a yielded job is 'queued', which the pause route
+// refuses, and releasePushSlot never wakes a cancelled one.
+async function yieldPushSlot(job) {
+  if (process.env.PUSH_ROUND_ROBIN === '0') return;
+  if (!job._holdsPushSlot) return;
+  if (!_pushSlotQueue.some(q => !q.job.cancelled && !q.job.paused)) return;
+  console.log(`[push] job ${job.id} yielding slot after ${job.verified || 0} verified — taking turns`);
+  releasePushSlot(job);
+  await acquirePushSlot(job);
+  job.status = 'verifying';
+}
+
 function pushSlotStats() {
   return { active: _pushSlotsActive, queued: _pushSlotQueue.length, cap: MAX_CONCURRENT_PUSH_JOBS };
 }
@@ -25177,6 +25194,8 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
           await pushLeads(passing);
           if (job.status === 'failed') return;
         }
+        // Chunk done — let a waiting list have a turn before the next 100.
+        if (i + VERIFY_THEN_PUSH < needsVerify.length) await yieldPushSlot(job);
       }
 
       // If paused mid-loop, update SQLite record and stop
@@ -25795,6 +25814,7 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
           await pushLeads(passing);
           if (job.status === 'failed') return;
         }
+        if (i + VERIFY_THEN_PUSH < needsVerify.length) await yieldPushSlot(job);
       }
 
       if (job.paused) {
