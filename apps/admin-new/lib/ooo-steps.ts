@@ -23,8 +23,9 @@ import { pvBulkActive } from './pv-gate'
 // How far back the resolver reaches. 7 days keeps the first fill to ~30 min;
 // longer Stats windows show a coverage % for the part before that.
 const LOOKBACK_DAYS = Number(process.env.OOO_STEP_LOOKBACK_DAYS ?? 7)
-// Per pass. Shares the one PV gate with the warmers, so keep it modest.
-const BATCH = Number(process.env.OOO_STEP_BATCH ?? 60)
+// Per pass. Shares the one PV gate with the warmers. ~350 OOOs arrive a day,
+// so 150 every 90s clears a 7-day backlog in under half an hour and then idles.
+const BATCH = Number(process.env.OOO_STEP_BATCH ?? 150)
 const MAX_ATTEMPTS = 3
 
 let ready = false
@@ -220,13 +221,13 @@ export async function readNewLeadOoo(start: string, end: string): Promise<Map<st
   return out
 }
 
-// Every 2 minutes, offset from the warmers, yielding to a bulk job like they do.
+// Every 90 seconds, offset from the warmers, yielding to a bulk job like they do.
 const FLAG = '__ottalyOooStepsStarted'
 export function startOooStepResolver(): void {
   const g = globalThis as Record<string, unknown>
   if (g[FLAG]) return
   g[FLAG] = true
-  const INTERVAL_MS = Number(process.env.OOO_STEP_INTERVAL_MS ?? 2 * 60 * 1000)
+  const INTERVAL_MS = Number(process.env.OOO_STEP_INTERVAL_MS ?? 90 * 1000)
   setTimeout(() => { resolveOooSteps().catch(() => {}) }, 45_000)
   setInterval(() => {
     if (pvBulkActive()) return
