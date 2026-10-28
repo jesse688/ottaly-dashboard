@@ -48,6 +48,7 @@ interface WsTotals {
   // OOO that answered step 1 ÷ new leads contacted. Unlike OOO RR it does not
   // sag on follow-up-heavy days. Coverage < 1 = still resolving, reads low.
   newLeadOooCount: number
+  newLeads: number  // sum of per-day new leads, not `contacted`
   newLeadOoo: number
   oooStepCoverage: number | null
 }
@@ -251,7 +252,7 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
   if (!list.length) return null
   const t = {
     sent: 0, replies: 0, posReplies: 0, oooReplies: 0, bounces: 0, contacted: 0, leads: 0,
-    recipientBounces: 0, senderBounces: 0, splitSent: 0, newLeadOooCount: 0,
+    recipientBounces: 0, senderBounces: 0, splitSent: 0, newLeadOooCount: 0, newLeads: 0,
   }
   // The agency figure is only as complete as its least-resolved workspace.
   let coverage: number | null = 1
@@ -269,6 +270,7 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
     t.senderBounces += w.totals.senderBounces ?? 0
     t.splitSent += w.totals.splitSent ?? 0
     t.newLeadOooCount += w.totals.newLeadOooCount ?? 0
+    t.newLeads += w.totals.newLeads ?? 0
     const c = w.totals.oooStepCoverage
     coverage = c == null || coverage == null ? null : Math.min(coverage, c)
     // Reply-rate denominator, summed across workspaces. A workspace owns its
@@ -328,7 +330,7 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
       // Divides by splitSent, not t.sent — see the note in lib/pv-range.ts.
       recipientBounceRate: t.splitSent > 0 ? t.recipientBounces / t.splitSent : null,
       senderBounceRate: t.splitSent > 0 ? t.senderBounces / t.splitSent : null,
-      newLeadOoo: t.contacted > 0 ? t.newLeadOooCount / t.contacted : 0,
+      newLeadOoo: t.newLeads > 0 ? t.newLeadOooCount / t.newLeads : 0,
       oooStepCoverage: coverage,
     },
     series,
@@ -534,7 +536,7 @@ function ClientCard({
                 ? 'Step data unavailable'
                 : t.oooStepCoverage < 0.95
                   ? `Still resolving: step known for ${Math.round(t.oooStepCoverage * 100)}% of OOOs, so this reads low`
-                  : `${num(t.newLeadOooCount)} OOOs on email 1 ÷ ${num(t.contacted)} new leads`
+                  : `${num(t.newLeadOooCount)} OOOs on email 1 ÷ ${num(t.newLeads)} new leads`
             }
           >
             {t.oooStepCoverage == null ? '—' : pct(t.newLeadOoo)}

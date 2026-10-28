@@ -57,6 +57,10 @@ interface Workspace {
     senderBounceRate: number | null
     // OOO that answered step 1 ÷ new leads contacted. See lib/ooo-steps.ts.
     newLeadOooCount: number
+    // New leads contacted = sum of PV's per-day total_new_lead_contacted_count.
+    // NOT t.contacted: the header's total_contacted_count counts everyone
+    // emailed, follow-ups included (Bubble 27 Oct: 1,098 vs 174 new).
+    newLeads: number
     newLeadOoo: number
     // Share of the window's OOOs whose step is known. Below 1 the resolver is
     // still catching up and the rate reads low; the page says so.
@@ -301,6 +305,7 @@ export async function GET(req: NextRequest) {
       const leads = leadsByWs[ws.workspace_id] || 0
       const days = dates.length || 1
       const nlo = newLeadOoo?.get(ws.workspace_id)
+      const newLeads = range.series.reduce((s, d) => s + d.contacted, 0)
 
       const w: Workspace = {
         workspace_id: ws.workspace_id,
@@ -345,10 +350,9 @@ export async function GET(req: NextRequest) {
           splitSent: t.splitSent,
           recipientBounceRate: t.splitSent > 0 ? t.recipientBounces / t.splitSent : null,
           senderBounceRate: t.splitSent > 0 ? t.senderBounces / t.splitSent : null,
-          // Same denominator as the other reply rates: t.contacted is new
-          // leads contacted in the window.
           newLeadOooCount: nlo?.step1 ?? 0,
-          newLeadOoo: t.contacted > 0 ? (nlo?.step1 ?? 0) / t.contacted : 0,
+          newLeads,
+          newLeadOoo: newLeads > 0 ? (nlo?.step1 ?? 0) / newLeads : 0,
           oooStepCoverage: !newLeadOoo ? null : !nlo || nlo.total === 0 ? 1 : nlo.resolved / nlo.total,
         },
         series,
