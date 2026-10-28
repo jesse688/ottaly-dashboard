@@ -38,6 +38,14 @@ export async function register() {
     } catch (err) {
       console.error('[instrumentation] mailbox-health failed to start:', err)
     }
+    // Works out which step each OOO answered, for the Stats page's new-lead
+    // OOO column. Not self-starting, so it only runs once per process.
+    try {
+      const { startOooStepResolver } = await import('./lib/ooo-steps')
+      startOooStepResolver()
+    } catch (err) {
+      console.error('[instrumentation] ooo-steps failed to start:', err)
+    }
   }
   if (process.env.NEXT_RUNTIME === 'edge') {
     await import('./sentry.server.config')

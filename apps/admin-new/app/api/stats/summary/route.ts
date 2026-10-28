@@ -11,6 +11,7 @@ import {
   type PvDay,
   type PvRange,
 } from '@/lib/pv-range'
+import { readNewLeadOoo } from '@/lib/ooo-steps'
 
 interface DayData {
   date: string
@@ -52,6 +53,12 @@ interface Workspace {
     splitSent: number
     recipientBounceRate: number | null
     senderBounceRate: number | null
+    // OOO that answered step 1 ÷ new leads contacted. See lib/ooo-steps.ts.
+    newLeadOooCount: number
+    newLeadOoo: number
+    // Share of the window's OOOs whose step is known. Below 1 the resolver is
+    // still catching up and the rate reads low; the page says so.
+    oooStepCoverage: number | null
   }
   series: DayData[]
 }
@@ -227,6 +234,13 @@ export async function GET(req: NextRequest) {
       ;(leadsByWsDate[r.workspace_id] ||= {})[key] = r.n
     })
 
+    // Step-1 OOO counts from our own resolver. Failing open: without it the
+    // column shows "—" and nothing else on the page is affected.
+    const newLeadOoo = await readNewLeadOoo(start, end).catch(err => {
+      console.error('[stats] new-lead OOO unavailable:', err)
+      return null
+    })
+
     const workspaces: Workspace[] = []
     const failedNames: string[] = []
 
@@ -284,6 +298,7 @@ export async function GET(req: NextRequest) {
 
       const leads = leadsByWs[ws.workspace_id] || 0
       const days = dates.length || 1
+      const nlo = newLeadOoo?.get(ws.workspace_id)
 
       const w: Workspace = {
         workspace_id: ws.workspace_id,
@@ -329,6 +344,11 @@ export async function GET(req: NextRequest) {
           splitSent: t.splitSent,
           recipientBounceRate: t.splitSent > 0 ? t.recipientBounces / t.splitSent : null,
           senderBounceRate: t.splitSent > 0 ? t.senderBounces / t.splitSent : null,
+          // Same denominator as the other reply rates: t.contacted is new
+          // leads contacted in the window.
+          newLeadOooCount: nlo?.step1 ?? 0,
+          newLeadOoo: t.contacted > 0 ? (nlo?.step1 ?? 0) / t.contacted : 0,
+          oooStepCoverage: !newLeadOoo ? null : !nlo || nlo.total === 0 ? 1 : nlo.resolved / nlo.total,
         },
         series,
       }
