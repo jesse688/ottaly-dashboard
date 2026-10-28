@@ -736,14 +736,15 @@ function ProviderCard({ g, title, accent, days, ds, leads, nlo, nloReady, period
   return (
     <div style={{ background: '#fff', border: '1px solid #E2E6F0', borderRadius: 10, padding: '1rem 1.1rem', borderTop: `3px solid ${accent}` }}>
       <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>{title ?? g.key} · <span style={{ color: '#6B7280', fontWeight: 500 }}>{g.count} mailboxes</span></div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6,1fr)', gap: 8, marginBottom: 10 }}>
+      {/* Two rows of three: six numbers in one row overlapped on a quarter-width card. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: '10px 8px', marginBottom: 10 }}>
         {/* With no daily series there is nothing true to show for this window —
             an em dash beats a 0.00% that reads as "this group gets no replies". */}
         <Stat v={noSeries && !fallbackUsable ? '—' : tSent.toLocaleString()} l="Sent" />
         <Stat v={leads == null ? '—' : leads.toLocaleString()} l="Leads" color="#7C3AED" />
+        <Stat v={noSeries ? '—' : (bounceRate * 100).toFixed(2) + '%'} l="Bounce" />
         <Stat v={noSeries ? '—' : (human * 100).toFixed(2) + '%'} l="RR (human)" color="#16A34A" />
         <Stat v={noSeries ? '—' : (oooRate * 100).toFixed(2) + '%'} l="OOO RR" color="#3B82F6" />
-        <Stat v={noSeries ? '—' : (bounceRate * 100).toFixed(2) + '%'} l="Bounce" />
         <Stat
           v={nloRate == null ? '—' : (nloRate * 100).toFixed(2) + '%'}
           l="New-lead OOO"
