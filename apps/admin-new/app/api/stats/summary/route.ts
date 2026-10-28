@@ -40,7 +40,9 @@ interface Workspace {
     contacted: number
     leads: number
     replyRate: number
-    allReplyRate: number
+    // OOO / auto-replies alone. Never added to human replies (Jesse, 2026-10-28):
+    // a combined rate hides which half moved.
+    oooRate: number
     bounceRate: number
     rtl: number
     lpt: number
@@ -321,12 +323,11 @@ export async function GET(req: NextRequest) {
           // dividing by sent is low in all six cases. Using `sent` here is what
           // made a reply look rarer than PV reports it.
           //   Human RR           = replies / contacted
-          //   Reply Rate (w/OOO) = (replies + ooo) / contacted
+          //   OOO Rate           = ooo / contacted   (never combined with human)
           // `contacted` is the public API's total_contacted_count — see the
           // note in lib/pv-range.ts. Bounce is the exception and divides by sent.
           replyRate: t.contacted > 0 ? t.replies / t.contacted : 0,
-          allReplyRate:
-            t.contacted > 0 ? (t.replies + t.oooReplies) / t.contacted : 0,
+          oooRate: t.contacted > 0 ? t.oooReplies / t.contacted : 0,
           bounceRate: t.sent > 0 ? t.bounces / t.sent : 0,
           // RTL = human replies per lead.
           rtl: leads > 0 ? t.replies / leads : 0,

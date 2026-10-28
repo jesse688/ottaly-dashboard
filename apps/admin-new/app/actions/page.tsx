@@ -20,7 +20,7 @@ interface ClientRow {
   bounces: number
   leads: number
   replyRate: number
-  allReplyRate: number
+  oooRate: number
   bounceRate: number
   leadsLeftPct: number | null
   activeCampaigns: number
@@ -171,8 +171,8 @@ export default function ActionsPage() {
       cell: r => pct(r.replyRate),
     },
     {
-      key: 'replyRate', header: 'Reply Rate', numeric: true, sortValue: r => r.allReplyRate,
-      cell: r => <span className="text-muted-foreground">{pct(r.allReplyRate)}</span>,
+      key: 'oooRate', header: 'OOO Rate', numeric: true, sortValue: r => r.oooRate,
+      cell: r => <span className="text-muted-foreground">{pct(r.oooRate)}</span>,
     },
     {
       key: 'bounceRate', header: 'Bounce %', numeric: true, sortValue: r => r.bounceRate,

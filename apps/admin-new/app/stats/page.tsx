@@ -31,7 +31,7 @@ interface WsTotals {
   contacted: number
   leads: number
   replyRate: number
-  allReplyRate: number
+  oooRate: number  // OOO alone, never combined with human replies
   bounceRate: number
   rtl: number  // RTL = replies per lead (replies ÷ leads)
   lpt: number  // LPT = contacts per lead (contacted ÷ leads)
@@ -316,8 +316,7 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
       // PlusVibe's public API divides by — see the note in lib/pv-range.ts.
       // Bounce is the exception and divides by sent.
       replyRate: t.contacted > 0 ? t.replies / t.contacted : 0,
-      allReplyRate:
-        t.contacted > 0 ? (t.replies + t.oooReplies) / t.contacted : 0,
+      oooRate: t.contacted > 0 ? t.oooReplies / t.contacted : 0,
       bounceRate: t.sent > 0 ? t.bounces / t.sent : 0,
       // RTL = Replies-To-Lead: replies needed per lead (replies ÷ leads).
       // RTL = human replies per lead; replies is already human.
@@ -401,7 +400,7 @@ function ClientCard({
   const [smooth, setSmooth] = useState(3)
   const t = w.totals
   const hrr = t.replyRate
-  const allrr = t.allReplyRate
+  const ooorr = t.oooRate
 
   const labels = w.series.map(d => d.date.slice(5))
   const shown = ALL_SERIES.filter(s => toggles[s])
@@ -524,8 +523,8 @@ function ClientCard({
           <Lbl>Human RR</Lbl>
         </Cell>
         <Cell>
-          <span className="text-sm font-bold text-muted-foreground">{pct(allrr)}</span>
-          <Lbl>Reply Rate</Lbl>
+          <span className="text-sm font-bold text-muted-foreground">{pct(ooorr)}</span>
+          <Lbl>OOO Rate</Lbl>
         </Cell>
         <Cell>
           <span
@@ -845,7 +844,7 @@ export default function StatsPage() {
   return (
     <PageShell
       title="Stats"
-      subtitle="Per-client email performance · Human RR & Reply Rate · bounce · RTL · recipient-provider split"
+      subtitle="Per-client email performance · Human RR & OOO Rate · bounce · RTL · recipient-provider split"
       freshness={{ table: 'perf_cache_daily', syncedAt: updatedAt }}
       actions={
         <div className="flex flex-wrap items-center gap-2">
@@ -921,9 +920,9 @@ export default function StatsPage() {
           loading={loading}
         />
         <KpiCard
-          label="Reply Rate"
-          value={incomplete ? '—' : pct(agg?.totals.allReplyRate ?? 0)}
-          sub={incomplete ? 'unavailable' : 'incl. OOO/auto'}
+          label="OOO Rate"
+          value={incomplete ? '—' : pct(agg?.totals.oooRate ?? 0)}
+          sub={incomplete ? 'unavailable' : 'out-of-office/auto only'}
           tone="purple"
           loading={loading}
         />
@@ -991,7 +990,7 @@ export default function StatsPage() {
           <div className="grid grid-cols-[minmax(0,1.6fr)_repeat(11,minmax(0,1fr))_24px] items-center gap-2 px-4 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             <div>Client</div>
             <div className="text-right">Human RR</div>
-            <div className="text-right">Reply Rate</div>
+            <div className="text-right">OOO Rate</div>
             <div className="text-right">New-lead OOO</div>
             <div className="text-right">Bounce</div>
             <div className="text-right">Recipient</div>
