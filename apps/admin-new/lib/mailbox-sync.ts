@@ -83,14 +83,16 @@ async function fetchMailboxStats(workspaceId: string, accountId: string, start: 
 }
 
 // Per-mailbox DAILY chart series (each row has .date) for backfilling history.
-interface DayRow { date: string; sent: number; replies: number; ooo: number; bounces: number; contacted: number }
-type ChartRow = { date?: string; total_sent_count?: number; total_reply_count?: number; total_ooo_reply_count?: number; total_bounce_count?: number; total_contacted_count?: number }
+// newLeads = PV's total_new_lead_contacted_count: the denominator for the
+// cards' New-lead OOO (OOO on email 1 / new leads). See lib/ooo-steps.ts.
+interface DayRow { date: string; sent: number; replies: number; ooo: number; bounces: number; contacted: number; newLeads: number }
+type ChartRow = { date?: string; total_sent_count?: number; total_reply_count?: number; total_ooo_reply_count?: number; total_bounce_count?: number; total_contacted_count?: number; total_new_lead_contacted_count?: number }
 const toDayRows = (chart: ChartRow[]): DayRow[] => {
   const out: DayRow[] = []
   for (const r of chart) {
     if (!r.date) continue
     const sent = r.total_sent_count ?? 0
-    out.push({ date: r.date.slice(0, 10), sent, replies: r.total_reply_count ?? 0, ooo: r.total_ooo_reply_count ?? 0, bounces: r.total_bounce_count ?? 0, contacted: r.total_contacted_count ?? sent })
+    out.push({ date: r.date.slice(0, 10), sent, replies: r.total_reply_count ?? 0, ooo: r.total_ooo_reply_count ?? 0, bounces: r.total_bounce_count ?? 0, contacted: r.total_contacted_count ?? sent, newLeads: r.total_new_lead_contacted_count ?? 0 })
   }
   return out
 }
@@ -125,12 +127,12 @@ export async function backfillSupplierDaily(days = 30): Promise<{ ok: boolean; m
 
     // acc { dimension|key|day : {count, active, sent, replies, bounces} }. count/active
     // are point-in-time (today's group sizes) so we only set sent/replies/bounces here.
-    type Cell = { sent: number; replies: number; ooo: number; bounces: number; contacted: number }
+    type Cell = { sent: number; replies: number; ooo: number; bounces: number; contacted: number; newLeads: number }
     const agg = new Map<string, Cell>()
     const add = (dim: string, key: string, day: string, r: DayRow) => {
       const k = `${dim}|${key}|${day}`
-      const c = agg.get(k) ?? { sent: 0, replies: 0, ooo: 0, bounces: 0, contacted: 0 }
-      c.sent += r.sent; c.replies += r.replies; c.ooo += r.ooo; c.bounces += r.bounces; c.contacted += r.contacted
+      const c = agg.get(k) ?? { sent: 0, replies: 0, ooo: 0, bounces: 0, contacted: 0, newLeads: 0 }
+      c.sent += r.sent; c.replies += r.replies; c.ooo += r.ooo; c.bounces += r.bounces; c.contacted += r.contacted; c.newLeads += r.newLeads
       agg.set(k, c)
     }
     // Concurrency is now bounded by pvGate (calls are serialized), so a big pool
@@ -188,6 +190,7 @@ export async function backfillSupplierDaily(days = 30): Promise<{ ok: boolean; m
     let written = 0
     const client = await pool.connect()
     try {
+      await client.query(`ALTER TABLE mailbox_supplier_daily ADD COLUMN IF NOT EXISTS total_new_leads INT NOT NULL DEFAULT 0`)
       await client.query('BEGIN')
       // Zero every count in the window first. The upsert below only touches keys
       // that still have sends, so a row for a key a mailbox has LEFT (re-tagged
@@ -197,7 +200,7 @@ export async function backfillSupplierDaily(days = 30): Promise<{ ok: boolean; m
       // belong to syncMailboxes and are left alone.
       await client.query(
         `UPDATE mailbox_supplier_daily
-            SET total_sent = 0, reply_rate = 0, bounce_rate = 0, total_replies = 0, total_ooo = 0, total_bounces = 0, total_contacted = 0
+            SET total_sent = 0, reply_rate = 0, bounce_rate = 0, total_replies = 0, total_ooo = 0, total_bounces = 0, total_contacted = 0, total_new_leads = 0
           WHERE day BETWEEN $1::date AND $2::date`,
         [start, end]
       )
@@ -207,12 +210,13 @@ export async function backfillSupplierDaily(days = 30): Promise<{ ok: boolean; m
         // recomputes human RR from the raw counts. bounce over sent.
         const base = c.contacted || c.sent
         await client.query(
-          `INSERT INTO mailbox_supplier_daily (day, dimension, key, total_sent, reply_rate, bounce_rate, total_replies, total_ooo, total_bounces, total_contacted)
-           VALUES ($1::date, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          `INSERT INTO mailbox_supplier_daily (day, dimension, key, total_sent, reply_rate, bounce_rate, total_replies, total_ooo, total_bounces, total_contacted, total_new_leads)
+           VALUES ($1::date, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
            ON CONFLICT (day, dimension, key) DO UPDATE SET
              total_sent = EXCLUDED.total_sent, reply_rate = EXCLUDED.reply_rate, bounce_rate = EXCLUDED.bounce_rate,
-             total_replies = EXCLUDED.total_replies, total_ooo = EXCLUDED.total_ooo, total_bounces = EXCLUDED.total_bounces, total_contacted = EXCLUDED.total_contacted`,
-          [day, dimension, key, c.sent, base > 0 ? c.replies / base : 0, c.sent > 0 ? c.bounces / c.sent : 0, c.replies, c.ooo, c.bounces, c.contacted]
+             total_replies = EXCLUDED.total_replies, total_ooo = EXCLUDED.total_ooo, total_bounces = EXCLUDED.total_bounces, total_contacted = EXCLUDED.total_contacted,
+             total_new_leads = EXCLUDED.total_new_leads`,
+          [day, dimension, key, c.sent, base > 0 ? c.replies / base : 0, c.sent > 0 ? c.bounces / c.sent : 0, c.replies, c.ooo, c.bounces, c.contacted, c.newLeads]
         )
         written++
       }
