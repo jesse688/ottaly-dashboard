@@ -45,7 +45,8 @@ export async function GET() {
     return NextResponse.json({
       rows: activeRows.map(r => {
         const replyRate = r.reply_rate ?? (r.sent > 0 ? r.replies / r.sent : 0)
-        const allReplyRate = r.all_reply_rate ?? (r.sent > 0 ? (r.replies + r.ooo_replies) / r.sent : 0)
+        // OOO alone, never combined with human replies.
+        const oooRate = r.sent > 0 ? (r.ooo_replies ?? 0) / r.sent : 0
         const bounceRate = r.bounce_rate ?? (r.sent > 0 ? r.bounces / r.sent : 0)
         const status = (r.status ?? 'ok') as 'ok' | 'not_sending' | 'need_data'
         const leadsLeftPct = r.leads_left_pct
@@ -61,7 +62,7 @@ export async function GET() {
           workspace_id: r.workspace_id,
           name: r.workspace_name || r.workspace_id,
           sent: r.sent, replies: r.replies, oooReplies: r.ooo_replies, bounces: r.bounces, leads: r.leads,
-          replyRate, allReplyRate, bounceRate,
+          replyRate, oooRate, bounceRate,
           leadsLeftPct,
           activeCampaigns: r.active_campaigns,
           pausedCampaigns: r.paused_campaigns,

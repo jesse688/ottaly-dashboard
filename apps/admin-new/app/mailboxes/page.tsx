@@ -675,8 +675,8 @@ function DnsCol({ title, present, raw, extra }: { title: string; present: boolea
 
 const sum = (a: number[] | undefined) => (a ?? []).reduce((s, v) => s + v, 0)
 
-// Combined per-group card: window-total stats (SENT, human RR, RR+OOO, bounce)
-// + a toggleable daily multi-line chart (Sent / RR human / RR+OOO). Click a
+// Combined per-group card: window-total stats (SENT, human RR, OOO RR, bounce)
+// + a toggleable daily multi-line chart (Sent / RR human / OOO). Click a
 // legend item to hide/show that series — see results per day for what's left.
 function ProviderCard({ g, title, accent, days, ds, leads, nlo, nloReady, periodDays }: { g: MailboxGroupStats; title?: string; accent: string; days: string[]; ds?: DaySeries; leads?: number; nlo?: NewLeadOoo; nloReady: boolean; periodDays: number }) {
   const [hidden, setHidden] = useState<Set<string>>(new Set())
@@ -699,11 +699,12 @@ function ProviderCard({ g, title, accent, days, ds, leads, nlo, nloReady, period
   // PV's total_reply_count (stored as `replies`) is ALREADY the human/non-OOO
   // count; total_ooo (`ooo`) is a SEPARATE additive bucket. So:
   //   Human RR     = replies / contacted        (do NOT subtract ooo → went negative)
-  //   RR incl OOO  = (replies + ooo) / contacted
+  //   OOO RR       = ooo / contacted  (never combined with human)
   const human = tContacted > 0 ? tReplies / tContacted : 0
-  const withOoo = tContacted > 0 ? (tReplies + tOoo) / tContacted : (ds ? 0 : g.reply_rate)
+  // OOO alone, never added to human replies: a combined rate hides which half moved.
+  const oooRate = tContacted > 0 ? tOoo / tContacted : 0
   const bounceRate = tSent > 0 ? tBounces / tSent : g.bounce_rate
-  // New-lead OOO = OOO on email 1 / new leads contacted. Unlike RR incl. OOO it
+  // New-lead OOO = OOO on email 1 / new leads contacted. Unlike OOO RR it
   // does not sag on follow-up-heavy days. "—" until the backfill has stored
   // new-lead counts; a small % shows how much of the window's OOOs are resolved.
   const tNewLeads = ds?.newLeads ? sum(ds.newLeads) : 0
@@ -718,11 +719,11 @@ function ProviderCard({ g, title, accent, days, ds, leads, nlo, nloReady, period
   // whole job is spotting exactly that. null + spanGaps bridges the gap instead,
   // so the line joins Friday to Monday and only a REAL zero touches the floor.
   const dailyHuman = days.map((_, i) => { const c = ds?.contacted[i] || ds?.sent[i] || 0; return c > 0 ? (ds!.replies[i] / c) * 100 : null })
-  const dailyWithOoo = days.map((_, i) => { const c = ds?.contacted[i] || ds?.sent[i] || 0; return c > 0 ? ((ds!.replies[i] + ds!.ooo[i]) / c) * 100 : null })
+  const dailyOoo = days.map((_, i) => { const c = ds?.contacted[i] || ds?.sent[i] || 0; return c > 0 ? (ds!.ooo[i] / c) * 100 : null })
   const series = [
     { key: 'Sent', label: 'Sent', data: (ds?.sent ?? []).map(Number), color: accent, percent: false },
     { key: 'RR human', label: 'RR human', data: dailyHuman, color: '#16A34A', percent: true },
-    { key: 'RR+OOO', label: 'RR+OOO', data: dailyWithOoo, color: '#3B82F6', percent: true },
+    { key: 'OOO', label: 'OOO', data: dailyOoo, color: '#3B82F6', percent: true },
   ].filter(s => !hidden.has(s.key))
 
   const Stat = ({ v, l, color }: { v: string; l: string; color?: string }) => (
@@ -737,7 +738,7 @@ function ProviderCard({ g, title, accent, days, ds, leads, nlo, nloReady, period
         <Stat v={noSeries && !fallbackUsable ? '—' : tSent.toLocaleString()} l="Sent" />
         <Stat v={leads == null ? '—' : leads.toLocaleString()} l="Leads" color="#7C3AED" />
         <Stat v={noSeries ? '—' : (human * 100).toFixed(2) + '%'} l="RR (human)" color="#16A34A" />
-        <Stat v={noSeries ? '—' : (withOoo * 100).toFixed(2) + '%'} l="RR incl. OOO" color="#3B82F6" />
+        <Stat v={noSeries ? '—' : (oooRate * 100).toFixed(2) + '%'} l="OOO RR" color="#3B82F6" />
         <Stat v={noSeries ? '—' : (bounceRate * 100).toFixed(2) + '%'} l="Bounce" />
         <Stat
           v={nloRate == null ? '—' : (nloRate * 100).toFixed(2) + '%' + (nloCoverage < 0.95 ? ` (${Math.round(nloCoverage * 100)}%)` : '')}
@@ -749,7 +750,7 @@ function ProviderCard({ g, title, accent, days, ds, leads, nlo, nloReady, period
         <>
           <LineChart labels={days} series={series.length ? series : [{ label: '', data: days.map(() => 0) }]} height={150} />
           <div style={{ display: 'flex', gap: 12, marginTop: 6, flexWrap: 'wrap' }}>
-            {['Sent', 'RR human', 'RR+OOO'].map(k => (
+            {['Sent', 'RR human', 'OOO'].map(k => (
               <button key={k} onClick={() => toggle(k)} style={{ fontSize: 11, cursor: 'pointer', background: 'none', border: 'none', color: hidden.has(k) ? '#9CA3AF' : '#374151', textDecoration: hidden.has(k) ? 'line-through' : 'none' }}>
                 {k}
               </button>

@@ -57,7 +57,7 @@ export default function Home() {
   }, [])
 
   const replyRate = totals.sent > 0 ? totals.replies / totals.sent : 0 // Human RR
-  const allReplyRate = totals.sent > 0 ? (totals.replies + totals.oooReplies) / totals.sent : 0 // incl. OOO/auto
+  const oooRate = totals.sent > 0 ? totals.oooReplies / totals.sent : 0 // OOO/auto only, never combined
   const activeClients = rows.length
 
   const columns: Column<WorkspaceRow>[] = [
@@ -74,11 +74,11 @@ export default function Home() {
       subtitle={`Last 30 days · ${status === 'loading' ? '…' : `${rows.length} workspaces`}`}
       freshness={{ table: 'workspace_stats', syncedAt: updatedAt }}
     >
-      {/* Human RR (real replies) + Reply Rate (incl. OOO/auto); warmup excluded. */}
+      {/* Human RR (real replies) and OOO Rate kept separate; warmup excluded. */}
       <div className="mb-5 grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
         <KpiCard label="Emails Sent" value={num(totals.sent)} tone="navy" loading={status === 'loading'} />
         <KpiCard label="Human RR" value={pct(replyRate)} sub="real replies" tone="teal" loading={status === 'loading'} />
-        <KpiCard label="Reply Rate" value={pct(allReplyRate)} sub="incl. OOO/auto" tone="purple" loading={status === 'loading'} />
+        <KpiCard label="OOO Rate" value={pct(oooRate)} sub="out-of-office/auto" tone="purple" loading={status === 'loading'} />
         <KpiCard label="Leads Generated" value={num(totals.leads)} tone="green" loading={status === 'loading'} />
         <KpiCard label="Active Clients" value={activeClients} tone="yellow" loading={status === 'loading'} />
       </div>
