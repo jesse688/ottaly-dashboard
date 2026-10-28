@@ -726,8 +726,12 @@ function ProviderCard({ g, title, accent, days, ds, leads, nlo, nloReady, period
     { key: 'OOO', label: 'OOO', data: dailyOoo, color: '#3B82F6', percent: true },
   ].filter(s => !hidden.has(s.key))
 
-  const Stat = ({ v, l, color }: { v: string; l: string; color?: string }) => (
-    <div><div style={{ fontSize: 18, fontWeight: 700, color: color || '#050C29' }}>{v}</div><div style={{ fontSize: 10, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '.3px', lineHeight: 1.2 }}>{l}</div></div>
+  const Stat = ({ v, l, color, note }: { v: string; l: string; color?: string; note?: string }) => (
+    <div style={{ minWidth: 0 }}>
+      <div style={{ fontSize: 18, fontWeight: 700, color: color || '#050C29', whiteSpace: 'nowrap' }}>{v}</div>
+      <div style={{ fontSize: 10, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '.3px', lineHeight: 1.2 }}>{l}</div>
+      {note && <div style={{ fontSize: 10, color: '#9CA3AF', lineHeight: 1.2, marginTop: 2, whiteSpace: 'nowrap' }}>{note}</div>}
+    </div>
   )
   return (
     <div style={{ background: '#fff', border: '1px solid #E2E6F0', borderRadius: 10, padding: '1rem 1.1rem', borderTop: `3px solid ${accent}` }}>
@@ -741,8 +745,9 @@ function ProviderCard({ g, title, accent, days, ds, leads, nlo, nloReady, period
         <Stat v={noSeries ? '—' : (oooRate * 100).toFixed(2) + '%'} l="OOO RR" color="#3B82F6" />
         <Stat v={noSeries ? '—' : (bounceRate * 100).toFixed(2) + '%'} l="Bounce" />
         <Stat
-          v={nloRate == null ? '—' : (nloRate * 100).toFixed(2) + '%' + (nloCoverage < 0.95 ? ` (${Math.round(nloCoverage * 100)}% checked)` : '')}
+          v={nloRate == null ? '—' : (nloRate * 100).toFixed(2) + '%'}
           l="New-lead OOO"
+          note={nloRate != null && nloCoverage < 0.95 ? `${Math.round(nloCoverage * 100)}% checked` : undefined}
           color="#F59E0B"
         />
       </div>
