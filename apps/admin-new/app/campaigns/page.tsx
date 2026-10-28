@@ -140,11 +140,23 @@ function apolloSummaryLine(name: string): string {
 
 type SortKey = 'sent' | 'exhaustion' | 'replyRate' | 'bounceRate' | 'positivePct' | 'leads'
 
+// Human replies and OOO are shown apart, never as one rate (Jesse, 2026-10-28):
+// a combined rate hides which half moved. Legacy sends `replies`/`replyRate`
+// INCLUDING OOO; the classified pos+neg+neutral are the human ones, so OOO is
+// what is left.
+const humanReplies = (c: Campaign) => (c.posReplies || 0) + (c.negReplies || 0) + (c.neutralReplies || 0)
+const humanRate = (c: Campaign) => (c.sent > 0 ? humanReplies(c) / c.sent : 0)
+const oooRate = (c: Campaign) => (c.sent > 0 ? Math.max(0, (c.replies || 0) - humanReplies(c)) / c.sent : 0)
+const avgHumanRate = (cs: Campaign[]) => {
+  const d = cs.filter(c => c.sent >= 50)
+  return d.length ? d.reduce((t, c) => t + humanRate(c), 0) / d.length : 0
+}
+
 function campaignSortValue(c: Campaign, key: SortKey): number {
   switch (key) {
     case 'sent':        return c.sent || 0
     case 'exhaustion':  return c.exhaustion || 0
-    case 'replyRate':   return c.sent >= 50 ? (c.replyRate || 0) : -Infinity
+    case 'replyRate':   return c.sent >= 50 ? humanRate(c) : -Infinity
     case 'bounceRate':  return c.sent >= 50 ? ((c.bounces || 0) / Math.max(c.sent, 1)) : -Infinity
     case 'positivePct': return c.replies > 0 ? ((c.posReplies || 0) / c.replies) : -Infinity
     case 'leads':       return c.leads || 0
@@ -272,9 +284,6 @@ function DetailPanel({ campaign, wsAvg }: { campaign: Campaign; wsAvg: number })
   if (!insights.length && campaign.sent >= 50)
     insights.push({ cls: 'success', msg: 'No issues detected — campaign is performing within normal range.' })
 
-  const exclOOO = campaign.sent > 0
-    ? (((campaign.posReplies + campaign.negReplies + (campaign.neutralReplies || 0)) / campaign.sent) * 100).toFixed(2)
-    : null
 
   const activeSteps = (campaign.variationSteps || []).filter(s =>
     s.variations.some(v => v.sent >= 10)
@@ -301,13 +310,13 @@ function DetailPanel({ campaign, wsAvg }: { campaign: Campaign; wsAvg: number })
           <div className="o-card-body">
             {statRow('Total Sends', campaign.sent.toLocaleString())}
             {statRow('Total Replies', campaign.replies.toLocaleString())}
-            {statRow('Reply Rate (incl. OOO)',
-              <RateVal tier={campaign.tier}>{(campaign.replyRate * 100).toFixed(2)}%</RateVal>
+            {statRow('Human RR',
+              <RateVal tier={campaign.tier}>{(humanRate(campaign) * 100).toFixed(2)}%</RateVal>
             )}
-            {exclOOO && statRow('Reply Rate (excl. OOO)',
-              <span style={{ color: '#7C89CD' }}>{exclOOO}%</span>
+            {statRow('OOO Rate',
+              <span style={{ color: '#7C89CD' }}>{(oooRate(campaign) * 100).toFixed(2)}%</span>
             )}
-            {statRow('Workspace Avg (incl. OOO)', `${(wsAvg * 100).toFixed(2)}%`)}
+            {statRow('Workspace Avg (human)', `${(wsAvg * 100).toFixed(2)}%`)}
             {statRow('Positive Replies', <span style={{ color: '#059669' }}>{campaign.posReplies}</span>)}
             {statRow('Negative Replies', <span style={{ color: '#DC2626' }}>{campaign.negReplies}</span>)}
             {statRow('Bounces', campaign.bounces)}
@@ -506,7 +515,7 @@ export default function CampaignsPage() {
 
   const allCampaigns = data?.workspaces.flatMap(w => w.campaigns) ?? []
   const withData = allCampaigns.filter(c => c.sent >= 50)
-  const avgReply = withData.length ? withData.reduce((s, c) => s + c.replyRate, 0) / withData.length : 0
+  const avgReply = withData.length ? withData.reduce((s, c) => s + humanRate(c), 0) / withData.length : 0
 
   const critAlerts = data?.workspaces.flatMap(w =>
     w.campaigns.flatMap(c => c.flags.filter(f => f.type === 'critical').map(f => `${w.name} — ${shortName(c.name)}: ${f.msg}`))
@@ -594,7 +603,7 @@ export default function CampaignsPage() {
           { label: 'Top Performers',  value: allCampaigns.filter(c => c.tier === 'top').length,      accent: '#16A34A' },
           { label: 'Need Attention',  value: allCampaigns.filter(c => c.tier === 'warning').length,  accent: '#D97706' },
           { label: 'Critical',        value: allCampaigns.filter(c => c.tier === 'critical').length, accent: '#DC2626' },
-          { label: 'Avg Reply Rate',  value: `${(avgReply * 100).toFixed(2)}%`,                      accent: '#224388' },
+          { label: 'Avg Human RR',    value: `${(avgReply * 100).toFixed(2)}%`,                      accent: '#224388' },
         ].map(card => (
           <div key={card.label} className="o-metric" style={{ borderTopColor: card.accent }}>
             <div className="o-metric-label">{card.label}</div>
@@ -732,7 +741,7 @@ export default function CampaignsPage() {
             <div className="o-card-title">{activeWs?.name ?? '—'}</div>
             {activeWs && (
               <div style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>
-                {activeWs.campaigns.length} campaigns · {activeWs.activeCampaigns} active · {activeWs.totalSent.toLocaleString()} total sends · avg reply rate {(activeWs.avgReplyRate * 100).toFixed(2)}%
+                {activeWs.campaigns.length} campaigns · {activeWs.activeCampaigns} active · {activeWs.totalSent.toLocaleString()} total sends · avg human RR {(avgHumanRate(activeWs.campaigns) * 100).toFixed(2)}%
               </div>
             )}
           </div>
@@ -748,7 +757,7 @@ export default function CampaignsPage() {
                 <th>Status</th>
                 <SortTh col="sent"        label="Sent" />
                 <SortTh col="exhaustion"  label="Data Used" />
-                <SortTh col="replyRate"   label="Reply Rate" />
+                <SortTh col="replyRate"   label="Human RR" />
                 <SortTh col="bounceRate"  label="Bounce Rate" />
                 <SortTh col="positivePct" label="Positive %" />
                 <SortTh col="leads"       label="Leads" />
@@ -763,12 +772,8 @@ export default function CampaignsPage() {
               ) : filteredCampaigns.length === 0 ? (
                 <tr><td colSpan={10}><div className="o-empty">No campaigns match</div></td></tr>
               ) : filteredCampaigns.map(c => {
-                const rr = (c.replyRate * 100).toFixed(2)
-                const rrExNum = c.sent > 0
-                  ? ((c.posReplies + c.negReplies + (c.neutralReplies || 0)) / c.sent * 100)
-                  : null
-                const rrEx = rrExNum !== null ? rrExNum.toFixed(2) : null
-                const showEx = rrEx !== null && Math.abs(parseFloat(rr) - parseFloat(rrEx)) > 0.05
+                const rr = (humanRate(c) * 100).toFixed(2)
+                const ooo = (oooRate(c) * 100).toFixed(2)
                 const prr = c.replies > 0 ? ((c.posReplies / c.replies) * 100).toFixed(0) : '—'
                 const _lr = c.sent > 0 && c.leads > 0 ? ((c.leads / c.sent) * 100).toFixed(2) + '%' : '—'
                 const expanded = expandedIds.has(c.id)
@@ -813,8 +818,8 @@ export default function CampaignsPage() {
                         <TierDot tier={c.tier} />
                         <RateVal tier={c.tier}>{c.sent < 50 ? '—' : rr + '%'}</RateVal>
                       </div>
-                      {showEx && (
-                        <div style={{ fontSize: 11, marginTop: 2, color: '#7C89CD' }}>{rrEx}% excl. OOO</div>
+                      {c.sent >= 50 && (
+                        <div style={{ fontSize: 11, marginTop: 2, color: '#7C89CD' }}>{ooo}% OOO</div>
                       )}
                     </td>
                     <td>
@@ -838,7 +843,7 @@ export default function CampaignsPage() {
                   expanded && (
                     <tr key={`detail-${c.id}`} style={{ background: '#F8FAFF', borderBottom: '1px solid #E2E6F0' }}>
                       <td colSpan={10} style={{ padding: 0 }}>
-                        <DetailPanel campaign={c} wsAvg={activeWs!.avgReplyRate} />
+                        <DetailPanel campaign={c} wsAvg={avgHumanRate(activeWs!.campaigns)} />
                       </td>
                     </tr>
                   ),
