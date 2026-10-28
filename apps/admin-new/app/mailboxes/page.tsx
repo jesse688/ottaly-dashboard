@@ -741,7 +741,7 @@ function ProviderCard({ g, title, accent, days, ds, leads, nlo, nloReady, period
         <Stat v={noSeries ? '—' : (oooRate * 100).toFixed(2) + '%'} l="OOO RR" color="#3B82F6" />
         <Stat v={noSeries ? '—' : (bounceRate * 100).toFixed(2) + '%'} l="Bounce" />
         <Stat
-          v={nloRate == null ? '—' : (nloRate * 100).toFixed(2) + '%' + (nloCoverage < 0.95 ? ` (${Math.round(nloCoverage * 100)}%)` : '')}
+          v={nloRate == null ? '—' : (nloRate * 100).toFixed(2) + '%' + (nloCoverage < 0.95 ? ` (${Math.round(nloCoverage * 100)}% checked)` : '')}
           l="New-lead OOO"
           color="#F59E0B"
         />
