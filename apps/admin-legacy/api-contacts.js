@@ -1051,6 +1051,25 @@ module.exports = (db) => {
         pushableNow: pushable,
       };
 
+      // Freshness: how many of these people we already hold, and how many any
+      // client pushed in the last 90 days. GetLeads export has no offset, so a
+      // repeated filter returns the same rows; this makes that visible before
+      // a CM imports and pushes the same people again.
+      try {
+        const emails = [...new Set(mapped.map(c => c.email))];
+        const { rows: f } = await db.query(
+          `SELECT COUNT(DISTINCT email)::int AS have,
+                  COUNT(DISTINCT email) FILTER (WHERE EXISTS (
+                    SELECT 1 FROM jsonb_array_elements(pushed_campaigns) p
+                    WHERE p->>'pushed_at' >= to_char(NOW() - INTERVAL '90 days', 'YYYY-MM-DD')))::int AS pushed90
+             FROM contacts WHERE email = ANY($1)`, [emails]);
+        summary.alreadyHave = f[0]?.have || 0;
+        summary.newPeople = emails.length - summary.alreadyHave;
+        summary.pushedLast90d = f[0]?.pushed90 || 0;
+      } catch (e) {
+        console.warn('[getleads] freshness check failed:', e.message);
+      }
+
       if (dryRun) return res.json({ dryRun: true, ...summary });
 
       const result = await db.bulkCreateContacts(req.workspaceId, mapped);
