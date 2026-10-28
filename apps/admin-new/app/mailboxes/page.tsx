@@ -40,7 +40,11 @@ const ACCENT: Record<string, string> = {
 // renaming a key strands that history until a backfill rewrites it.
 const TAG_LABEL: Record<string, string> = { Winnr: 'SMTP' }
 
-interface DaySeries { sent: number[]; replies: number[]; ooo: number[]; bounces: number[]; contacted: number[] }
+interface DaySeries { sent: number[]; replies: number[]; ooo: number[]; bounces: number[]; contacted: number[]; newLeads?: number[] }
+// OOOs on email 1 per card key, from /api/mailboxes/newlead-ooo. resolved < total
+// means the step resolver is still catching up.
+type NewLeadOoo = { step1: number; resolved: number; total: number }
+interface NewLeadOooResponse { days: number; by: Record<'supplier' | 'type' | 'tag', Record<string, NewLeadOoo>> }
 interface HistoryResponse { dimension: string; days: string[]; series: Record<string, DaySeries> }
 // Billable leads (revenue leads) attributed to each supplier / provider type by
 // the mailbox that received the reply. total = all marked leads in window;
@@ -98,6 +102,7 @@ export default function MailboxesPage() {
   const [typeHistory, setTypeHistory] = useState<HistoryResponse | null>(null)
   const [tagHistory, setTagHistory] = useState<HistoryResponse | null>(null)
   const [leads, setLeads] = useState<LeadsResponse | null>(null)
+  const [nlo, setNlo] = useState<NewLeadOooResponse | null>(null)
 
   const [search, setSearch] = useState('')
   const [fClient, setFClient] = useState('')
@@ -137,6 +142,7 @@ export default function MailboxesPage() {
     hist('type', setTypeHistory)
     hist('tag', setTagHistory)
     fetch(`/api/mailboxes/leads?days=${days}`).then(r => r.json()).then(setLeads).catch(() => setLeads(null))
+    fetch(`/api/mailboxes/newlead-ooo?days=${days}`).then(r => r.json()).then(d => setNlo(d?.by ? d : null)).catch(() => setNlo(null))
   }, [])
 
   useEffect(() => {
@@ -461,7 +467,7 @@ export default function MailboxesPage() {
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: C.muted, margin: '0 0 .5rem' }}>By tag</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: '1rem' }}>
-                {data.stats.byTag.map(g => <ProviderCard key={g.key} g={g} title={TAG_LABEL[g.key]} accent={ACCENT[g.key] || C.navy} days={tagHistory?.days ?? []} ds={tagHistory?.series[g.key]} leads={leads?.byTag[g.key]} periodDays={periodDays} />)}
+                {data.stats.byTag.map(g => <ProviderCard key={g.key} g={g} title={TAG_LABEL[g.key]} accent={ACCENT[g.key] || C.navy} days={tagHistory?.days ?? []} ds={tagHistory?.series[g.key]} leads={leads?.byTag[g.key]} nlo={nlo?.by.tag[g.key]} nloReady={!!nlo} periodDays={periodDays} />)}
               </div>
             </div>
 
@@ -469,7 +475,7 @@ export default function MailboxesPage() {
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: C.muted, margin: '0 0 .5rem' }}>By provider (Google / SMTP / Azure / Microsoft)</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: '1rem' }}>
-                {data.stats.byType.map(g => <ProviderCard key={g.key} g={g} accent={ACCENT[g.key] || C.navy} days={typeHistory?.days ?? []} ds={typeHistory?.series[g.key]} leads={leads?.byType[g.key]} periodDays={periodDays} />)}
+                {data.stats.byType.map(g => <ProviderCard key={g.key} g={g} accent={ACCENT[g.key] || C.navy} days={typeHistory?.days ?? []} ds={typeHistory?.series[g.key]} leads={leads?.byType[g.key]} nlo={nlo?.by.type[g.key]} nloReady={!!nlo} periodDays={periodDays} />)}
               </div>
             </div>
 
@@ -477,7 +483,7 @@ export default function MailboxesPage() {
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: C.muted, margin: '0 0 .5rem' }}>By supplier (Winnr / Maildoso / Mithun)</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: '1rem' }}>
-                {data.stats.bySupplier.map(g => <ProviderCard key={g.key} g={g} accent={ACCENT[g.key] || C.navy} days={history?.days ?? []} ds={history?.series[g.key]} leads={leads?.bySupplier[g.key]} periodDays={periodDays} />)}
+                {data.stats.bySupplier.map(g => <ProviderCard key={g.key} g={g} accent={ACCENT[g.key] || C.navy} days={history?.days ?? []} ds={history?.series[g.key]} leads={leads?.bySupplier[g.key]} nlo={nlo?.by.supplier[g.key]} nloReady={!!nlo} periodDays={periodDays} />)}
               </div>
             </div>
 
@@ -672,7 +678,7 @@ const sum = (a: number[] | undefined) => (a ?? []).reduce((s, v) => s + v, 0)
 // Combined per-group card: window-total stats (SENT, human RR, RR+OOO, bounce)
 // + a toggleable daily multi-line chart (Sent / RR human / RR+OOO). Click a
 // legend item to hide/show that series — see results per day for what's left.
-function ProviderCard({ g, title, accent, days, ds, leads, periodDays }: { g: MailboxGroupStats; title?: string; accent: string; days: string[]; ds?: DaySeries; leads?: number; periodDays: number }) {
+function ProviderCard({ g, title, accent, days, ds, leads, nlo, nloReady, periodDays }: { g: MailboxGroupStats; title?: string; accent: string; days: string[]; ds?: DaySeries; leads?: number; nlo?: NewLeadOoo; nloReady: boolean; periodDays: number }) {
   const [hidden, setHidden] = useState<Set<string>>(new Set())
   const toggle = (k: string) => setHidden(p => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n })
 
@@ -697,6 +703,12 @@ function ProviderCard({ g, title, accent, days, ds, leads, periodDays }: { g: Ma
   const human = tContacted > 0 ? tReplies / tContacted : 0
   const withOoo = tContacted > 0 ? (tReplies + tOoo) / tContacted : (ds ? 0 : g.reply_rate)
   const bounceRate = tSent > 0 ? tBounces / tSent : g.bounce_rate
+  // New-lead OOO = OOO on email 1 / new leads contacted. Unlike RR incl. OOO it
+  // does not sag on follow-up-heavy days. "—" until the backfill has stored
+  // new-lead counts; a small % shows how much of the window's OOOs are resolved.
+  const tNewLeads = ds?.newLeads ? sum(ds.newLeads) : 0
+  const nloRate = nloReady && tNewLeads > 0 ? (nlo?.step1 ?? 0) / tNewLeads : null
+  const nloCoverage = nlo && nlo.total > 0 ? nlo.resolved / nlo.total : 1
 
   // Daily series for the chart (percentages computed per-day).
   //
@@ -719,7 +731,7 @@ function ProviderCard({ g, title, accent, days, ds, leads, periodDays }: { g: Ma
   return (
     <div style={{ background: '#fff', border: '1px solid #E2E6F0', borderRadius: 10, padding: '1rem 1.1rem', borderTop: `3px solid ${accent}` }}>
       <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>{title ?? g.key} · <span style={{ color: '#6B7280', fontWeight: 500 }}>{g.count} mailboxes</span></div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 8, marginBottom: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6,1fr)', gap: 8, marginBottom: 10 }}>
         {/* With no daily series there is nothing true to show for this window —
             an em dash beats a 0.00% that reads as "this group gets no replies". */}
         <Stat v={noSeries && !fallbackUsable ? '—' : tSent.toLocaleString()} l="Sent" />
@@ -727,6 +739,11 @@ function ProviderCard({ g, title, accent, days, ds, leads, periodDays }: { g: Ma
         <Stat v={noSeries ? '—' : (human * 100).toFixed(2) + '%'} l="RR (human)" color="#16A34A" />
         <Stat v={noSeries ? '—' : (withOoo * 100).toFixed(2) + '%'} l="RR incl. OOO" color="#3B82F6" />
         <Stat v={noSeries ? '—' : (bounceRate * 100).toFixed(2) + '%'} l="Bounce" />
+        <Stat
+          v={nloRate == null ? '—' : (nloRate * 100).toFixed(2) + '%' + (nloCoverage < 0.95 ? ` (${Math.round(nloCoverage * 100)}%)` : '')}
+          l="New-lead OOO"
+          color="#F59E0B"
+        />
       </div>
       {days.length > 1 ? (
         <>

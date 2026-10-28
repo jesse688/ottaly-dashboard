@@ -4,6 +4,8 @@ import { DIMENSIONS, type Dimension } from '@/lib/mailbox-dimensions'
 
 export const dynamic = 'force-dynamic'
 
+let newLeadsColumnReady = false
+
 // GET /api/mailboxes/history?dimension=supplier|type|tag&days=30
 // Per-group daily series for the tag/provider/supplier performance cards.
 // Returns raw daily counts so the cards can show SENT, human RR
@@ -24,8 +26,14 @@ export async function GET(req: Request) {
     const dimension = raw as Dimension
     const days = Math.min(Math.max(Number(searchParams.get('days')) || 30, 1), 90)
 
+    // total_new_leads is added by the backfill; make sure it exists before the
+    // first backfill after deploy has run. Once per process: ALTER takes a lock.
+    if (!newLeadsColumnReady) {
+      await pool.query(`ALTER TABLE mailbox_supplier_daily ADD COLUMN IF NOT EXISTS total_new_leads INT NOT NULL DEFAULT 0`)
+      newLeadsColumnReady = true
+    }
     const res = await pool.query(
-      `SELECT day, key, total_sent, total_replies, total_ooo, total_bounces, total_contacted
+      `SELECT day, key, total_sent, total_replies, total_ooo, total_bounces, total_contacted, total_new_leads
          FROM mailbox_supplier_daily
         WHERE dimension = $1 AND day >= CURRENT_DATE - ($2::int - 1)
         ORDER BY day ASC, key ASC`,
@@ -36,16 +44,17 @@ export async function GET(req: Request) {
     const dayIdx = new Map(dayset.map((d, i) => [d, i]))
     const z = () => new Array(dayset.length).fill(0)
     // Per key: daily arrays for each metric.
-    const series: Record<string, { sent: number[]; replies: number[]; ooo: number[]; bounces: number[]; contacted: number[] }> = {}
+    const series: Record<string, { sent: number[]; replies: number[]; ooo: number[]; bounces: number[]; contacted: number[]; newLeads: number[] }> = {}
     for (const r of res.rows) {
       const k = r.key as string
-      if (!series[k]) series[k] = { sent: z(), replies: z(), ooo: z(), bounces: z(), contacted: z() }
+      if (!series[k]) series[k] = { sent: z(), replies: z(), ooo: z(), bounces: z(), contacted: z(), newLeads: z() }
       const i = dayIdx.get(new Date(r.day).toISOString().slice(0, 10))!
       series[k].sent[i] = r.total_sent ?? 0
       series[k].replies[i] = r.total_replies ?? 0
       series[k].ooo[i] = r.total_ooo ?? 0
       series[k].bounces[i] = r.total_bounces ?? 0
       series[k].contacted[i] = r.total_contacted ?? 0
+      series[k].newLeads[i] = r.total_new_leads ?? 0
     }
     return NextResponse.json({ dimension, days: dayset, series })
   } catch (err) {
