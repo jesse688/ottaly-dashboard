@@ -20,8 +20,9 @@ import { pvBulkActive } from './pv-gate'
 // plus AUTOMATIC_REPLY. Measured 12-26 Oct: Bubble 305 vs 319 stored, Butterfly
 // 724 vs 739 (the gap is day-boundary timezone). OUT_OF_OFFICE alone is half.
 
-// How far back the resolver reaches. Older OOOs are not worth the PV calls.
-const LOOKBACK_DAYS = Number(process.env.OOO_STEP_LOOKBACK_DAYS ?? 45)
+// How far back the resolver reaches. 7 days keeps the first fill to ~30 min;
+// longer Stats windows show a coverage % for the part before that.
+const LOOKBACK_DAYS = Number(process.env.OOO_STEP_LOOKBACK_DAYS ?? 7)
 // Per pass. Shares the one PV gate with the warmers, so keep it modest.
 const BATCH = Number(process.env.OOO_STEP_BATCH ?? 60)
 const MAX_ATTEMPTS = 3
