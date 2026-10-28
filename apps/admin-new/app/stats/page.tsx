@@ -45,6 +45,11 @@ interface WsTotals {
   splitSent: number
   recipientBounceRate: number | null
   senderBounceRate: number | null
+  // OOO that answered step 1 ÷ new leads contacted. Unlike OOO RR it does not
+  // sag on follow-up-heavy days. Coverage < 1 = still resolving, reads low.
+  newLeadOooCount: number
+  newLeadOoo: number
+  oooStepCoverage: number | null
 }
 interface Workspace {
   workspace_id: string
@@ -246,8 +251,10 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
   if (!list.length) return null
   const t = {
     sent: 0, replies: 0, posReplies: 0, oooReplies: 0, bounces: 0, contacted: 0, leads: 0,
-    recipientBounces: 0, senderBounces: 0, splitSent: 0,
+    recipientBounces: 0, senderBounces: 0, splitSent: 0, newLeadOooCount: 0,
   }
+  // The agency figure is only as complete as its least-resolved workspace.
+  let coverage: number | null = 1
   const byDate: Record<string, DayData> = {}
   let nDays = 0
   for (const w of list) {
@@ -261,6 +268,9 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
     t.recipientBounces += w.totals.recipientBounces ?? 0
     t.senderBounces += w.totals.senderBounces ?? 0
     t.splitSent += w.totals.splitSent ?? 0
+    t.newLeadOooCount += w.totals.newLeadOooCount ?? 0
+    const c = w.totals.oooStepCoverage
+    coverage = c == null || coverage == null ? null : Math.min(coverage, c)
     // Reply-rate denominator, summed across workspaces. A workspace owns its
     // own leads, so these do not overlap and summing keeps the agency headline
     // on the same basis as each row.
@@ -319,6 +329,8 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
       // Divides by splitSent, not t.sent — see the note in lib/pv-range.ts.
       recipientBounceRate: t.splitSent > 0 ? t.recipientBounces / t.splitSent : null,
       senderBounceRate: t.splitSent > 0 ? t.senderBounces / t.splitSent : null,
+      newLeadOoo: t.contacted > 0 ? t.newLeadOooCount / t.contacted : 0,
+      oooStepCoverage: coverage,
     },
     series,
   }
@@ -492,7 +504,7 @@ function ClientCard({
         onClick={() => setOpen(o => !o)}
         className={cn(
           'grid w-full cursor-pointer items-center gap-2 px-4 py-3 text-left',
-          'grid-cols-[minmax(0,1.6fr)_repeat(10,minmax(0,1fr))_24px]',
+          'grid-cols-[minmax(0,1.6fr)_repeat(11,minmax(0,1fr))_24px]',
           isAll && 'bg-accent/40',
         )}
       >
@@ -514,6 +526,26 @@ function ClientCard({
         <Cell>
           <span className="text-sm font-bold text-muted-foreground">{pct(allrr)}</span>
           <Lbl>Reply Rate</Lbl>
+        </Cell>
+        <Cell>
+          <span
+            className="text-sm font-bold text-foreground"
+            title={
+              t.oooStepCoverage == null
+                ? 'Step data unavailable'
+                : t.oooStepCoverage < 0.95
+                  ? `Still resolving: step known for ${Math.round(t.oooStepCoverage * 100)}% of OOOs, so this reads low`
+                  : `${num(t.newLeadOooCount)} OOOs on email 1 ÷ ${num(t.contacted)} new leads`
+            }
+          >
+            {t.oooStepCoverage == null ? '—' : pct(t.newLeadOoo)}
+            {t.oooStepCoverage != null && t.oooStepCoverage < 0.95 && (
+              <span className="ml-1 text-[10px] font-normal text-muted-foreground">
+                {Math.round(t.oooStepCoverage * 100)}%
+              </span>
+            )}
+          </span>
+          <Lbl>New-lead OOO</Lbl>
         </Cell>
         <Cell>
           <StatusBadge status={brTone(t.bounceRate)}>{pct(t.bounceRate)}</StatusBadge>
@@ -956,10 +988,11 @@ export default function StatsPage() {
       {status === 'ok' && (
         <div className="flex flex-col gap-2">
           {/* Column legend (mirrors the per-card cells) */}
-          <div className="grid grid-cols-[minmax(0,1.6fr)_repeat(10,minmax(0,1fr))_24px] items-center gap-2 px-4 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <div className="grid grid-cols-[minmax(0,1.6fr)_repeat(11,minmax(0,1fr))_24px] items-center gap-2 px-4 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             <div>Client</div>
             <div className="text-right">Human RR</div>
             <div className="text-right">Reply Rate</div>
+            <div className="text-right">New-lead OOO</div>
             <div className="text-right">Bounce</div>
             <div className="text-right">Recipient</div>
             <div className="text-right">Sender</div>
