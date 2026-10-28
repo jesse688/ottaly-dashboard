@@ -542,7 +542,7 @@ function ClientCard({
             {t.oooStepCoverage == null ? '—' : pct(t.newLeadOoo)}
             {t.oooStepCoverage != null && t.oooStepCoverage < 0.95 && (
               <span className="ml-1 text-[10px] font-normal text-muted-foreground">
-                {Math.round(t.oooStepCoverage * 100)}%
+                {Math.round(t.oooStepCoverage * 100)}% checked
               </span>
             )}
           </span>
