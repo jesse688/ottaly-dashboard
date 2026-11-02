@@ -62,13 +62,15 @@ const domainOf = (email: string) => (email.split('@')[1] || '').toLowerCase()
 // carry it alongside their provider tag. Matching it earlier would pull those
 // out of the provider bucket the card is actually reporting on. Reaching it
 // means the mailbox has no provider tag of its own.
-// 'Ottaly Mail SMTP' comes FIRST (2026-10-01): mailboxes on our own sending
+// 'Rotasend' comes FIRST (2026-10-01, renamed from 'Ottaly Mail SMTP' on
+// 2026-11-02; both tag names still match): mailboxes on our own sending
 // infrastructure (KumoMTA + mailcow). Many of them are addresses that used to
 // be MithMill Microsoft mailboxes and still carry tags like "MS New SEP"; once
 // a mailbox is on Ottaly Mail that is where its results come from, so this tag
 // must win over any older provider tag.
 export const TAG_RULES: { needs: string[]; key: string }[] = [
-  { needs: ['ottaly', 'mail', 'smtp'], key: 'Ottaly Mail SMTP' },
+  { needs: ['rotasend'], key: 'Rotasend' },
+  { needs: ['ottaly', 'mail', 'smtp'], key: 'Rotasend' },
   { needs: ['inboxing'], key: 'Inboxing.com' },
   { needs: ['google', 'generic'], key: 'Google Generic' },
   { needs: ['google', 'new'], key: 'Google New Sep' },
@@ -126,13 +128,18 @@ export type Dimension = (typeof DIMENSIONS)[number]
  * given day: before the move, the Ottaly Mail tag is dropped (so its older
  * provider tag buckets it) and type/supplier revert to the recorded values.
  */
+function isOwnSmtpTag(tag: string): boolean {
+  const n = normTag(tag)
+  return n.includes('rotasend') || (n.includes('ottaly') && n.includes('mail') && n.includes('smtp'))
+}
+
 export interface MailboxMove { since: string; prevType: string | null; prevSupplier: string | null }
 
 export function asOf(m: DimMailbox, day: string, move: MailboxMove | undefined): DimMailbox {
   if (!move || day >= move.since) return m
   return {
     ...m,
-    tags: Array.isArray(m.tags) ? m.tags.filter(t => !(normTag(t).includes('ottaly') && normTag(t).includes('mail') && normTag(t).includes('smtp'))) : m.tags,
+    tags: Array.isArray(m.tags) ? m.tags.filter(t => !isOwnSmtpTag(t)) : m.tags,
     type: move.prevType ?? m.type,
     supplier: move.prevSupplier ?? m.supplier,
   }

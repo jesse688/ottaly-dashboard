@@ -325,15 +325,23 @@ function supplierFromDomain(email: string): string | null {
 // PlusVibe stores tag _IDs on the account (payload.tags), not names. The names
 // live in the workspace tag list: GET /api/v1/tags/list?workspace_id=X → [{_id,name}].
 interface PvTag { _id?: string; id?: string; name?: string }
+// Paged: the Warm-up workspace carries well over 100 tags (created:/ip:/client:
+// per batch), and the newest come first, so one page of 100 missed the oldest
+// ones - including the supplier tag every Rotasend mailbox carries.
 async function fetchWorkspaceTagMap(wsId: string): Promise<Map<string, string>> {
-  const resp = await pvFetch<PvTag[] | { data?: PvTag[]; tags?: PvTag[] }>(
-    `/tags/list?workspace_id=${encodeURIComponent(wsId)}&skip=0&limit=100`
-  )
-  const list: PvTag[] = Array.isArray(resp) ? resp : (resp?.data ?? resp?.tags ?? [])
+  const PAGE = 100
   const map = new Map<string, string>()
-  for (const t of list) {
-    const id = t._id ?? t.id
-    if (id && t.name) map.set(String(id), t.name)
+  for (let skip = 0; skip < 50 * PAGE; skip += PAGE) {
+    const resp = await pvFetch<PvTag[] | { data?: PvTag[]; tags?: PvTag[] }>(
+      `/tags/list?workspace_id=${encodeURIComponent(wsId)}&skip=${skip}&limit=${PAGE}`
+    )
+    const list: PvTag[] = Array.isArray(resp) ? resp : (resp?.data ?? resp?.tags ?? [])
+    const before = map.size
+    for (const t of list) {
+      const id = t._id ?? t.id
+      if (id && t.name) map.set(String(id), t.name)
+    }
+    if (list.length < PAGE || map.size === before) break
   }
   return map
 }
