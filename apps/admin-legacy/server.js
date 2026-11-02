@@ -386,7 +386,8 @@ async function pvAddLeads(wsId, campaignId, leads, opts = {}) {
     leads,
     // Let PlusVibe drop leads it already holds instead of us paying to verify
     // and send them first. Callers that genuinely want a re-add can opt out.
-    ...(opts.skipIfInWorkspace === false ? {} : { skip_if_in_workspace: true }),
+    // Off by default (Jesse, 2026-11-02): the 60-day same-client cooldown is the guard.
+    ...(opts.skipIfInWorkspace === true ? { skip_if_in_workspace: true } : {}),
     ...(opts.overwrite ? { is_overwrite: true } : {}),
   };
   const r = await pvApi('/lead/add', { method: 'POST', wsId, body });
@@ -508,8 +509,8 @@ const NO2BOUNCE_KEY          = process.env.NO2BOUNCE_KEY          || 'ab55c5f132
 // Reverting to 'campaign' ALSO requires sending skip_if_in_workspace:false, or
 // the waste simply returns. Defined here rather than beside the other push
 // constants because sendability (~line 16490) reads it and const is not hoisted.
-const PUSH_DEDUP_SCOPE = (process.env.PUSH_DEDUP_SCOPE || 'workspace').toLowerCase() === 'campaign'
-  ? 'campaign' : 'workspace';
+const PUSH_DEDUP_SCOPE = (process.env.PUSH_DEDUP_SCOPE || 'campaign').toLowerCase() === 'workspace'
+  ? 'workspace' : 'campaign';
 const STRIPE_SECRET_KEY      = process.env.STRIPE_SECRET_KEY      || '';
 const STRIPE_PUBLISHABLE_KEY = process.env.STRIPE_PUBLISHABLE_KEY || '';
 const STRIPE_WEBHOOK_SECRET  = process.env.STRIPE_WEBHOOK_SECRET  || '';
