@@ -73,8 +73,9 @@ eq(tagKey(mb({ tags: ['Inboxing.com', 'Google Generic'] })), 'Inboxing.com', 'ta
 eq(tagKey(mb({ tags: ['Google Generic', 'Google Legacy'] })), 'Google Generic', 'tag: generic before legacy')
 
 // Ottaly Mail SMTP (2026-10-01): our own SMTP wins over any older provider tag.
-eq(tagKey(mb({ tags: ['Ottaly Mail SMTP'] })), 'Ottaly Mail SMTP', 'tag: Ottaly Mail SMTP')
-eq(tagKey(mb({ tags: ['MS New SEP', 'SMTP to MS - SEP', 'Ottaly Mail SMTP'] })), 'Ottaly Mail SMTP', 'tag: Ottaly Mail beats old Microsoft tags')
+eq(tagKey(mb({ tags: ['Ottaly Mail SMTP'] })), 'Rotasend', 'tag: old Ottaly Mail SMTP name')
+eq(tagKey(mb({ tags: ['Rotasend'] })), 'Rotasend', 'tag: Rotasend')
+eq(tagKey(mb({ tags: ['MS New SEP', 'SMTP to MS - SEP', 'Ottaly Mail SMTP'] })), 'Rotasend', 'tag: Ottaly Mail beats old Microsoft tags')
 eq(tagKey(mb({ tags: ['client:YVF', 'ip:mx22'] })), 'Untagged', 'tag: client/ip tags alone stay Untagged')
 eq(tagKey(mb({ tags: ['Winnr'] })), 'Winnr', 'tag: Winnr unchanged')
 
@@ -109,9 +110,10 @@ const mv = { since: '2026-09-27', prevType: 'microsoft', prevSupplier: 'Mithun' 
 eq(tagKey(asOf(moved, '2026-09-20', mv)), 'MS New', 'asOf: before the move -> old tag card')
 eq(providerKey(asOf(moved, '2026-09-20', mv)), 'microsoft', 'asOf: before the move -> old provider')
 eq(supplierKey(asOf(moved, '2026-09-20', mv)), 'Mithun', 'asOf: before the move -> old supplier')
-eq(tagKey(asOf(moved, '2026-09-27', mv)), 'Ottaly Mail SMTP', 'asOf: move day counts as Ottaly Mail')
+eq(tagKey(asOf(moved, '2026-09-27', mv)), 'Rotasend', 'asOf: move day counts as Ottaly Mail')
 eq(providerKey(asOf(moved, '2026-09-30', mv)), 'smtp', 'asOf: after the move -> smtp')
-eq(tagKey(asOf(moved, '2026-09-20', undefined)), 'Ottaly Mail SMTP', 'asOf: no move recorded -> unchanged')
+eq(tagKey(asOf(moved, '2026-09-20', undefined)), 'Rotasend', 'asOf: no move recorded -> unchanged')
+eq(tagKey(asOf(mb({ type: 'smtp', tags: ['MS New SEP', 'Rotasend'] }), '2026-09-20', mv)), 'MS New', 'asOf: renamed Rotasend tag also dropped before the move')
 
 if (failures) { console.error(`\n${failures} failing assertion(s)`); process.exit(1) }
 console.log('mailbox-dimensions: all assertions passed')
