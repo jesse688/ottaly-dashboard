@@ -227,6 +227,13 @@ const PV_WORKSPACES = [
   { pv: '6a6920fadd1097091a1c7e58', name: 'Hawthorne Energy' },
   { pv: '6a54af1e6cdb2c8556cbc64e', name: 'YorkshireVehicleFinance' },
   { pv: '6a462b853c8bc15197e8b63b', name: 'ButterflyGoogle' },
+  // Added 2026-11-03. Neither was ever in this list, so the reply reconciler
+  // never polled them; their replies only arrived via the client-portal
+  // pv-reconcile cron. When that cron stopped (2026-11-02 15:56 UTC) a live
+  // "Interested" reply to Mercantile never reached the unibox. Ids confirmed
+  // against the live PV /workspaces endpoint.
+  { pv: '6abead2a2aff7ae8b8ff0eb8', name: 'Mercantile Debt' },
+  { pv: '6a90a26610ad5acc2d5dfdbb', name: 'Northern Merchandise' },
 ];
 
 // Shim: code that did pvFetch('/workspaces') now calls this directly.
