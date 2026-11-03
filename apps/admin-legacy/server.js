@@ -1083,7 +1083,7 @@ app.use(compression());
 // Rate-limit the API surface (stripe webhook excluded — it has its own verify).
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 1000,
+  max: 5000,
   standardHeaders: true,
   legacyHeaders: false,
   skip: (req) => req.path === '/api/stripe/webhook' || req.path.startsWith('/api/domains/'),
