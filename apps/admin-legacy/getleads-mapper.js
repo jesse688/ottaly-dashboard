@@ -81,14 +81,18 @@ function pick(row, ...names) {
  * and the only genuinely required field.
  */
 function mapRow(row) {
-  const email = pick(row, 'Email', 'email', 'EMAIL_ADDRESS');
+  // GetLeads moved databases in Nov 2026 and renamed its export columns
+  // (work_email, current_title, company_industry, ...). The last name in each
+  // pick() below is that new name; the older labels stay so old exports and
+  // the MCP JSON rows still map.
+  const email = pick(row, 'Email', 'email', 'EMAIL_ADDRESS', 'work_email');
   if (!email || !email.includes('@')) return null;
 
-  const jobTitle = pick(row, 'Current Job Title', 'job_title', 'JOB_TITLE');
+  const jobTitle = pick(row, 'Current Job Title', 'job_title', 'JOB_TITLE', 'current_title');
 
   // The push gate needs a non-empty industry. LinkedIn's company industry is
   // the richer field (80% fill); UK SIC description is the fallback.
-  const industry = pick(row, 'Company Industry (LinkedIn)', 'industry', 'INDUSTRY_LINKEDIN')
+  const industry = pick(row, 'Company Industry (LinkedIn)', 'industry', 'INDUSTRY_LINKEDIN', 'company_industry', 'main_industry')
                 || pick(row, '2007 UK SIC Description', 'INDUSTRY_UK_STANDARD_2007_DESCRIPTION')
                 || pick(row, 'SIC Industry Description', 'INDUSTRY_SIC_DESCRIPTION');
 
@@ -96,13 +100,13 @@ function mapRow(row) {
   // but the copy templates read it, so fill it where GetLeads has something
   // descriptive: company specialties first, then the person's own headline.
   const keywords = pick(row, 'Company Specialties (LinkedIn)', 'SPECIALTIES')
-                || pick(row, 'Profile Headline', 'LINKEDIN_HEADLINE');
+                || pick(row, 'Profile Headline', 'LINKEDIN_HEADLINE', 'linkedin_headline');
 
   return {
     email: email.toLowerCase(),
     firstName: pick(row, 'First Name', 'first_name', 'FIRST_NAME'),
     lastName:  pick(row, 'Last Name', 'last_name', 'LAST_NAME'),
-    phone:     pick(row, 'Cellphone', 'Direct Office Phone', 'phone', 'CELLPHONE'),
+    phone:     pick(row, 'Cellphone', 'Direct Office Phone', 'phone', 'CELLPHONE', 'mobile_phone', 'direct_dial'),
 
     companyName:   pick(row, 'Company Name', 'company_name', 'COMPANY_NAME'),
     companyDomain: cleanDomain(pick(row, 'Company Domain', 'Company Website', 'company_domain', 'DOMAIN')),
@@ -111,24 +115,24 @@ function mapRow(row) {
     // Leave jobTitleCleaned null — the caller runs csv-importer's
     // normalizeJobTitle, which is the one shared implementation.
     jobTitleCleaned: null,
-    seniority:  mapSeniority(pick(row, 'Seniority Level', 'seniority', 'SENIORITY')),
+    seniority:  mapSeniority(pick(row, 'Seniority Level', 'seniority', 'SENIORITY', 'seniority_level')),
     department: pick(row, 'Department / Function', 'department', 'JOB_FUNCTION'),
 
-    city:    pick(row, 'Contact City', 'city', 'CITY'),
-    state:   pick(row, 'Contact State', 'state', 'STATE'),
-    country: pick(row, 'Contact Country', 'country', 'COUNTRY_NAME'),
+    city:    pick(row, 'Contact City', 'city', 'CITY', 'contact_city'),
+    state:   pick(row, 'Contact State', 'state', 'STATE', 'contact_state'),
+    country: pick(row, 'Contact Country', 'country', 'COUNTRY_NAME', 'contact_country'),
 
-    companyCity:    pick(row, 'Company City', 'HQ City', 'COMPANY_CITY'),
+    companyCity:    pick(row, 'Company City', 'HQ City', 'COMPANY_CITY', 'company_hq_city'),
     companyState:   pick(row, 'Company State', 'HQ State'),
-    companyCountry: pick(row, 'Company Country', 'HQ Country', 'COMPANY_COUNTRY'),
+    companyCountry: pick(row, 'Company Country', 'HQ Country', 'COMPANY_COUNTRY', 'company_hq_country'),
     companyAddress: pick(row, 'Company Street Address', 'HQ Street Address'),
 
     linkedinUrl:        pick(row, 'Contact LinkedIn URL', 'linkedin_url', 'LINKEDIN_URL'),
-    companyLinkedinUrl: pick(row, 'Company LinkedIn URL', 'LINKEDIN_URL_ORG'),
+    companyLinkedinUrl: pick(row, 'Company LinkedIn URL', 'LINKEDIN_URL_ORG', 'company_linkedin_url'),
 
     industry,
     keywords,
-    numEmployees: parseEmployees(pick(row, 'Employee Count Range', 'Min Employee Count', 'EMPLOYEE_COUNT_RANGE')),
+    numEmployees: parseEmployees(pick(row, 'Employee Count Range', 'Min Employee Count', 'EMPLOYEE_COUNT_RANGE', 'employee_count_range')),
 
     source: 'getleads',
     // Keep the whole original row. Apollo rows do the same, and it is what
