@@ -928,6 +928,26 @@ export default function StatsPage() {
           tone="purple"
           loading={loading}
         />
+        {/* Same figure as the New-lead OOO column on each client row: OOO on email 1
+            ÷ new leads contacted, summed across workspaces. A dash means the step
+            is not known yet; below 95% coverage it reads low, so say so. */}
+        <KpiCard
+          label="New-lead OOO"
+          value={
+            incomplete || agg?.totals.oooStepCoverage == null
+              ? '—'
+              : pct(agg.totals.newLeadOoo)
+          }
+          sub={
+            agg?.totals.oooStepCoverage == null
+              ? 'not measured yet'
+              : agg.totals.oooStepCoverage < 0.95
+                ? `${Math.round(agg.totals.oooStepCoverage * 100)}% checked, reads low`
+                : 'OOO on email 1 / new leads'
+          }
+          tone="purple"
+          loading={loading}
+        />
         <KpiCard label="Bounce Rate" value={incomplete ? '—' : pct(agg?.totals.bounceRate ?? 0)} tone="red" loading={loading} />
         {/* Both halves of the split get a card. Showing only sender meant the
             larger number was the hidden one — recipient is typically most of the
