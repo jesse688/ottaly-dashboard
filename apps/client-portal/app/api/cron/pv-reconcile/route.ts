@@ -66,7 +66,22 @@ function stableEmailKey(e: PVReceivedEmail): string {
 // One sweep at a time per process. A run that overlaps a still-running one is
 // skipped, not queued: the next run re-reads the same ?days window, so nothing
 // a skipped run would have seen is lost.
-let running = false
+// The lock carries its start time and expires. A sweep that hangs (a PlusVibe
+// or DB call that never settles) used to leave this `true` for the life of the
+// process: every later cron call returned "skipped" and NOTHING was ingested.
+// That is what happened 2 Nov 16:00 UTC: three days of replies, including real
+// ones from the Others folder, never reached Review. A normal sweep takes
+// ~95s, so 5 minutes means it is stuck, not slow.
+const MAX_RUN_MS = 5 * 60_000
+let runningSince = 0
+function lockHeld(): boolean {
+  if (!runningSince) return false
+  const age = Date.now() - runningSince
+  if (age < MAX_RUN_MS) return true
+  console.error(`[pv-reconcile] stale lock cleared: previous sweep still "running" after ${Math.round(age / 1000)}s`)
+  runningSince = 0
+  return false
+}
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url)
@@ -74,12 +89,12 @@ export async function GET(req: NextRequest) {
   if (!secret || !process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
-  if (running) return NextResponse.json({ ok: true, skipped: 'previous run still in progress' })
+  if (lockHeld()) return NextResponse.json({ ok: true, skipped: 'previous run still in progress' })
 
   // ?wait=1 runs inline and returns the summary (manual runs / debugging).
   if (url.searchParams.get('wait') === '1') {
-    running = true
-    try { return NextResponse.json(await runReconcile(url)) } finally { running = false }
+    runningSince = Date.now()
+    try { return NextResponse.json(await runReconcile(url)) } finally { runningSince = 0 }
   }
 
   // Default: ACK at once, sweep in the background. A full sweep takes ~95s and
@@ -87,7 +102,7 @@ export async function GET(req: NextRequest) {
   // "failed" (and repeated failures get the job auto-disabled, which WOULD stop
   // replies). The sweep itself was finishing fine; only the HTTP wait was the
   // problem. Outcome is still recorded in esp_sync_log + the server log.
-  running = true
+  runningSince = Date.now()
   after(async () => {
     try {
       const r = await runReconcile(url)
@@ -100,7 +115,7 @@ export async function GET(req: NextRequest) {
         ['pv-reconcile', 'error', 0]
       ).catch(() => {})
     } finally {
-      running = false
+      runningSince = 0
     }
   })
   return NextResponse.json({ ok: true, started: true }, { status: 202 })
