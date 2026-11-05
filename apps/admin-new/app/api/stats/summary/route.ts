@@ -11,7 +11,7 @@ import {
   type PvDay,
   type PvRange,
 } from '@/lib/pv-range'
-import { readNewLeadOoo } from '@/lib/ooo-steps'
+import { readNewLeadOoo, readNewLeadOooDaily } from '@/lib/ooo-steps'
 
 interface DayData {
   date: string
@@ -26,6 +26,9 @@ interface DayData {
   // so the chart draws a gap rather than a flat, untrue 0%.
   recipientBounces: number | null
   senderBounces: number | null
+  // OOOs that answered email 1 that day. null = the day's OOOs are not all
+  // resolved yet, so the count would read low: a gap, never a false low.
+  newLeadOooReplies: number | null
 }
 
 interface Workspace {
@@ -247,6 +250,11 @@ export async function GET(req: NextRequest) {
       return null
     })
 
+    const newLeadOooDaily = await readNewLeadOooDaily(start, end).catch(err => {
+      console.error('[stats] new-lead OOO daily unavailable:', err)
+      return null
+    })
+
     const workspaces: Workspace[] = []
     const failedNames: string[] = []
 
@@ -266,8 +274,19 @@ export async function GET(req: NextRequest) {
       for (const d of range.series) byDate.set(d.date, d)
 
       const wsLeadsByDate = leadsByWsDate[ws.workspace_id] || {}
+      const wsNloDaily = newLeadOooDaily?.get(ws.workspace_id)
       const series: DayData[] = dates.map(date => {
         const d = byDate.get(date)
+        const nd = wsNloDaily?.get(date)
+        // No OOOs that day = a real 0. Otherwise trust the count only once at
+        // least 95% of that day's OOOs have their step resolved.
+        const newLeadOooReplies = !newLeadOooDaily
+          ? null
+          : !nd || nd.total === 0
+            ? 0
+            : nd.resolved / nd.total >= 0.95
+              ? nd.step1
+              : null
         // Before the cutover PV reported no split at all, so emit null (a gap in
         // the chart) instead of 0 — a flat 0% sender line would read as a
         // measured clean result rather than an absence of data.
@@ -283,6 +302,7 @@ export async function GET(req: NextRequest) {
           leads: wsLeadsByDate[date] ?? 0,
           recipientBounces: classified ? d?.recipientBounces ?? 0 : null,
           senderBounces: classified ? d?.senderBounces ?? 0 : null,
+          newLeadOooReplies,
         }
       })
 
