@@ -23893,6 +23893,24 @@ app.get('/api/cron/reply-facts', async (req, res) => {
     const hours = Math.min(720, Math.max(1, parseInt(req.query.hours, 10) || 24));
     const dry   = req.query.dry === '1' || req.query.dry === 'true';
     const useLlm = req.query.llm !== '0' && req.query.llm !== 'false' && !!GEMINI_KEY;
+
+    // READ EACH REPLY ONCE. The LLM pass below used to re-send every reply the
+    // rules found nothing in on EVERY hourly tick (24h window x 24 ticks), because
+    // "found no fact" left no trace. This table is that trace: a reply is written
+    // here after its first successful LLM read and never sent to Gemini again.
+    // Backfill: any reply that already produced a Gemini fact has obviously been
+    // read, so seed those (cheap, idempotent).
+    await pgdb.query(`CREATE TABLE IF NOT EXISTS reply_facts_llm_scanned (
+      source_reply_id UUID PRIMARY KEY,
+      scanned_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      model           TEXT
+    )`);
+    if (!dry) {
+      await pgdb.query(`INSERT INTO reply_facts_llm_scanned (source_reply_id, model)
+                        SELECT DISTINCT source_reply_id, 'backfill' FROM reply_facts
+                         WHERE extractor LIKE 'gemini%' AND source_reply_id IS NOT NULL
+                        ON CONFLICT DO NOTHING`);
+    }
     const LLM_BUDGET = Math.min(500, Math.max(0, parseInt(req.query.llmLimit, 10) || 300));
     // Optional upper bound for paging through history OLDER than 30 days.
     // hours/beforeHours=800/1520 scans the (800,1520] hours-ago window — the
@@ -23926,8 +23944,17 @@ app.get('/api/cron/reply-facts', async (req, res) => {
       beforeHours ? [String(hours), String(beforeHours)] : [String(hours)]
     );
 
-    let kept = 0, wrote = 0, llmScanned = 0, llmKept = 0, llmRejected = 0, llmErrors = 0;
+    let kept = 0, wrote = 0, llmScanned = 0, llmKept = 0, llmRejected = 0, llmErrors = 0, llmSkippedAlreadyRead = 0;
     const samples = [];
+
+    const alreadyRead = new Set();
+    if (rows.length) {
+      const got = await pgdb.query(
+        `SELECT source_reply_id FROM reply_facts_llm_scanned WHERE source_reply_id = ANY($1::uuid[])`,
+        [rows.map(r => r.id)]
+      );
+      for (const g of got.rows) alreadyRead.add(String(g.source_reply_id));
+    }
 
     const writeFact = async (email, domain, f, extractor) => {
       kept++;
@@ -23963,13 +23990,24 @@ app.get('/api/cron/reply-facts', async (req, res) => {
       // LLM only on what the rules found NOTHING in, and only until the
       // per-run budget runs out — the rest waits for next hour's tick rather
       // than blowing out this run's duration or cost.
-      if (ruleFacts.length === 0 && llmBudgetLeft > 0) {
+      if (ruleFacts.length === 0 && llmBudgetLeft > 0 && alreadyRead.has(String(r.id))) {
+        llmSkippedAlreadyRead++;
+      } else if (ruleFacts.length === 0 && llmBudgetLeft > 0) {
         const body = cleanBody(r.body_preview);
         if (body && body.length >= 10) {
           llmBudgetLeft--;
           llmScanned++;
           let llmFacts = [];
-          try { llmFacts = await callGemini(body, 0, disabledKeys); } catch { llmErrors++; }
+          let llmOk = true;
+          try { llmFacts = await callGemini(body, 0, disabledKeys); } catch { llmErrors++; llmOk = false; }
+          // Mark as read only after a SUCCESSFUL call (an error is retried next
+          // tick) and never on a dry run. "No fact found" is a valid read.
+          if (llmOk && !dry) {
+            await pgdb.query(
+              `INSERT INTO reply_facts_llm_scanned (source_reply_id, model) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+              [r.id, String(GEMINI_MODEL)]
+            );
+          }
           const hay = norm(body);
           for (const f of llmFacts) {
             // Anti-hallucination gate — identical to the CLI's, so a fact
@@ -24004,7 +24042,7 @@ app.get('/api/cron/reply-facts', async (req, res) => {
     res.json({ ok: true, hours, beforeHours, dry, useLlm, llmBudget: LLM_BUDGET,
                extractor: RULES_VERSION,
                replies_scanned: rows.length, facts_found: kept, facts_written: wrote,
-               llm_scanned: llmScanned, llm_facts_kept: llmKept, llm_rejected: llmRejected, llm_errors: llmErrors,
+               llm_scanned: llmScanned, llm_skipped_already_read: llmSkippedAlreadyRead, llm_facts_kept: llmKept, llm_rejected: llmRejected, llm_errors: llmErrors,
                samples });
   } catch (err) {
     console.error('[cron/reply-facts] error:', err.message);
