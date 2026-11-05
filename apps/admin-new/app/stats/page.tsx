@@ -21,6 +21,8 @@ interface DayData {
   // null before PlusVibe began classifying bounces — a gap, not a zero.
   recipientBounces: number | null
   senderBounces: number | null
+  // OOOs on email 1 that day; null = not all resolved yet, so a chart gap.
+  newLeadOooReplies: number | null
 }
 interface WsTotals {
   sent: number
@@ -85,11 +87,12 @@ interface ProvidersResponse {
 }
 
 // ── Series config (matches legacy stats.html) ────────────────────────────────
-type SeriesKey = 'humanRR' | 'oooRR' | 'bounceRate' | 'recipientBounceRate' | 'senderBounceRate' | 'rtl' | 'lpt' | 'sent' | 'leads'
-const ALL_SERIES: SeriesKey[] = ['humanRR', 'oooRR', 'bounceRate', 'recipientBounceRate', 'senderBounceRate', 'rtl', 'lpt', 'sent', 'leads']
+type SeriesKey = 'humanRR' | 'oooRR' | 'newLeadOoo' | 'bounceRate' | 'recipientBounceRate' | 'senderBounceRate' | 'rtl' | 'lpt' | 'sent' | 'leads'
+const ALL_SERIES: SeriesKey[] = ['humanRR', 'oooRR', 'newLeadOoo', 'bounceRate', 'recipientBounceRate', 'senderBounceRate', 'rtl', 'lpt', 'sent', 'leads']
 const SERIES_LABEL: Record<SeriesKey, string> = {
   humanRR: 'Human RR',
   oooRR: 'OOO RR',
+  newLeadOoo: 'New-lead OOO',
   bounceRate: 'Bounce Rate',
   recipientBounceRate: 'Recipient Bounce',
   senderBounceRate: 'Sender Bounce',
@@ -103,6 +106,7 @@ const SERIES_LABEL: Record<SeriesKey, string> = {
 const SERIES_COLOR: Record<SeriesKey, string> = {
   humanRR: '#2563EB',    // blue — the primary metric
   oooRR: '#F59E0B',      // amber/yellow — OOO/auto
+  newLeadOoo: '#06B6D4', // cyan — OOO on email 1 only, kept apart from the amber OOO RR
   bounceRate: '#DC2626', // red — bounce
   // The split shares the bounce family: recipient (list quality, our own lists)
   // is the milder pink; sender (our sending reputation burning) is the darker,
@@ -161,6 +165,7 @@ function dayCounts(d: DayData, floor: number, key: SeriesKey): boolean {
 const SERIES_HINT: Record<SeriesKey, string> = {
   humanRR: 'Real (non-OOO) replies as a share of contacts.',
   oooRR: 'Out-of-office and auto-replies as a share of contacts.',
+  newLeadOoo: 'OOOs that answered email 1 ÷ new leads contacted that day. Days where the step is not yet resolved are a gap, not a low.',
   bounceRate: 'All bounces as a share of sent.',
   recipientBounceRate: 'Bad lead address — list quality. Classified from 14 Sep 2026; earlier days are a gap, not 0%.',
   senderBounceRate: 'Our mailbox was rejected — sending reputation. Classified from 14 Sep 2026.',
@@ -170,7 +175,7 @@ const SERIES_HINT: Record<SeriesKey, string> = {
   leads: 'Leads recorded that day.',
 }
 const isPercent = (s: SeriesKey) =>
-  s === 'humanRR' || s === 'oooRR' || s === 'bounceRate' ||
+  s === 'humanRR' || s === 'oooRR' || s === 'newLeadOoo' || s === 'bounceRate' ||
   s === 'recipientBounceRate' || s === 'senderBounceRate'  // RTL is a per-1000 count, not %
 
 function seriesValue(s: SeriesKey, d: DayData): number | null {
@@ -185,6 +190,12 @@ function seriesValue(s: SeriesKey, d: DayData): number | null {
       return sent > 0 ? +((human / sent) * 100).toFixed(2) : null
     case 'oooRR':
       return sent > 0 ? +((ooo / sent) * 100).toFixed(2) : null
+    // New-lead OOO divides by NEW leads contacted that day (the card's basis),
+    // not by sent, so follow-up-heavy days do not drag it down.
+    case 'newLeadOoo':
+      return (d.contacted || 0) > 0 && d.newLeadOooReplies != null
+        ? +((d.newLeadOooReplies / d.contacted) * 100).toFixed(2)
+        : null
     case 'bounceRate':
       return sent > 0 ? +(((d.bounces || 0) / sent) * 100).toFixed(2) : null
     // null (not 0) on days PlusVibe never classified, so the line starts at the
@@ -257,6 +268,7 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
   // The agency figure is only as complete as its least-resolved workspace.
   let coverage: number | null = 1
   const byDate: Record<string, DayData> = {}
+  const nloGapDates = new Set<string>()
   let nDays = 0
   for (const w of list) {
     t.sent += w.totals.sent
@@ -295,6 +307,7 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
           // first classified contribution promotes it to a number.
           recipientBounces: null,
           senderBounces: null,
+          newLeadOooReplies: 0,
         })
       e.sent += d.sent
       e.replies += d.replies
@@ -305,8 +318,13 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
       e.leads += d.leads
       if (d.recipientBounces != null) e.recipientBounces = (e.recipientBounces ?? 0) + d.recipientBounces
       if (d.senderBounces != null) e.senderBounces = (e.senderBounces ?? 0) + d.senderBounces
+      // One unresolved workspace makes the whole day unknown: summing the rest
+      // would understate it.
+      if (d.newLeadOooReplies == null) nloGapDates.add(d.date)
+      else if (e.newLeadOooReplies != null) e.newLeadOooReplies += d.newLeadOooReplies
     }
   }
+  for (const dt of nloGapDates) if (byDate[dt]) byDate[dt].newLeadOooReplies = null
   const series = Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date))
   const days = series.length || nDays || 1
   return {
@@ -443,6 +461,7 @@ function ClientCard({
         switch (soloKey) {
           case 'humanRR': return d.replies || 0
           case 'oooRR': return d.oooReplies || 0
+          case 'newLeadOoo': return d.newLeadOooReplies ?? 0
           case 'bounceRate': return d.bounces || 0
           case 'recipientBounceRate': return d.recipientBounces ?? 0
           case 'senderBounceRate': return d.senderBounces ?? 0
@@ -452,8 +471,14 @@ function ClientCard({
       // The split is only classified on qualifying days; averaging it over days
       // PV never classified would divide by a denominator those days inflate.
       const split = soloKey === 'recipientBounceRate' || soloKey === 'senderBounceRate'
-      const days = split ? soloDays.filter(d => d.recipientBounces != null || d.senderBounces != null) : soloDays
-      const den = days.reduce((t, d) => t + (d.sent || 0), 0)
+      const nlo = soloKey === 'newLeadOoo'
+      const days = split
+        ? soloDays.filter(d => d.recipientBounces != null || d.senderBounces != null)
+        : nlo
+          ? soloDays.filter(d => d.newLeadOooReplies != null)  // unresolved days are a gap, not a 0
+          : soloDays
+      // New-lead OOO is over new leads contacted; every other rate is over sent.
+      const den = days.reduce((t, d) => t + (nlo ? d.contacted || 0 : d.sent || 0), 0)
       if (den <= 0) return null
       return (days.reduce((t, d) => t + numOf(d), 0) / den) * 100
     }

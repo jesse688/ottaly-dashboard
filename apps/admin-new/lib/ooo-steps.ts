@@ -221,6 +221,47 @@ export async function readNewLeadOoo(start: string, end: string): Promise<Map<st
   return out
 }
 
+// Same counts as readNewLeadOoo, split by London day so the Stats chart can
+// draw a New-lead OOO line. Day = the day the OOO arrived, the same rule the
+// window bound above uses. Map key: workspace_id -> 'YYYY-MM-DD' -> counts.
+export async function readNewLeadOooDaily(
+  start: string,
+  end: string,
+): Promise<Map<string, Map<string, NewLeadOoo>>> {
+  await ensureTable()
+  const res = await pool.query(
+    `WITH ooo AS (
+       SELECT DISTINCT ON (u.raw->>'id')
+              u.raw->>'id' AS id, u.workspace_id,
+              (COALESCE((u.raw->>'timestamp_created')::timestamptz, u.received_at)
+                 AT TIME ZONE 'Europe/London')::date AS d
+         FROM unibox_replies u
+        WHERE u.raw->>'label' IN ('OUT_OF_OFFICE', 'AUTOMATIC_REPLY')
+          AND u.raw->>'id' IS NOT NULL
+          AND u.received_at >= $1::date - 2 AND u.received_at < $2::date + 3
+          AND (COALESCE((u.raw->>'timestamp_created')::timestamptz, u.received_at)
+                 AT TIME ZONE 'Europe/London')::date BETWEEN $1::date AND $2::date
+        ORDER BY u.raw->>'id'
+     )
+     SELECT o.workspace_id,
+            to_char(o.d, 'YYYY-MM-DD')                             AS day,
+            COUNT(*)::int                                          AS total,
+            COUNT(s.pv_email_id) FILTER (WHERE s.state <> 'error')::int AS resolved,
+            COUNT(*) FILTER (WHERE s.step = 1)::int                AS step1
+       FROM ooo o
+       LEFT JOIN ooo_reply_steps s ON s.pv_email_id = o.id
+      GROUP BY o.workspace_id, o.d`,
+    [start, end],
+  )
+  const out = new Map<string, Map<string, NewLeadOoo>>()
+  for (const r of res.rows as Array<{ workspace_id: string; day: string } & NewLeadOoo>) {
+    let m = out.get(r.workspace_id)
+    if (!m) out.set(r.workspace_id, (m = new Map()))
+    m.set(r.day, { step1: r.step1, resolved: r.resolved, total: r.total })
+  }
+  return out
+}
+
 // Every 90 seconds, offset from the warmers, yielding to a bulk job like they do.
 const FLAG = '__ottalyOooStepsStarted'
 export function startOooStepResolver(): void {
