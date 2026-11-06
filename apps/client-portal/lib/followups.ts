@@ -50,11 +50,16 @@ interface GeminiResp { candidates?: Array<{ content?: { parts?: Array<{ text?: s
 
 export async function draftFollowup(input: {
   client: string; subject: string; body: string; leadEmail: string; receivedAt: Date
+  forced?: boolean   // admin already chose to follow this up (Mark as FW): never 'none'
 }): Promise<FollowupDraft> {
   const key = process.env.GEMINI_API_KEY
   if (!key) throw new Error('no GEMINI_API_KEY')
   const today = new Date().toISOString().slice(0, 10)
-  const text = `${PROMPT(today, input.client)}
+  const in2w = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10)
+  const forcedNote = input.forced
+    ? `\n\nIMPORTANT: an admin has already decided this reply SHOULD be followed up. Never answer none. If no specific action fits, use recontact_on with due_date ${in2w} and draft a short, friendly check-in that refers to what they said in their reply (e.g. if they said they'd pass it on, ask whether it reached the right person or who the best contact is). Always write draft_subject and draft_body.`
+    : ''
+  const text = `${PROMPT(today, input.client)}${forcedNote}
 
 <reply received="${input.receivedAt.toISOString().slice(0, 10)}" from="${input.leadEmail}">
 Subject: ${input.subject || '(none)'}
