@@ -541,6 +541,35 @@ async function runMigration() {
       // label_type records the admin's decision on the reply for the audit trail.
       `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS label_type TEXT`, // null | lead | info
 
+      // ── Follow-ups queue (admin only) ──────────────────────────────
+      // Positive-ish replies that aren't billable today but carry an action:
+      // "email me in January", "speak to Sarah", "send prices", "call me".
+      // AI spots the action + drafts the email; an admin approves before send.
+      // One row per source reply (UNIQUE) so the scanner is idempotent.
+      `CREATE TABLE IF NOT EXISTS followups (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        source_reply_id UUID NOT NULL UNIQUE,
+        client_id UUID,
+        workspace_id TEXT,
+        lead_email TEXT NOT NULL,
+        action_type TEXT NOT NULL,              -- recontact_on | referral | send_info | call | none
+        reason TEXT,                            -- one line: what the prospect asked for
+        due_at DATE,                            -- when it should surface (recontact_on); today otherwise
+        target_name TEXT,                       -- referral: who to contact
+        target_email TEXT,                      -- referral: their address (null = needs lookup)
+        draft_subject TEXT,
+        draft_body TEXT,
+        confidence NUMERIC(3,2),
+        status TEXT NOT NULL DEFAULT 'new',     -- new | needs_email | sent | done | dismissed | failed | skipped
+        status_note TEXT,
+        ai_model TEXT,
+        approved_by TEXT,
+        sent_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_followups_status_due ON followups (status, due_at)`,
+
       // ── One-time migrations marker table ───────────────────────────
       `CREATE TABLE IF NOT EXISTS portal_meta (key TEXT PRIMARY KEY, created_at TIMESTAMPTZ DEFAULT NOW())`,
       // The ledger switched from money units to LEAD-COUNT units. Wipe any

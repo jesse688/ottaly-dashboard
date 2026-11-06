@@ -716,6 +716,7 @@ export function AdminClientsClient() {
             Backfill Leads
           </button>
           <a href="/admin/unibox" className="text-slate-400 hover:text-white text-xs">Unibox</a>
+          <a href="/admin/followups" className="text-slate-400 hover:text-white text-xs">Follow-ups</a>
           <button onClick={() => setTestAlert(true)} className="text-slate-400 hover:text-white text-xs border border-slate-600 px-2 py-1 rounded" title="Show a test unibox error banner">
             Test alert
           </button>
@@ -786,6 +787,7 @@ export function AdminClientsClient() {
               )}
             </button>
           ))}
+          <a href="/admin/followups" className="flex items-center gap-1.5 px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700">Follow-ups</a>
         </nav>
       </div>
 
