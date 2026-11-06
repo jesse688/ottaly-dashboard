@@ -159,7 +159,7 @@ export function replyBodyText(raw: Record<string, unknown> | null, preview: stri
 // Live PlusVibe conversation state for one lead. /unibox/threads honours the
 // `lead` filter (unlike /unibox/emails), and latest_message.type tells us who
 // spoke last: 'sent' = we already replied, so the conversation is being worked.
-export interface ThreadState { latestType: 'sent' | 'received' | null; latestAt: string | null; label: string | null }
+export interface ThreadState { latestType: 'sent' | 'received' | null; latestAt: string | null; label: string | null; rateLimited?: boolean }
 export async function getThreadState(workspaceId: string, leadEmail: string, threadId?: string | null): Promise<ThreadState | null> {
   const key = process.env.PLUSVIBE_API_KEY ?? process.env.PLUSVIBE_KEY
   if (!key || !workspaceId || !leadEmail) return null
@@ -168,6 +168,7 @@ export async function getThreadState(workspaceId: string, leadEmail: string, thr
       `https://api.plusvibe.ai/api/v1/unibox/threads?workspace_id=${encodeURIComponent(workspaceId)}&lead=${encodeURIComponent(leadEmail)}&limit=20`,
       { headers: { 'x-api-key': key }, signal: AbortSignal.timeout(10000) }
     )
+    if (res.status === 429) return { latestType: null, latestAt: null, label: null, rateLimited: true }
     if (!res.ok) return null
     const d = await res.json() as { data?: Array<{ thread_id?: string; lead?: string; label?: string; latest_message?: { type?: string; timestamp?: string } }> }
     const rows = (d.data ?? []).filter(t => (t.lead ?? '').toLowerCase() === leadEmail.toLowerCase() || (threadId && t.thread_id === threadId))
