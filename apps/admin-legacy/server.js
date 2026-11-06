@@ -4327,7 +4327,7 @@ app.get('/api/leads/analysis', requireSession, async (req, res) => {
   if (pgdb && emails.length) {
     try {
       const { rows: contacts } = await pgdb.query(
-        `SELECT LOWER(email) AS email, seniority, num_employees, department, sub_departments, job_title_cleaned
+        `SELECT LOWER(email) AS email, seniority, num_employees, department, sub_departments, job_title_cleaned, company_name, industry, city, country
          FROM contacts WHERE LOWER(email) = ANY($1::text[])`,
         [emails]
       );
@@ -4378,14 +4378,14 @@ app.get('/api/leads/analysis', requireSession, async (req, res) => {
       first_name:   l.first_name  || l.firstName  || '',
       last_name:    l.last_name   || l.lastName   || '',
       email:        l.email || '',
-      company_name: l.company_name || l.companyName || '',
+      company_name: l.company_name || l.companyName || pg.company_name || '',
       job_title:    l.job_title || l.title || pg.job_title_cleaned || cv(l, 'job_title') || '',
-      industry:     l.industry  || cv(l, 'industry')  || '',
+      industry:     l.industry  || cv(l, 'industry')  || pg.industry || '',
       seniority:    l.seniority || pg.seniority || cv(l, 'seniority') || '',
       department:   l.department|| pg.department|| cv(l, 'department')|| '',
       company_size: empBucket(l) || (pg.num_employees ? empBucket({ num_employees: pg.num_employees }) : ''),
-      city:         l.city    || cv(l, 'city')    || '',
-      country:      l.country || cv(l, 'country') || '',
+      city:         l.city    || cv(l, 'city')    || pg.city || '',
+      country:      l.country || cv(l, 'country') || pg.country || '',
       campaign:     l.camp_name || l.campaign_name || l.campaignName || '',
       subject:      sub.subject || '',
       snippet:      (sub.snippet || '').slice(0, 200),
@@ -5427,34 +5427,33 @@ function normalizePerformanceLead(wsId, lead, label) {
   };
 }
 
+// Leads for the Performance page now come from OUR database, not PlusVibe labels.
+// Billing already keys on Unibox "Mark as lead" -> revenue_leads (all 144 billed
+// leads in the 30 days to 2026-11-06 were Unibox marks; PV labels added none), and
+// paging 8 PV labels x every workspace on a timer was ~40% of all PlusVibe 429s,
+// which starved reply ingest and the portal on the shared key.
+// Same core shape as the PV version; company/title/seniority are filled from
+// contacts by the consumers that show them (leads analysis), not per lead here.
 async function fetchPerformanceLabeledLeads(wsId) {
-  const leads = [];
-  const seenIds = new Set();
-  for (const label of LEAD_LABELS) {
-    for (let page = 1; page <= 20; page++) {
-      let batch = [];
-      try {
-        const raw_b = await pvApi('/lead/workspace-leads', { wsId: wsId, params: { label: label, page: page, limit: 100 } });
-        batch = (Array.isArray(raw_b) ? raw_b : (raw_b?.data || [])).map(function(l) { return Object.assign({}, l, { _id: String(l.id || l._id || ''), id: String(l.id || l._id || ''), company_name: l.company_name || l.company, job_title: l.job_title || l.title, label: l.label || (l.interested ? 'INTERESTED' : (l.status || '')) }); });
-      } catch { break; }
-      if (!batch.length) break;
-      batch.forEach(l => {
-        const id = l._id || l.id || l.email;
-        if (seenIds.has(id)) {
-          const existing = leads.find(x => (x._id || x.id || x.email) === id);
-          if (existing) {
-            existing._pv_lead_date = existing._pv_lead_date || performanceLeadDate(wsId, l);
-            if (isPvNonLeadLabel(label) || isPvNonLeadLabel(l.label)) existing._pv_nonlead = true;
-          }
-          return;
-        }
-        seenIds.add(id);
-        leads.push(normalizePerformanceLead(wsId, l, label));
-      });
-      if (batch.length < 100) break;
-    }
-  }
-  return leads;
+  const pgdb = app.locals.pgDb;
+  if (!pgdb) throw new Error('DB not available');
+  const { rows } = await pgdb.query(
+    `SELECT rl.lead_key, rl.lead_email, rl.first_name, rl.last_name, rl.campaign, rl.label,
+            rl.date, rl.pv_nonlead
+       FROM revenue_leads rl
+      WHERE rl.workspace_id = $1`,
+    [wsId]
+  );
+  return rows.map(r => ({
+    _id: String(r.lead_key), id: String(r.lead_key),
+    email: r.lead_email || '', lead_email: r.lead_email || '',
+    first_name: r.first_name || '', last_name: r.last_name || '',
+    campaign_id: r.campaign || null,
+    label: r.label || 'LEAD',
+    created_at: r.date || '',
+    _pv_lead_date: (r.date || '').toString().slice(0, 10),
+    _pv_nonlead: !!r.pv_nonlead || isPvNonLeadLabel(r.label),
+  }));
 }
 
 async function ensurePerformanceLabeledLeads(wsIds, labeledLeads = performanceCache.labeledLeads, force = false) {
