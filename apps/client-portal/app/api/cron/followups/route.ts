@@ -58,95 +58,101 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // 2) New candidates: human replies that are NOT billable and either
-  //    - were not marked as a lead within a day of arriving, or
-  //    - carry a follow-up label (e.g. FW) in PlusVibe (any age).
-  //    Positives and questions always; not_interested/other only if they hint at
-  //    later / someone else (filtered below) so a no doesn't cost a model call.
-  const fwLabels = [...FOLLOWUP_LABELS]
-  const { rows } = await pool.query(
-    `SELECT r.id, r.client_id, r.workspace_id, r.subject, r.body_preview, r.raw, r.received_at,
-            COALESCE(NULLIF(r.sender_email,''), r.lead_email) AS reply_from, r.lead_email,
-            COALESCE(r.admin_label, r.category) AS cat, c.company_name,
-            upper(COALESCE(r.raw->>'label','')) AS pv_label, r.raw->>'thread_id' AS thread_id
-       FROM unibox_replies r
-       LEFT JOIN portal_clients c ON c.id = r.client_id
-      WHERE r.received_at > NOW() - ($1 || ' days')::interval
-        AND (r.received_at < NOW() - INTERVAL '1 day' OR upper(COALESCE(r.raw->>'label','')) = ANY($3))
-        AND r.classify_state = 'done'
-        AND COALESCE(r.admin_label, r.category) IN ('interested','question','other','not_interested')
-        AND NOT ${BILLED_SQL('r')}
-        AND r.client_id IS NOT NULL
-        AND NOT EXISTS (SELECT 1 FROM followups f WHERE f.source_reply_id = r.id)
-      ORDER BY r.received_at DESC
-      LIMIT $2`,
-    [String(days), limit * 3, fwLabels]
-  )
+  // 2) Auto-scan is OFF by default: cards only come from Jamie clicking
+  //    "Mark as FW" in the Unibox. ?auto=1 runs the old automatic scan by hand.
+  const auto = url.searchParams.get('auto') === '1'
+  const c = { candidates: 0, scanned: 0, created: 0, skipped: 0, prefiltered: 0, handled: 0, errors: 0 }
+  if (auto) {
+    // 2) New candidates: human replies that are NOT billable and either
+    //    - were not marked as a lead within a day of arriving, or
+    //    - carry a follow-up label (e.g. FW) in PlusVibe (any age).
+    //    Positives and questions always; not_interested/other only if they hint at
+    //    later / someone else (filtered below) so a no doesn't cost a model call.
+    const fwLabels = [...FOLLOWUP_LABELS]
+    const { rows } = await pool.query(
+      `SELECT r.id, r.client_id, r.workspace_id, r.subject, r.body_preview, r.raw, r.received_at,
+              COALESCE(NULLIF(r.sender_email,''), r.lead_email) AS reply_from, r.lead_email,
+              COALESCE(r.admin_label, r.category) AS cat, c.company_name,
+              upper(COALESCE(r.raw->>'label','')) AS pv_label, r.raw->>'thread_id' AS thread_id
+         FROM unibox_replies r
+         LEFT JOIN portal_clients c ON c.id = r.client_id
+        WHERE r.received_at > NOW() - ($1 || ' days')::interval
+          AND (r.received_at < NOW() - INTERVAL '1 day' OR upper(COALESCE(r.raw->>'label','')) = ANY($3))
+          AND r.classify_state = 'done'
+          AND COALESCE(r.admin_label, r.category) IN ('interested','question','other','not_interested')
+          AND NOT ${BILLED_SQL('r')}
+          AND r.client_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM followups f WHERE f.source_reply_id = r.id)
+        ORDER BY r.received_at DESC
+        LIMIT $2`,
+      [String(days), limit * 3, fwLabels]
+    )
 
-  const stats = { pvThrottled, candidates: rows.length, scanned: 0, created: 0, skipped: 0, prefiltered: 0, handled: 0, errors: 0, recheck }
-  for (const r of rows) {
-    if (stats.scanned >= limit || Date.now() > deadline) break
-    const isFw = FOLLOWUP_LABELS.has(r.pv_label)
-    if (HANDLED_LABELS.has(r.pv_label)) {
-      await pool.query(
-        `INSERT INTO followups (source_reply_id, client_id, workspace_id, lead_email, action_type, status, status_note)
-         VALUES ($1,$2,$3,$4,'none','skipped',$5) ON CONFLICT (source_reply_id) DO NOTHING`,
-        [r.id, r.client_id, r.workspace_id, r.lead_email, `labelled ${r.pv_label} in PlusVibe`]
-      )
-      stats.handled++
-      continue
-    }
-    const text = bodyText(r.raw, r.body_preview)
-    const own = text.split(/\n(?:On .{5,80}wrote:|-{3,} ?Original Message|From: )/)[0]
-    if (!isFw && (r.cat === 'not_interested' || r.cat === 'other') && !LATER_OR_REFERRAL.test(own)) {
-      await pool.query(
-        `INSERT INTO followups (source_reply_id, client_id, workspace_id, lead_email, action_type, status, status_note)
-         VALUES ($1,$2,$3,$4,'none','skipped','prefilter') ON CONFLICT (source_reply_id) DO NOTHING`,
-        [r.id, r.client_id, r.workspace_id, r.lead_email]
-      )
-      stats.prefiltered++
-      continue
-    }
-    stats.scanned++
-    try {
-      const d = await draftFollowup({
-        client: r.company_name ?? 'the client', subject: r.subject ?? '', body: text,
-        leadEmail: r.reply_from, receivedAt: new Date(r.received_at),
-      })
-      let status = d.action_type === 'none' ? 'skipped'
-        : d.action_type === 'referral' && !d.target_email ? 'needs_email' : 'new'
-      let note: string | null = null
-      // Only replies that would become a card get the (rate-limited) live check:
-      // if we already answered in PlusVibe after this reply, or it's labelled as
-      // handled, it's being worked, so no card. Unknown (throttled) = keep the card;
-      // the next run's re-check will drop it if needed.
-      if (status !== 'skipped' && !isFw && !pvThrottled) {
-        await new Promise(res => setTimeout(res, 1500))
-        const t = await getThreadState(r.workspace_id, r.reply_from, r.thread_id)
-        if (t?.rateLimited) pvThrottled = true
-        else if (t && ((t.label && HANDLED_LABELS.has(t.label.toUpperCase())) ||
-            (t.latestType === 'sent' && t.latestAt && new Date(t.latestAt) > new Date(r.received_at)))) {
-          status = 'skipped'; note = t.latestType === 'sent' ? 'we already replied in PlusVibe' : `labelled ${t.label} in PlusVibe`
-          stats.handled++
-        }
+    c.candidates = rows.length
+    for (const r of rows) {
+      if (c.scanned >= limit || Date.now() > deadline) break
+      const isFw = FOLLOWUP_LABELS.has(r.pv_label)
+      if (HANDLED_LABELS.has(r.pv_label)) {
+        await pool.query(
+          `INSERT INTO followups (source_reply_id, client_id, workspace_id, lead_email, action_type, status, status_note)
+           VALUES ($1,$2,$3,$4,'none','skipped',$5) ON CONFLICT (source_reply_id) DO NOTHING`,
+          [r.id, r.client_id, r.workspace_id, r.lead_email, `labelled ${r.pv_label} in PlusVibe`]
+        )
+        c.handled++
+        continue
       }
-      const due = d.action_type === 'recontact_on' && d.due_date ? d.due_date : new Date().toISOString().slice(0, 10)
-      await pool.query(
-        `INSERT INTO followups (source_reply_id, client_id, workspace_id, lead_email, action_type, reason, due_at,
-                                target_name, target_email, draft_subject, draft_body, confidence, status, ai_model, status_note)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-         ON CONFLICT (source_reply_id) DO NOTHING`,
-        [r.id, r.client_id, r.workspace_id, r.reply_from, d.action_type, d.reason, due,
-         d.target_name || null, d.target_email || null, d.draft_subject || null, d.draft_body || null,
-         d.confidence, status, FOLLOWUP_MODEL, note]
-      )
-      if (status === 'skipped') { if (!note) stats.skipped++ } else stats.created++
-    } catch (err) {
-      stats.errors++
-      console.error('[followups] draft failed', r.id, String(err).slice(0, 200))
+      const text = bodyText(r.raw, r.body_preview)
+      const own = text.split(/\n(?:On .{5,80}wrote:|-{3,} ?Original Message|From: )/)[0]
+      if (!isFw && (r.cat === 'not_interested' || r.cat === 'other') && !LATER_OR_REFERRAL.test(own)) {
+        await pool.query(
+          `INSERT INTO followups (source_reply_id, client_id, workspace_id, lead_email, action_type, status, status_note)
+           VALUES ($1,$2,$3,$4,'none','skipped','prefilter') ON CONFLICT (source_reply_id) DO NOTHING`,
+          [r.id, r.client_id, r.workspace_id, r.lead_email]
+        )
+        c.prefiltered++
+        continue
+      }
+      c.scanned++
+      try {
+        const d = await draftFollowup({
+          client: r.company_name ?? 'the client', subject: r.subject ?? '', body: text,
+          leadEmail: r.reply_from, receivedAt: new Date(r.received_at),
+        })
+        let status = d.action_type === 'none' ? 'skipped'
+          : d.action_type === 'referral' && !d.target_email ? 'needs_email' : 'new'
+        let note: string | null = null
+        // Only replies that would become a card get the (rate-limited) live check:
+        // if we already answered in PlusVibe after this reply, or it's labelled as
+        // handled, it's being worked, so no card. Unknown (throttled) = keep the card;
+        // the next run's re-check will drop it if needed.
+        if (status !== 'skipped' && !isFw && !pvThrottled) {
+          await new Promise(res => setTimeout(res, 1500))
+          const t = await getThreadState(r.workspace_id, r.reply_from, r.thread_id)
+          if (t?.rateLimited) pvThrottled = true
+          else if (t && ((t.label && HANDLED_LABELS.has(t.label.toUpperCase())) ||
+              (t.latestType === 'sent' && t.latestAt && new Date(t.latestAt) > new Date(r.received_at)))) {
+            status = 'skipped'; note = t.latestType === 'sent' ? 'we already replied in PlusVibe' : `labelled ${t.label} in PlusVibe`
+            c.handled++
+          }
+        }
+        const due = d.action_type === 'recontact_on' && d.due_date ? d.due_date : new Date().toISOString().slice(0, 10)
+        await pool.query(
+          `INSERT INTO followups (source_reply_id, client_id, workspace_id, lead_email, action_type, reason, due_at,
+                                  target_name, target_email, draft_subject, draft_body, confidence, status, ai_model, status_note)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+           ON CONFLICT (source_reply_id) DO NOTHING`,
+          [r.id, r.client_id, r.workspace_id, r.reply_from, d.action_type, d.reason, due,
+           d.target_name || null, d.target_email || null, d.draft_subject || null, d.draft_body || null,
+           d.confidence, status, FOLLOWUP_MODEL, note]
+        )
+        if (status === 'skipped') { if (!note) c.skipped++ } else c.created++
+      } catch (err) {
+        c.errors++
+        console.error('[followups] draft failed', r.id, String(err).slice(0, 200))
+      }
     }
   }
-  stats.pvThrottled = pvThrottled
+  const stats = { pvThrottled, auto, recheck, ...c }
   console.log('[followups] scan', JSON.stringify(stats))
   return NextResponse.json({ ok: true, days, ...stats })
 }
