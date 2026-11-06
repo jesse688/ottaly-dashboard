@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
+import { sendFollowup } from '@/lib/followup-send'
 import { draftFollowup, FOLLOWUP_MODEL, LATER_OR_REFERRAL, replyBodyText as bodyText, getThreadState, HANDLED_LABELS, FOLLOWUP_LABELS, BILLED_SQL } from '@/lib/followups'
 
 // Follow-ups scanner. Finds human replies that were NOT marked as a lead and
@@ -55,6 +56,22 @@ export async function GET(req: NextRequest) {
       if (note.startsWith('labelled')) recheck.handled++; else recheck.replied++
     } else {
       await pool.query(`UPDATE followups SET updated_at = NOW() WHERE id = $1`, [o.id])
+    }
+  }
+
+  // 1b) Send approved follow-ups whose date has arrived (from 08:00 UTC, so they
+  //     land in the morning). sendFollowup re-checks billing / opt-outs /
+  //     already-replied at send time and claims the row so runs can't overlap.
+  const sched = { due: 0, sent: 0, failed: 0 }
+  if (new Date().getUTCHours() >= 8) {
+    const dueRows = await pool.query(
+      `SELECT id FROM followups WHERE status = 'scheduled' AND scheduled_for <= CURRENT_DATE ORDER BY scheduled_for LIMIT 20`)
+    sched.due = dueRows.rowCount ?? 0
+    for (const d of dueRows.rows) {
+      if (Date.now() > deadline - 10000) break
+      const res = await sendFollowup(d.id, 'schedule', 'scheduled')
+      if (res.ok) sched.sent++; else { sched.failed++; console.error('[followups] scheduled send failed', d.id, res.reason) }
+      await new Promise(r => setTimeout(r, 1500))
     }
   }
 
@@ -152,7 +169,7 @@ export async function GET(req: NextRequest) {
       }
     }
   }
-  const stats = { pvThrottled, auto, recheck, ...c }
+  const stats = { pvThrottled, auto, recheck, sched, ...c }
   console.log('[followups] scan', JSON.stringify(stats))
   return NextResponse.json({ ok: true, days, ...stats })
 }

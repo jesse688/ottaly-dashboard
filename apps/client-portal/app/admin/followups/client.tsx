@@ -23,6 +23,8 @@ type Followup = {
   reply_received_at: string | null
   from_mailbox: string | null
   sent_at: string | null
+  scheduled_for: string | null
+  suggested_on: string | null
 }
 
 const ACTION_LABEL: Record<Followup['action_type'], string> = {
@@ -90,6 +92,47 @@ export function AdminFollowupsClient() {
     else setMsg(m => ({ ...m, [f.id]: d.reason ?? d.error ?? 'Send failed' }))
   }
 
+  const [customDate, setCustomDate] = useState<Record<string, string>>({})
+  const plusDays = (n: number) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10)
+  const plusMonths = (n: number) => { const d = new Date(); d.setMonth(d.getMonth() + n); return d.toISOString().slice(0, 10) }
+
+  // Approve now, send on a date (the cron sends it that morning).
+  async function schedule(f: Followup, date: string) {
+    if (!date) return
+    setBusy(f.id)
+    if (!await save(f)) { setBusy(null); return }
+    const r = await fetch(`/api/admin/followups/${f.id}/send`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ approved_by: 'admin', send_on: date }),
+    })
+    const d = await r.json()
+    setBusy(null)
+    if (r.ok) {
+      setMsg(m => ({ ...m, [f.id]: d.scheduled_for ? `Approved, will send on ${fmt(d.scheduled_for)}` : `Sent to ${d.to}` }))
+      setTimeout(load, 900)
+    } else setMsg(m => ({ ...m, [f.id]: d.error ?? d.reason ?? 'Failed' }))
+  }
+
+  async function cancelSchedule(f: Followup) {
+    setBusy(f.id)
+    await fetch(`/api/admin/followups/${f.id}/send`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cancel_schedule: true }),
+    })
+    setBusy(null)
+    load()
+  }
+
+  async function redraft(f: Followup) {
+    setBusy(f.id); setMsg(m => ({ ...m, [f.id]: 'Drafting…' }))
+    const r = await fetch(`/api/admin/followups/${f.id}/redraft`, { method: 'POST' })
+    const d = await r.json()
+    setBusy(null)
+    if (!r.ok) { setMsg(m => ({ ...m, [f.id]: d.error ?? 'Draft failed' })); return }
+    setEdits(x => { const y = { ...x }; delete y[f.id]; return y })
+    setRows(rs => rs?.map(x => x.id === f.id ? { ...x, ...d } : x) ?? rs)
+    setMsg(m => ({ ...m, [f.id]: 'New draft ready' }))
+  }
+
   async function setStatus(f: Followup, status: 'dismissed' | 'done') {
     setBusy(f.id)
     await fetch('/api/admin/followups', {
@@ -113,16 +156,6 @@ export function AdminFollowupsClient() {
     await fetch('/api/admin/followups', {
       method: 'PATCH', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ id: f.id, status: 'lead', status_note: d.already ? 'already a lead' : 'marked as lead from follow-ups' }),
-    })
-    setBusy(null)
-    setRows(rs => rs?.filter(x => x.id !== f.id) ?? rs)
-  }
-
-  async function pushBack(f: Followup, days: number) {
-    const d = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10)
-    setBusy(f.id)
-    await fetch('/api/admin/followups', {
-      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: f.id, due_at: d }),
     })
     setBusy(null)
     setRows(rs => rs?.filter(x => x.id !== f.id) ?? rs)
@@ -205,21 +238,49 @@ export function AdminFollowupsClient() {
               </div>
 
               {open && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <button onClick={() => send(f)} disabled={busy === f.id || f.status === 'needs_email' && !field(f, 'target_email')}
-                    className="px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-40">
-                    {busy === f.id ? 'Sending…' : 'Approve & send'}
-                  </button>
-                  <button onClick={() => save(f).then(ok => ok && setMsg(m => ({ ...m, [f.id]: 'Saved' })))} disabled={!edits[f.id]}
-                    className="px-3 py-1.5 border border-gray-200 text-gray-700 text-sm rounded-lg hover:bg-gray-50 disabled:opacity-40">Save edits</button>
-                  {f.action_type === 'call' && (
-                    <button onClick={() => setStatus(f, 'done')} className="px-3 py-1.5 border border-gray-200 text-gray-700 text-sm rounded-lg hover:bg-gray-50">Called — mark done</button>
-                  )}
-                  <button onClick={() => pushBack(f, 14)} className="px-3 py-1.5 border border-gray-200 text-gray-700 text-sm rounded-lg hover:bg-gray-50">Push back 2 weeks</button>
-                  <button onClick={() => setStatus(f, 'dismissed')} className="px-3 py-1.5 text-gray-500 text-sm rounded-lg hover:bg-gray-50 ml-auto">Dismiss</button>
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button onClick={() => send(f)} disabled={busy === f.id || !field(f, 'draft_body') || (f.status === 'needs_email' && !field(f, 'target_email'))}
+                      className="px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-40">
+                      {busy === f.id ? 'Working…' : 'Approve & send now'}
+                    </button>
+                    <button onClick={() => redraft(f)} disabled={busy === f.id}
+                      className="px-3 py-1.5 border border-indigo-200 text-indigo-700 text-sm rounded-lg hover:bg-indigo-50 disabled:opacity-40">
+                      {field(f, 'draft_body') ? 'Redraft with AI' : 'Draft with AI'}
+                    </button>
+                    <button onClick={() => save(f).then(ok => ok && setMsg(m => ({ ...m, [f.id]: 'Saved' })))} disabled={!edits[f.id]}
+                      className="px-3 py-1.5 border border-gray-200 text-gray-700 text-sm rounded-lg hover:bg-gray-50 disabled:opacity-40">Save edits</button>
+                    {f.action_type === 'call' && (
+                      <button onClick={() => setStatus(f, 'done')} className="px-3 py-1.5 border border-gray-200 text-gray-700 text-sm rounded-lg hover:bg-gray-50">Called — mark done</button>
+                    )}
+                    <button onClick={() => setStatus(f, 'dismissed')} className="px-3 py-1.5 text-gray-500 text-sm rounded-lg hover:bg-gray-50 ml-auto">Dismiss</button>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 text-sm">
+                    <span className="text-gray-500">Approve &amp; send on:</span>
+                    {([['1 week', plusDays(7)], ['2 weeks', plusDays(14)], ['1 month', plusMonths(1)]] as [string, string][]).map(([label, date]) => (
+                      <button key={label} onClick={() => schedule(f, date)} disabled={busy === f.id || !field(f, 'draft_body')}
+                        title={fmt(date)} className="px-2.5 py-1 border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-40">{label}</button>
+                    ))}
+                    {f.suggested_on && (
+                      <button onClick={() => schedule(f, f.suggested_on!.slice(0, 10))} disabled={busy === f.id || !field(f, 'draft_body')}
+                        className="px-2.5 py-1 border border-blue-200 text-blue-700 rounded-lg hover:bg-blue-50 disabled:opacity-40">Their date ({fmt(f.suggested_on)})</button>
+                    )}
+                    <input type="date" value={customDate[f.id] ?? ''} min={plusDays(1)}
+                      onChange={e => setCustomDate(c => ({ ...c, [f.id]: e.target.value }))}
+                      className="border border-gray-200 rounded-lg px-2 py-1 text-gray-700" />
+                    <button onClick={() => schedule(f, customDate[f.id] ?? '')} disabled={busy === f.id || !customDate[f.id] || !field(f, 'draft_body')}
+                      className="px-2.5 py-1 border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-40">Schedule</button>
+                  </div>
                 </div>
               )}
-              {(open || f.status === 'sent') && (
+              {f.status === 'scheduled' && (
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="text-gray-700">Approved. Sends on <b>{fmt(f.scheduled_for)}</b> (morning).</span>
+                  <button onClick={() => cancelSchedule(f)} disabled={busy === f.id}
+                    className="ml-auto px-3 py-1.5 border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50">Cancel &amp; edit</button>
+                </div>
+              )}
+              {(open || f.status === 'sent' || f.status === 'scheduled') && (
                 <div className="flex justify-end">
                   <button onClick={() => markLead(f)} disabled={busy === f.id}
                     className="px-3 py-1.5 border border-green-200 text-green-700 text-sm font-medium rounded-lg hover:bg-green-50 disabled:opacity-40">

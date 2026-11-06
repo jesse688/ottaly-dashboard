@@ -569,6 +569,10 @@ async function runMigration() {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`,
       `CREATE INDEX IF NOT EXISTS idx_followups_status_due ON followups (status, due_at)`,
+      // Approved follow-ups can be sent on a date; the followups cron sends them.
+      `ALTER TABLE followups ADD COLUMN IF NOT EXISTS scheduled_for DATE`,
+      // The send date the AI read from the reply ("email me in January"), offered as a schedule option.
+      `ALTER TABLE followups ADD COLUMN IF NOT EXISTS suggested_on DATE`,
 
       // ── One-time migrations marker table ───────────────────────────
       `CREATE TABLE IF NOT EXISTS portal_meta (key TEXT PRIMARY KEY, created_at TIMESTAMPTZ DEFAULT NOW())`,
