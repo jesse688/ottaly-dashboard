@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { getAdminSession } from '@/lib/auth'
 import pool, { ready } from '@/lib/db'
+import { BILLED_SQL } from '@/lib/followups'
 
 // GET /api/admin/followups?view=due|upcoming|done&client=<uuid>
 //   due      = new / needs_email with due_at <= today (default)
@@ -13,9 +14,9 @@ export async function GET(req: NextRequest) {
   const view = url.searchParams.get('view') || 'due'
   const client = url.searchParams.get('client')
   const where =
-    view === 'upcoming' ? `f.status IN ('new','needs_email') AND f.due_at > CURRENT_DATE`
-    : view === 'done' ? `f.status IN ('sent','done','dismissed','failed')`
-    : `f.status IN ('new','needs_email') AND (f.due_at IS NULL OR f.due_at <= CURRENT_DATE)`
+    view === 'upcoming' ? `f.status IN ('new','needs_email') AND f.due_at > CURRENT_DATE AND NOT ${BILLED_SQL('r')}`
+    : view === 'done' ? `f.status IN ('sent','done','dismissed','failed','lead')`
+    : `f.status IN ('new','needs_email') AND (f.due_at IS NULL OR f.due_at <= CURRENT_DATE) AND NOT ${BILLED_SQL('r')}`
   const params: unknown[] = []
   let clientSql = ''
   if (client) { params.push(client); clientSql = ` AND f.client_id = $${params.length}` }
@@ -33,9 +34,10 @@ export async function GET(req: NextRequest) {
   )
   const counts = await pool.query(
     `SELECT
-       COUNT(*) FILTER (WHERE status IN ('new','needs_email') AND (due_at IS NULL OR due_at <= CURRENT_DATE)) AS due,
-       COUNT(*) FILTER (WHERE status IN ('new','needs_email') AND due_at > CURRENT_DATE) AS upcoming
-     FROM followups`
+       COUNT(*) FILTER (WHERE f.status IN ('new','needs_email') AND (f.due_at IS NULL OR f.due_at <= CURRENT_DATE)) AS due,
+       COUNT(*) FILTER (WHERE f.status IN ('new','needs_email') AND f.due_at > CURRENT_DATE) AS upcoming
+     FROM followups f JOIN unibox_replies r ON r.id = f.source_reply_id
+     WHERE NOT ${BILLED_SQL('r')}`
   )
   return NextResponse.json({ rows, counts: counts.rows[0] })
 }
@@ -65,7 +67,7 @@ export async function PATCH(req: NextRequest) {
     set('due_at', b.due_at || null)
   }
   if (b.status !== undefined) {
-    if (!['dismissed', 'done'].includes(b.status)) return NextResponse.json({ error: 'bad status' }, { status: 400 })
+    if (!['dismissed', 'done', 'lead'].includes(b.status)) return NextResponse.json({ error: 'bad status' }, { status: 400 })
     set('status', b.status)
     if (b.status_note) set('status_note', b.status_note)
   }

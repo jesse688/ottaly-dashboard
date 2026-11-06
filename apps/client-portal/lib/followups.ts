@@ -155,3 +155,44 @@ export function replyBodyText(raw: Record<string, unknown> | null, preview: stri
   }
   return preview ?? ''
 }
+
+// Live PlusVibe conversation state for one lead. /unibox/threads honours the
+// `lead` filter (unlike /unibox/emails), and latest_message.type tells us who
+// spoke last: 'sent' = we already replied, so the conversation is being worked.
+export interface ThreadState { latestType: 'sent' | 'received' | null; latestAt: string | null; label: string | null }
+export async function getThreadState(workspaceId: string, leadEmail: string, threadId?: string | null): Promise<ThreadState | null> {
+  const key = process.env.PLUSVIBE_API_KEY ?? process.env.PLUSVIBE_KEY
+  if (!key || !workspaceId || !leadEmail) return null
+  try {
+    const res = await fetch(
+      `https://api.plusvibe.ai/api/v1/unibox/threads?workspace_id=${encodeURIComponent(workspaceId)}&lead=${encodeURIComponent(leadEmail)}&limit=20`,
+      { headers: { 'x-api-key': key }, signal: AbortSignal.timeout(10000) }
+    )
+    if (!res.ok) return null
+    const d = await res.json() as { data?: Array<{ thread_id?: string; lead?: string; label?: string; latest_message?: { type?: string; timestamp?: string } }> }
+    const rows = (d.data ?? []).filter(t => (t.lead ?? '').toLowerCase() === leadEmail.toLowerCase() || (threadId && t.thread_id === threadId))
+    const t = (threadId && rows.find(x => x.thread_id === threadId)) || rows[0]
+    if (!t) return { latestType: null, latestAt: null, label: null }
+    const type = t.latest_message?.type
+    return { latestType: type === 'sent' || type === 'received' ? type : null, latestAt: t.latest_message?.timestamp ?? null, label: t.label ?? null }
+  } catch {
+    return null
+  }
+}
+
+// PlusVibe labels that mean "already a lead / handled" vs "put this in follow-ups now".
+export const HANDLED_LABELS = new Set(['LEAD', 'MEETING_BOOKED', 'MEETING_COMPLETED', 'CLOSED', 'WON'])
+export const FOLLOWUP_LABELS = new Set(['FW', 'FOLLOW_UP', 'FOLLOWUP', 'FOLLOW_UPS'])
+
+// SQL predicate: this reply's lead is already billable (marked as a lead on this
+// or any other reply for the same client, or already in revenue_leads).
+// `a` is the unibox_replies alias.
+export const BILLED_SQL = (a: string) => `(
+  ${a}.marked_as_lead IS TRUE
+  OR EXISTS (SELECT 1 FROM unibox_replies x
+              WHERE x.client_id = ${a}.client_id AND x.marked_as_lead IS TRUE
+                AND lower(COALESCE(NULLIF(x.matched_lead_email,''), x.lead_email)) = lower(COALESCE(NULLIF(${a}.matched_lead_email,''), ${a}.lead_email)))
+  OR EXISTS (SELECT 1 FROM revenue_leads rl
+              WHERE lower(rl.lead_email) IN (lower(${a}.lead_email), lower(COALESCE(NULLIF(${a}.sender_email,''), ${a}.lead_email)))
+                AND rl.workspace_id = ${a}.workspace_id)
+)`
