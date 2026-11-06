@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
-import { draftFollowup, FOLLOWUP_MODEL, LATER_OR_REFERRAL, replyBodyText as bodyText } from '@/lib/followups'
+import { draftFollowup, FOLLOWUP_MODEL, LATER_OR_REFERRAL, replyBodyText as bodyText, getThreadState, HANDLED_LABELS, FOLLOWUP_LABELS, BILLED_SQL } from '@/lib/followups'
 
 // Follow-ups scanner. Finds human replies that were NOT marked as a lead and
 // asks the model whether they carry a later / someone-else action, then stores
@@ -23,32 +23,88 @@ export async function GET(req: NextRequest) {
   const budgetMs = Math.min(Math.max(parseInt(url.searchParams.get('budget') || '90000', 10) || 90000, 5000), 280000)
   const deadline = Date.now() + budgetMs
 
-  // Candidates: human replies, not billed, not already scanned. Positives and
-  // questions always; not_interested/other only if they hint at later/someone else
-  // (filtered below) so a no doesn't cost a model call.
+  // 1) Re-check open follow-ups: anything that has since become billable, been
+  //    labelled as handled in PlusVibe, or been replied to by us drops out.
+  const recheck = { billed: 0, handled: 0, replied: 0 }
+  const billedNow = await pool.query(
+    `UPDATE followups f SET status = 'skipped', status_note = 'billable / marked as lead', updated_at = NOW()
+       FROM unibox_replies r
+      WHERE r.id = f.source_reply_id AND f.status IN ('new','needs_email') AND ${BILLED_SQL('r')}`
+  )
+  recheck.billed = billedNow.rowCount ?? 0
+  const open = await pool.query(
+    `SELECT f.id, f.lead_email, r.workspace_id, r.raw->>'thread_id' AS thread_id, r.received_at
+       FROM followups f JOIN unibox_replies r ON r.id = f.source_reply_id
+      WHERE f.status IN ('new','needs_email')
+      ORDER BY f.updated_at ASC LIMIT 40`
+  )
+  for (const o of open.rows) {
+    if (Date.now() > deadline - budgetMs / 2) break
+    const t = await getThreadState(o.workspace_id, o.lead_email, o.thread_id)
+    if (!t) continue
+    const note = t.label && HANDLED_LABELS.has(t.label.toUpperCase()) ? `labelled ${t.label} in PlusVibe`
+      : t.latestType === 'sent' && t.latestAt && new Date(t.latestAt) > new Date(o.received_at) ? 'we already replied in PlusVibe' : null
+    if (note) {
+      await pool.query(`UPDATE followups SET status = 'skipped', status_note = $2, updated_at = NOW() WHERE id = $1`, [o.id, note])
+      if (note.startsWith('labelled')) recheck.handled++; else recheck.replied++
+    } else {
+      await pool.query(`UPDATE followups SET updated_at = NOW() WHERE id = $1`, [o.id])
+    }
+  }
+
+  // 2) New candidates: human replies that are NOT billable and either
+  //    - were not marked as a lead within a day of arriving, or
+  //    - carry a follow-up label (e.g. FW) in PlusVibe (any age).
+  //    Positives and questions always; not_interested/other only if they hint at
+  //    later / someone else (filtered below) so a no doesn't cost a model call.
+  const fwLabels = [...FOLLOWUP_LABELS]
   const { rows } = await pool.query(
     `SELECT r.id, r.client_id, r.workspace_id, r.subject, r.body_preview, r.raw, r.received_at,
             COALESCE(NULLIF(r.sender_email,''), r.lead_email) AS reply_from, r.lead_email,
-            COALESCE(r.admin_label, r.category) AS cat, c.company_name
+            COALESCE(r.admin_label, r.category) AS cat, c.company_name,
+            upper(COALESCE(r.raw->>'label','')) AS pv_label, r.raw->>'thread_id' AS thread_id
        FROM unibox_replies r
        LEFT JOIN portal_clients c ON c.id = r.client_id
       WHERE r.received_at > NOW() - ($1 || ' days')::interval
+        AND (r.received_at < NOW() - INTERVAL '1 day' OR upper(COALESCE(r.raw->>'label','')) = ANY($3))
         AND r.classify_state = 'done'
         AND COALESCE(r.admin_label, r.category) IN ('interested','question','other','not_interested')
-        AND r.marked_as_lead IS NOT TRUE
+        AND NOT ${BILLED_SQL('r')}
         AND r.client_id IS NOT NULL
         AND NOT EXISTS (SELECT 1 FROM followups f WHERE f.source_reply_id = r.id)
       ORDER BY r.received_at DESC
       LIMIT $2`,
-    [String(days), limit * 3]
+    [String(days), limit * 3, fwLabels]
   )
 
-  const stats = { candidates: rows.length, scanned: 0, created: 0, skipped: 0, prefiltered: 0, errors: 0 }
+  const stats = { candidates: rows.length, scanned: 0, created: 0, skipped: 0, prefiltered: 0, handled: 0, errors: 0, recheck }
   for (const r of rows) {
     if (stats.scanned >= limit || Date.now() > deadline) break
+    const isFw = FOLLOWUP_LABELS.has(r.pv_label)
+    if (HANDLED_LABELS.has(r.pv_label)) {
+      await pool.query(
+        `INSERT INTO followups (source_reply_id, client_id, workspace_id, lead_email, action_type, status, status_note)
+         VALUES ($1,$2,$3,$4,'none','skipped',$5) ON CONFLICT (source_reply_id) DO NOTHING`,
+        [r.id, r.client_id, r.workspace_id, r.lead_email, `labelled ${r.pv_label} in PlusVibe`]
+      )
+      stats.handled++
+      continue
+    }
+    // Live check: if we already answered in PlusVibe after this reply, it's being worked.
+    const t = await getThreadState(r.workspace_id, r.reply_from, r.thread_id)
+    if (t && !isFw && ((t.label && HANDLED_LABELS.has(t.label.toUpperCase())) ||
+        (t.latestType === 'sent' && t.latestAt && new Date(t.latestAt) > new Date(r.received_at)))) {
+      await pool.query(
+        `INSERT INTO followups (source_reply_id, client_id, workspace_id, lead_email, action_type, status, status_note)
+         VALUES ($1,$2,$3,$4,'none','skipped',$5) ON CONFLICT (source_reply_id) DO NOTHING`,
+        [r.id, r.client_id, r.workspace_id, r.lead_email, t.latestType === 'sent' ? 'we already replied in PlusVibe' : `labelled ${t.label} in PlusVibe`]
+      )
+      stats.handled++
+      continue
+    }
     const text = bodyText(r.raw, r.body_preview)
     const own = text.split(/\n(?:On .{5,80}wrote:|-{3,} ?Original Message|From: )/)[0]
-    if ((r.cat === 'not_interested' || r.cat === 'other') && !LATER_OR_REFERRAL.test(own)) {
+    if (!isFw && (r.cat === 'not_interested' || r.cat === 'other') && !LATER_OR_REFERRAL.test(own)) {
       await pool.query(
         `INSERT INTO followups (source_reply_id, client_id, workspace_id, lead_email, action_type, status, status_note)
          VALUES ($1,$2,$3,$4,'none','skipped','prefilter') ON CONFLICT (source_reply_id) DO NOTHING`,

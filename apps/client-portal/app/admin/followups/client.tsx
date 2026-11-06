@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from 'react'
 
 type Followup = {
   id: string
+  source_reply_id: string
+  client_id: string | null
   client_name: string | null
   lead_email: string
   action_type: 'recontact_on' | 'referral' | 'send_info' | 'call' | 'none'
@@ -97,6 +99,25 @@ export function AdminFollowupsClient() {
     setRows(rs => rs?.filter(x => x.id !== f.id) ?? rs)
   }
 
+  // A follow-up turned into a real lead: bill it via the normal Unibox
+  // mark-as-lead (same path Jamie uses there), then close the card.
+  async function markLead(f: Followup) {
+    if (!confirm(`Mark ${f.lead_email} as a lead for ${f.client_name ?? 'this client'}? This bills the client.`)) return
+    setBusy(f.id)
+    const r = await fetch(`/api/admin/unibox/${f.source_reply_id}/mark-as-lead`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(f.client_id ? { clientId: f.client_id } : {}),
+    })
+    const d = await r.json().catch(() => ({})) as { ok?: boolean; already?: boolean; error?: string }
+    if (!r.ok || !d.ok) { setBusy(null); setMsg(m => ({ ...m, [f.id]: d.error ?? 'Mark as lead failed' })); return }
+    await fetch('/api/admin/followups', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: f.id, status: 'lead', status_note: d.already ? 'already a lead' : 'marked as lead from follow-ups' }),
+    })
+    setBusy(null)
+    setRows(rs => rs?.filter(x => x.id !== f.id) ?? rs)
+  }
+
   async function pushBack(f: Followup, days: number) {
     const d = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10)
     setBusy(f.id)
@@ -133,7 +154,7 @@ export function AdminFollowupsClient() {
 
       <div className="max-w-4xl mx-auto p-3 sm:p-6 space-y-4">
         <p className="text-sm text-gray-500">
-          Replies that weren&apos;t billed but asked us to do something: get back in touch later, speak to someone else, send info, or call.
+          Replies not marked as a lead after a day (or labelled FW in PlusVibe) that asked us to do something: get back in touch later, speak to someone else, send info, or call. Billable leads and threads we&apos;ve already answered are left out.
           Check the draft, edit if needed, then send. It goes from the client&apos;s own mailbox.
         </p>
         {rows === null && <p className="text-sm text-gray-400">Loading…</p>}
@@ -196,6 +217,14 @@ export function AdminFollowupsClient() {
                   )}
                   <button onClick={() => pushBack(f, 14)} className="px-3 py-1.5 border border-gray-200 text-gray-700 text-sm rounded-lg hover:bg-gray-50">Push back 2 weeks</button>
                   <button onClick={() => setStatus(f, 'dismissed')} className="px-3 py-1.5 text-gray-500 text-sm rounded-lg hover:bg-gray-50 ml-auto">Dismiss</button>
+                </div>
+              )}
+              {(open || f.status === 'sent') && (
+                <div className="flex justify-end">
+                  <button onClick={() => markLead(f)} disabled={busy === f.id}
+                    className="px-3 py-1.5 border border-green-200 text-green-700 text-sm font-medium rounded-lg hover:bg-green-50 disabled:opacity-40">
+                    They&apos;re interested now — mark as lead
+                  </button>
                 </div>
               )}
               {msg[f.id] && <p className="text-xs text-gray-600">{msg[f.id]}</p>}

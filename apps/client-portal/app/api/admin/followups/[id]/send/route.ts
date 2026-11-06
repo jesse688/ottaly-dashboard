@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { getAdminSession } from '@/lib/auth'
 import pool, { ready } from '@/lib/db'
 import { sendPlusVibeReply } from '@/lib/plusvibe'
-import { isSuppressed, replyBodyText, textToHtml } from '@/lib/followups'
+import { isSuppressed, replyBodyText, textToHtml, getThreadState, BILLED_SQL } from '@/lib/followups'
 
 // POST /api/admin/followups/:id/send  { approved_by?: string }
 // Sends the (possibly edited) draft from the client's own mailbox via PlusVibe.
@@ -40,6 +40,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   )
   const r = src.rows[0]
   if (!r) return fail('source reply missing')
+  const billed = await pool.query(`SELECT ${BILLED_SQL('u')} AS b FROM unibox_replies u WHERE u.id = $1`, [f.source_reply_id])
+  if (billed.rows[0]?.b) return fail('blocked: already a billable lead')
+  if (f.action_type !== 'referral') {
+    const t = await getThreadState(r.workspace_id, r.reply_from, r.raw?.thread_id ?? null)
+    if (t?.latestType === 'sent' && t.latestAt && new Date(t.latestAt) > new Date(r.received_at)) {
+      return fail('blocked: we already replied to this thread in PlusVibe')
+    }
+  }
   if (!r.mailbox) return fail('no client mailbox to send from')
 
   const isReferral = f.action_type === 'referral'
