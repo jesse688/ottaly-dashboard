@@ -36,11 +36,16 @@ export async function GET(req: NextRequest) {
     `SELECT f.id, f.lead_email, r.workspace_id, r.raw->>'thread_id' AS thread_id, r.received_at
        FROM followups f JOIN unibox_replies r ON r.id = f.source_reply_id
       WHERE f.status IN ('new','needs_email')
-      ORDER BY f.updated_at ASC LIMIT 40`
+      ORDER BY f.updated_at ASC LIMIT 10`
   )
+  // PlusVibe rate-limits hard (Cloudflare 429) and pv-reconcile shares the same
+  // key, so keep live thread checks few, spaced, and stop the moment we're throttled.
+  let pvThrottled = false
   for (const o of open.rows) {
-    if (Date.now() > deadline - budgetMs / 2) break
+    if (pvThrottled || Date.now() > deadline - budgetMs / 2) break
+    await new Promise(res => setTimeout(res, 1500))
     const t = await getThreadState(o.workspace_id, o.lead_email, o.thread_id)
+    if (t?.rateLimited) { pvThrottled = true; break }
     if (!t) continue
     const note = t.label && HANDLED_LABELS.has(t.label.toUpperCase()) ? `labelled ${t.label} in PlusVibe`
       : t.latestType === 'sent' && t.latestAt && new Date(t.latestAt) > new Date(o.received_at) ? 'we already replied in PlusVibe' : null
@@ -77,7 +82,7 @@ export async function GET(req: NextRequest) {
     [String(days), limit * 3, fwLabels]
   )
 
-  const stats = { candidates: rows.length, scanned: 0, created: 0, skipped: 0, prefiltered: 0, handled: 0, errors: 0, recheck }
+  const stats = { pvThrottled, candidates: rows.length, scanned: 0, created: 0, skipped: 0, prefiltered: 0, handled: 0, errors: 0, recheck }
   for (const r of rows) {
     if (stats.scanned >= limit || Date.now() > deadline) break
     const isFw = FOLLOWUP_LABELS.has(r.pv_label)
@@ -86,18 +91,6 @@ export async function GET(req: NextRequest) {
         `INSERT INTO followups (source_reply_id, client_id, workspace_id, lead_email, action_type, status, status_note)
          VALUES ($1,$2,$3,$4,'none','skipped',$5) ON CONFLICT (source_reply_id) DO NOTHING`,
         [r.id, r.client_id, r.workspace_id, r.lead_email, `labelled ${r.pv_label} in PlusVibe`]
-      )
-      stats.handled++
-      continue
-    }
-    // Live check: if we already answered in PlusVibe after this reply, it's being worked.
-    const t = await getThreadState(r.workspace_id, r.reply_from, r.thread_id)
-    if (t && !isFw && ((t.label && HANDLED_LABELS.has(t.label.toUpperCase())) ||
-        (t.latestType === 'sent' && t.latestAt && new Date(t.latestAt) > new Date(r.received_at)))) {
-      await pool.query(
-        `INSERT INTO followups (source_reply_id, client_id, workspace_id, lead_email, action_type, status, status_note)
-         VALUES ($1,$2,$3,$4,'none','skipped',$5) ON CONFLICT (source_reply_id) DO NOTHING`,
-        [r.id, r.client_id, r.workspace_id, r.lead_email, t.latestType === 'sent' ? 'we already replied in PlusVibe' : `labelled ${t.label} in PlusVibe`]
       )
       stats.handled++
       continue
@@ -119,24 +112,40 @@ export async function GET(req: NextRequest) {
         client: r.company_name ?? 'the client', subject: r.subject ?? '', body: text,
         leadEmail: r.reply_from, receivedAt: new Date(r.received_at),
       })
-      const status = d.action_type === 'none' ? 'skipped'
+      let status = d.action_type === 'none' ? 'skipped'
         : d.action_type === 'referral' && !d.target_email ? 'needs_email' : 'new'
+      let note: string | null = null
+      // Only replies that would become a card get the (rate-limited) live check:
+      // if we already answered in PlusVibe after this reply, or it's labelled as
+      // handled, it's being worked, so no card. Unknown (throttled) = keep the card;
+      // the next run's re-check will drop it if needed.
+      if (status !== 'skipped' && !isFw && !pvThrottled) {
+        await new Promise(res => setTimeout(res, 1500))
+        const t = await getThreadState(r.workspace_id, r.reply_from, r.thread_id)
+        if (t?.rateLimited) pvThrottled = true
+        else if (t && ((t.label && HANDLED_LABELS.has(t.label.toUpperCase())) ||
+            (t.latestType === 'sent' && t.latestAt && new Date(t.latestAt) > new Date(r.received_at)))) {
+          status = 'skipped'; note = t.latestType === 'sent' ? 'we already replied in PlusVibe' : `labelled ${t.label} in PlusVibe`
+          stats.handled++
+        }
+      }
       const due = d.action_type === 'recontact_on' && d.due_date ? d.due_date : new Date().toISOString().slice(0, 10)
       await pool.query(
         `INSERT INTO followups (source_reply_id, client_id, workspace_id, lead_email, action_type, reason, due_at,
-                                target_name, target_email, draft_subject, draft_body, confidence, status, ai_model)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+                                target_name, target_email, draft_subject, draft_body, confidence, status, ai_model, status_note)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
          ON CONFLICT (source_reply_id) DO NOTHING`,
         [r.id, r.client_id, r.workspace_id, r.reply_from, d.action_type, d.reason, due,
          d.target_name || null, d.target_email || null, d.draft_subject || null, d.draft_body || null,
-         d.confidence, status, FOLLOWUP_MODEL]
+         d.confidence, status, FOLLOWUP_MODEL, note]
       )
-      if (status === 'skipped') stats.skipped++; else stats.created++
+      if (status === 'skipped') { if (!note) stats.skipped++ } else stats.created++
     } catch (err) {
       stats.errors++
       console.error('[followups] draft failed', r.id, String(err).slice(0, 200))
     }
   }
+  stats.pvThrottled = pvThrottled
   console.log('[followups] scan', JSON.stringify(stats))
   return NextResponse.json({ ok: true, days, ...stats })
 }
