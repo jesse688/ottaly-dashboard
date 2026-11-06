@@ -434,6 +434,27 @@ export function AdminUniboxClient() {
     }
   }
 
+  // Mark as FW (follow up): not a lead today but worth working. Goes straight
+  // into the Follow-ups queue with an AI draft; never billed.
+  async function markAsFw() {
+    if (!selected) return
+    setBusy(true); setMsg('')
+    try {
+      const r = await fetch(`/api/admin/unibox/${selected.id}/mark-as-fw`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(pickClientId ? { clientId: pickClientId } : {}),
+      })
+      const d = await r.json() as { ok?: boolean; error?: string; due?: string }
+      if (!r.ok || !d.ok) { setMsg(d.error ?? 'Failed to mark as FW'); return }
+      setMsg(`Added to Follow-ups${d.due ? ` (due ${d.due})` : ''}.`)
+      await load(folder, undefined, activeQuery, category, zoomClient)
+      setSelected(null)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   // Open the associate-to-campaign panel: load the client's campaigns + suggestion.
   async function openAssociate() {
     if (!selected) return
@@ -921,6 +942,14 @@ export function AdminUniboxClient() {
                         className="px-4 py-2 text-sm font-medium rounded-lg border border-sky-300 text-sky-700 hover:bg-sky-50 disabled:opacity-50"
                       >
                         {busy ? 'Working…' : 'Mark as Info'}
+                      </button>
+                      <button
+                        onClick={markAsFw}
+                        disabled={busy}
+                        title="Not a lead yet but worth following up: adds it to the Follow-ups queue with a draft. Not charged."
+                        className="px-4 py-2 text-sm font-medium rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+                      >
+                        {busy ? 'Working…' : 'Mark as FW'}
                       </button>
                       <button
                         onClick={reject}

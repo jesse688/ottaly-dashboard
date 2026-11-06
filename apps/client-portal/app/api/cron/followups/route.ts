@@ -36,6 +36,7 @@ export async function GET(req: NextRequest) {
     `SELECT f.id, f.lead_email, r.workspace_id, r.raw->>'thread_id' AS thread_id, r.received_at
        FROM followups f JOIN unibox_replies r ON r.id = f.source_reply_id
       WHERE f.status IN ('new','needs_email')
+        AND COALESCE(r.label_type,'') <> 'fw'   -- Jamie chose FW by hand; don't second-guess it
       ORDER BY f.updated_at ASC LIMIT 10`
   )
   // PlusVibe rate-limits hard (Cloudflare 429) and pv-reconcile shares the same
