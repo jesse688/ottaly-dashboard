@@ -111,9 +111,9 @@ export async function GET(req: NextRequest) {
     } catch (err) {
       console.error('[pv-reconcile] run failed', err)
       await pool.query(
-        `INSERT INTO esp_sync_log (source, status, leads_synced, finished_at) VALUES ($1,$2,$3,NOW())`,
+        `INSERT INTO esp_sync_log (source, workspace_id, status, leads_synced, finished_at) VALUES ($1,'all',$2,$3,NOW())`,
         ['pv-reconcile', 'error', 0]
-      ).catch(() => {})
+      ).catch(err => console.error('[pv-reconcile] sync-log insert failed', err))
     } finally {
       runningSince = 0
     }
@@ -623,9 +623,9 @@ async function runReconcile(url: URL) {
   const summary = { workspaces: processedWs, totalWorkspaces: workspaces.length, ...totals, deduped, errors }
 
   await pool.query(
-    `INSERT INTO esp_sync_log (source, status, leads_synced, finished_at) VALUES ($1,$2,$3,NOW())`,
+    `INSERT INTO esp_sync_log (source, workspace_id, status, leads_synced, finished_at) VALUES ($1,'all',$2,$3,NOW())`,
     ['pv-reconcile', summary.errors.length === 0 ? 'success' : 'partial', summary.inserted]
-  ).catch(() => {})
+  ).catch(err => console.error('[pv-reconcile] sync-log insert failed', err))
 
   return { ok: true, days, ...summary }
 }
