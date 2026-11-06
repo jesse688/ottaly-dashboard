@@ -32,7 +32,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (!f.draft_body?.trim()) return fail('empty draft')
 
   const src = await pool.query(
-    `SELECT workspace_id, subject, body_preview, raw, received_at, lead_email,
+    `SELECT workspace_id, subject, body_preview, raw, received_at, lead_email, label_type,
             COALESCE(NULLIF(sender_email,''), lead_email) AS reply_from,
             NULLIF(raw->>'id','') AS pv_id,
             COALESCE(NULLIF(raw->>'eaccount',''), NULLIF(mailbox_email,'')) AS mailbox
@@ -42,7 +42,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (!r) return fail('source reply missing')
   const billed = await pool.query(`SELECT ${BILLED_SQL('u')} AS b FROM unibox_replies u WHERE u.id = $1`, [f.source_reply_id])
   if (billed.rows[0]?.b) return fail('blocked: already a billable lead')
-  if (f.action_type !== 'referral') {
+  if (f.action_type !== 'referral' && r.label_type !== 'fw') {
     const t = await getThreadState(r.workspace_id, r.reply_from, r.raw?.thread_id ?? null)
     if (t?.latestType === 'sent' && t.latestAt && new Date(t.latestAt) > new Date(r.received_at)) {
       return fail('blocked: we already replied to this thread in PlusVibe')
