@@ -4,6 +4,7 @@ import pool, { ready } from '@/lib/db'
 import { BILLED_SQL } from '@/lib/followups'
 
 // GET /api/admin/followups?view=due|upcoming|done&client=<uuid>
+// Only replies Jamie marked FW by hand in the Unibox (unibox_replies.label_type='fw').
 //   due      = new / needs_email with due_at <= today (default)
 //   upcoming = new with due_at in the future
 //   done     = sent / done / dismissed / failed (last 200)
@@ -14,9 +15,9 @@ export async function GET(req: NextRequest) {
   const view = url.searchParams.get('view') || 'due'
   const client = url.searchParams.get('client')
   const where =
-    view === 'upcoming' ? `f.status IN ('new','needs_email') AND f.due_at > CURRENT_DATE AND NOT ${BILLED_SQL('r')}`
-    : view === 'done' ? `f.status IN ('sent','done','dismissed','failed','lead')`
-    : `f.status IN ('new','needs_email') AND (f.due_at IS NULL OR f.due_at <= CURRENT_DATE) AND NOT ${BILLED_SQL('r')}`
+    view === 'upcoming' ? `f.status IN ('new','needs_email') AND f.due_at > CURRENT_DATE AND r.label_type = 'fw' AND NOT ${BILLED_SQL('r')}`
+    : view === 'done' ? `f.status IN ('sent','done','dismissed','failed','lead') AND r.label_type = 'fw'`
+    : `f.status IN ('new','needs_email') AND (f.due_at IS NULL OR f.due_at <= CURRENT_DATE) AND r.label_type = 'fw' AND NOT ${BILLED_SQL('r')}`
   const params: unknown[] = []
   let clientSql = ''
   if (client) { params.push(client); clientSql = ` AND f.client_id = $${params.length}` }
@@ -37,7 +38,7 @@ export async function GET(req: NextRequest) {
        COUNT(*) FILTER (WHERE f.status IN ('new','needs_email') AND (f.due_at IS NULL OR f.due_at <= CURRENT_DATE)) AS due,
        COUNT(*) FILTER (WHERE f.status IN ('new','needs_email') AND f.due_at > CURRENT_DATE) AS upcoming
      FROM followups f JOIN unibox_replies r ON r.id = f.source_reply_id
-     WHERE NOT ${BILLED_SQL('r')}`
+     WHERE r.label_type = 'fw' AND NOT ${BILLED_SQL('r')}`
   )
   return NextResponse.json({ rows, counts: counts.rows[0] })
 }

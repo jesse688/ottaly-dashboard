@@ -154,7 +154,7 @@ export function AdminFollowupsClient() {
 
       <div className="max-w-4xl mx-auto p-3 sm:p-6 space-y-4">
         <p className="text-sm text-gray-500">
-          Replies not marked as a lead after a day (or labelled FW in PlusVibe) that asked us to do something: get back in touch later, speak to someone else, send info, or call. Billable leads and threads we&apos;ve already answered are left out.
+          Replies you marked as FW in the Unibox. Billable leads are left out automatically.
           Check the draft, edit if needed, then send. It goes from the client&apos;s own mailbox.
         </p>
         {rows === null && <p className="text-sm text-gray-400">Loading…</p>}
