@@ -11,8 +11,8 @@
 //   CF_ACCESS_TEAM_DOMAIN  e.g. myteam.cloudflareaccess.com
 //   CF_ACCESS_AUD          the Access application's AUD tag
 //   ACCESS_ADMIN_EMAILS    comma list of emails that get an admin session.
-//                          Anyone else still uses the login page (managers
-//                          have their own name + password).
+//                          Anyone else Access lets in gets a manager (CM)
+//                          session: no finance, revenue or commission.
 const crypto = require('crypto');
 const jwt    = require('jsonwebtoken');
 
