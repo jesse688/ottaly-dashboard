@@ -1116,6 +1116,30 @@ const serveStatic = express.static(path.join(__dirname), {
     }
   }
 });
+// Cloudflare Access sign-in (cf-access.js). When a listed admin opens a page
+// with no session of ours, start one from Access's signature-checked token so
+// they never see the key prompt. Page loads only: the page's own API calls
+// then carry the cookie. /login.html is left alone so Sign out still lands on
+// a working login page (a manager can sign in there). No-op unless the
+// CF_ACCESS_* env vars are set.
+const cfAccess = require('./cf-access');
+app.use(async (req, res, next) => {
+  try {
+    const p = req.path;
+    const isPage = req.method === 'GET' && !p.startsWith('/api/') && p !== '/login.html'
+      && (p === '/' || p.endsWith('.html') || !p.includes('.'));
+    if (!isPage || !cfAccess.enabled() || decodeSession(req)) return next();
+    const email = await cfAccess.verifyAccessJwt(req.headers['cf-access-jwt-assertion']);
+    if (email && cfAccess.isAdminEmail(email)) {
+      // Same payload the key login mints, plus the email for the record.
+      const token = jwt.sign({ role: 'admin', name: 'Admin', email }, SESSION_SECRET, { expiresIn: '30d' });
+      res.append('Set-Cookie', `ottaly_session=${token}; HttpOnly; Path=/; Max-Age=${30*24*3600}; SameSite=Strict`);
+    }
+  } catch (e) {
+    console.error('[cf-access] sign-in skipped:', e.message);
+  }
+  next();
+});
 const PUBLIC_BROWSER_JS = new Set(['/nav.js', '/splash.js', '/next-step.js', '/ch-fields-client.js']);
 const PUBLIC_STATIC_RE  = /^\/(?:[A-Za-z0-9_-]+\.(?:html|css|svg|png|ico)|assets\/[A-Za-z0-9_.-]+\.(?:svg|png|jpe?g|webp|gif|ico))$/;
 app.use((req, res, next) => {
