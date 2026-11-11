@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { jwtVerify } from 'jose'
+import { SignJWT, jwtVerify } from 'jose'
+import { verifyAccessJwt, roleForAccessEmail } from '@/lib/cf-access'
 
 const SECRET = new TextEncoder().encode(
   process.env.JWT_SECRET ?? 'ottaly-dev-secret-change-in-prod'
@@ -88,6 +89,36 @@ export async function middleware(req: NextRequest) {
       sessionOk = false
     }
   }
+  // No session of our own, but Cloudflare Access has already signed this person
+  // in: trust its (signature-checked) token and start a session, so nobody
+  // types the key a second time. Off unless the CF_ACCESS_* env vars are set.
+  let minted: string | null = null
+  if (!sessionOk) {
+    const email = await verifyAccessJwt(req.headers.get('cf-access-jwt-assertion'))
+    if (email) {
+      role = roleForAccessEmail(email)
+      minted = await new SignJWT({ role, email })
+        .setProtectedHeader({ alg: 'HS256' })
+        .setIssuedAt()
+        .setExpirationTime('7d')
+        .sign(SECRET)
+      sessionOk = true
+      // Let this same request see the new session, not only the next one.
+      req.cookies.set(COOKIE, minted)
+    }
+  }
+  const withSession = (res: NextResponse) => {
+    if (minted) {
+      res.cookies.set(COOKIE, minted, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 60 * 60 * 24 * 7,
+        path: '/',
+      })
+    }
+    return res
+  }
   if (!sessionOk) {
     if (pathname.startsWith('/api/')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -101,9 +132,9 @@ export async function middleware(req: NextRequest) {
   // admin role specifically — a signed-in CM is not enough.
   if (needsAdmin && role !== 'admin') {
     if (pathname.startsWith('/api/')) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+      return withSession(NextResponse.json({ error: 'Forbidden' }, { status: 403 }))
     }
-    return NextResponse.redirect(new URL('/', req.url))
+    return withSession(NextResponse.redirect(new URL('/', req.url)))
   }
 
   // Finance gate: viewing Finance/Revenue needs a valid finance-unlock cookie
@@ -122,15 +153,22 @@ export async function middleware(req: NextRequest) {
     }
     if (!finOk) {
       if (pathname.startsWith('/api/')) {
-        return NextResponse.json({ error: 'Finance locked' }, { status: 403 })
+        return withSession(NextResponse.json({ error: 'Finance locked' }, { status: 403 }))
       }
       const url = new URL('/unlock', req.url)
       url.searchParams.set('next', pathname)
-      return NextResponse.redirect(url)
+      return withSession(NextResponse.redirect(url))
     }
   }
 
-  return NextResponse.next()
+  const forward = { request: { headers: req.headers } }
+  // The app launcher can have its own hostname (HUB_HOST, e.g. home.ottaly.co.uk)
+  // pointed at this service: its bare address shows /home.
+  const hubHost = process.env.HUB_HOST
+  if (hubHost && pathname === '/' && req.headers.get('host')?.split(':')[0] === hubHost) {
+    return withSession(NextResponse.rewrite(new URL('/home', req.url), forward))
+  }
+  return withSession(NextResponse.next(forward))
 }
 
 // Everything except Next's own build assets goes through the gate. This is App
