@@ -1116,7 +1116,7 @@ const serveStatic = express.static(path.join(__dirname), {
     }
   }
 });
-// Cloudflare Access sign-in (cf-access.js). When a listed admin opens a page
+// Cloudflare Access sign-in (cf-access.js). When someone Access let in opens a page
 // with no session of ours, start one from Access's signature-checked token so
 // they never see the key prompt. Page loads only: the page's own API calls
 // then carry the cookie. /login.html is left alone so Sign out still lands on
@@ -1130,9 +1130,16 @@ app.use(async (req, res, next) => {
       && (p === '/' || p.endsWith('.html') || !p.includes('.'));
     if (!isPage || !cfAccess.enabled() || decodeSession(req)) return next();
     const email = await cfAccess.verifyAccessJwt(req.headers['cf-access-jwt-assertion']);
-    if (email && cfAccess.isAdminEmail(email)) {
-      // Same payload the key login mints, plus the email for the record.
-      const token = jwt.sign({ role: 'admin', name: 'Admin', email }, SESSION_SECRET, { expiresIn: '30d' });
+    if (email) {
+      // Listed admins (Jesse, Jamie) get the same payload the key login mints.
+      // Anyone else Access lets in is a CM: a manager session, which the
+      // admin-only routes (finance, revenue, payslips, commission, managers)
+      // already refuse.
+      const local = email.split('@')[0];
+      const payload = cfAccess.isAdminEmail(email)
+        ? { role: 'admin', name: 'Admin', email }
+        : { role: 'manager', name: local.charAt(0).toUpperCase() + local.slice(1), email };
+      const token = jwt.sign(payload, SESSION_SECRET, { expiresIn: '30d' });
       res.append('Set-Cookie', `ottaly_session=${token}; HttpOnly; Path=/; Max-Age=${30*24*3600}; SameSite=Strict`);
     }
   } catch (e) {
