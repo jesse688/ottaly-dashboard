@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { jwtVerify } from 'jose'
+import { SignJWT, jwtVerify } from 'jose'
+import { verifyAccessJwt } from '@/lib/cf-access'
 
 const SECRET = new TextEncoder().encode(
   process.env.PORTAL_JWT_SECRET ?? 'portal-dev-secret-change-in-prod'
@@ -20,14 +21,38 @@ export async function middleware(req: NextRequest) {
       return NextResponse.next()
     }
     const token = req.cookies.get(ADMIN_COOKIE)?.value
-    if (!token) return NextResponse.redirect(new URL('/admin/login', req.url))
-    try {
-      const { payload } = await jwtVerify(token, ADMIN_SECRET)
-      if (payload.role !== 'admin') throw new Error()
-      return NextResponse.next()
-    } catch {
-      return NextResponse.redirect(new URL('/admin/login', req.url))
+    if (token) {
+      try {
+        const { payload } = await jwtVerify(token, ADMIN_SECRET)
+        if (payload.role === 'admin') return NextResponse.next()
+      } catch {
+        // expired or bad: fall through
+      }
     }
+    // No admin session, but Cloudflare Access has already signed this person in
+    // to /admin: trust its (signature-checked) token and start one, so nobody
+    // types the password a second time. The Access policy on /admin is the
+    // list of who is an admin. Off unless the CF_ACCESS_* env vars are set.
+    const email = await verifyAccessJwt(req.headers.get('cf-access-jwt-assertion'))
+    if (email) {
+      const minted = await new SignJWT({ role: 'admin', email })
+        .setProtectedHeader({ alg: 'HS256' })
+        .setIssuedAt()
+        .setExpirationTime('7d')
+        .sign(ADMIN_SECRET)
+      // Let this same request see the session, not only the next one.
+      req.cookies.set(ADMIN_COOKIE, minted)
+      const res = NextResponse.next({ request: { headers: req.headers } })
+      res.cookies.set(ADMIN_COOKIE, minted, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 60 * 60 * 24 * 7,
+        path: '/',
+      })
+      return res
+    }
+    return NextResponse.redirect(new URL('/admin/login', req.url))
   }
 
   // Public client paths
