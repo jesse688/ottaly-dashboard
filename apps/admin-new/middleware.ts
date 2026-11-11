@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { SignJWT, jwtVerify } from 'jose'
-import { verifyAccessJwt, roleForAccessEmail } from '@/lib/cf-access'
+import { verifyAccessJwt, accessLevelForEmail } from '@/lib/cf-access'
 
 const SECRET = new TextEncoder().encode(
   process.env.JWT_SECRET ?? 'ottaly-dev-secret-change-in-prod'
@@ -25,6 +25,8 @@ const FIN_COOKIE = 'ottaly_fin'
 // Finance + Revenue keep their separate FINANCE_KEY passphrase (12h unlock) ON
 // TOP of the login. Settings + Commission require the admin role specifically.
 const FINANCE_PATHS = ['/finance', '/revenue', '/api/finance', '/api/revenue']
+// Closed outright to an Access 'staff' session (no passphrase opens them).
+const MONEY_PATHS = [...FINANCE_PATHS, '/commission', '/api/commission']
 const ADMIN_PATHS = [
   '/admin-settings',
   '/api/admin-settings',
@@ -79,12 +81,18 @@ export async function middleware(req: NextRequest) {
   const token = req.cookies.get(COOKIE)?.value
   let sessionOk = false
   let role: string | null = null
+  // From an Access sign-in: 'full' skips the finance passphrase, 'staff' never
+  // sees money pages. Key logins carry neither and behave as before.
+  let financeAuto = false
+  let noMoney = false
   if (token) {
     try {
       const { payload } = await jwtVerify(token, SECRET)
       sessionOk = true
       // Tokens minted before roles existed carried role:'admin'.
       role = payload.role === 'cm' ? 'cm' : 'admin'
+      financeAuto = payload.access === 'full'
+      noMoney = payload.access === 'staff'
     } catch {
       sessionOk = false
     }
@@ -96,8 +104,11 @@ export async function middleware(req: NextRequest) {
   if (!sessionOk) {
     const email = await verifyAccessJwt(req.headers.get('cf-access-jwt-assertion'))
     if (email) {
-      role = roleForAccessEmail(email)
-      minted = await new SignJWT({ role, email })
+      const access = accessLevelForEmail(email)
+      role = 'admin'
+      financeAuto = access === 'full'
+      noMoney = access === 'staff'
+      minted = await new SignJWT({ role, email, access })
         .setProtectedHeader({ alg: 'HS256' })
         .setIssuedAt()
         .setExpirationTime('7d')
@@ -128,6 +139,13 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url)
   }
 
+  if (noMoney && matchesPrefix(pathname, MONEY_PATHS)) {
+    if (pathname.startsWith('/api/')) {
+      return withSession(NextResponse.json({ error: 'Forbidden' }, { status: 403 }))
+    }
+    return withSession(NextResponse.redirect(new URL('/', req.url)))
+  }
+
   // Admin-only areas (Settings, Commission, the legacy-admin proxies) need the
   // admin role specifically — a signed-in CM is not enough.
   if (needsAdmin && role !== 'admin') {
@@ -140,7 +158,7 @@ export async function middleware(req: NextRequest) {
   // Finance gate: viewing Finance/Revenue needs a valid finance-unlock cookie
   // (set by entering FINANCE_KEY), regardless of role. Without it: API → 403,
   // page → the /unlock prompt (which returns the user here after unlocking).
-  if (needsFinance) {
+  if (needsFinance && !financeAuto) {
     const fin = req.cookies.get(FIN_COOKIE)?.value
     let finOk = false
     if (fin) {
