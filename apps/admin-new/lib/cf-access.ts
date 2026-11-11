@@ -9,8 +9,9 @@ import { createRemoteJWKSet, jwtVerify } from 'jose'
 // key login is the only way in, exactly as before.
 //   CF_ACCESS_TEAM_DOMAIN  e.g. myteam.cloudflareaccess.com
 //   CF_ACCESS_AUD          the Access application's AUD tag
-//   ACCESS_ADMIN_EMAILS    comma list; these get the admin role, everyone
-//                          else Access lets through gets the CM role
+//   ACCESS_ADMIN_EMAILS    comma list with full access incl. Finance; everyone
+//                          else Access lets through gets all but the money
+//                          pages (see accessLevelForEmail)
 // Edge-safe (jose + fetch only): the middleware imports this.
 
 export function cfAccessEnabled(): boolean {
@@ -36,10 +37,19 @@ export async function verifyAccessJwt(token: string | null | undefined): Promise
   }
 }
 
-export function roleForAccessEmail(email: string): 'admin' | 'cm' {
-  const admins = (process.env.ACCESS_ADMIN_EMAILS ?? '')
+/**
+ * Who gets what after the Access login (Jesse 2026-11-11):
+ *   'full'  ACCESS_ADMIN_EMAILS (Jesse, Jamie): everything, Finance included,
+ *           with no extra passphrase.
+ *   'staff' anyone else Access lets in (info@, the CMs): everything EXCEPT
+ *           money: Finance, Revenue and Commission are closed to them even
+ *           if they know the finance passphrase.
+ * Access itself decides who gets in at all.
+ */
+export function accessLevelForEmail(email: string): 'full' | 'staff' {
+  const full = (process.env.ACCESS_ADMIN_EMAILS ?? '')
     .split(',')
     .map(e => e.trim().toLowerCase())
     .filter(Boolean)
-  return admins.includes(email.toLowerCase()) ? 'admin' : 'cm'
+  return full.includes(email.toLowerCase()) ? 'full' : 'staff'
 }

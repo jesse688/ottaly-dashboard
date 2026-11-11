@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from 'next/server'
-import { verifyAccessJwt, roleForAccessEmail } from '@/lib/cf-access'
+import { verifyAccessJwt, accessLevelForEmail } from '@/lib/cf-access'
 
 export const dynamic = 'force-dynamic'
 
@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
   if (!secret || !email) return fallback()
 
   const as = process.env.ROTASEND_SSO_AS?.trim()
-  const loginAs = as && roleForAccessEmail(email) === 'admin' ? as : email
+  const loginAs = as && accessLevelForEmail(email) === 'full' ? as : email
 
   try {
     const r = await fetch(`${base}/api/auth/sso`, {
