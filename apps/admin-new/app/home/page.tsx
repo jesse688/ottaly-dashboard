@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import { headers } from 'next/headers'
+import { verifyAccessJwt, accessLevelForEmail } from '@/lib/cf-access'
 import {
   ArrowUpRight,
   Gauge,
@@ -25,6 +26,8 @@ interface AppTile {
   blurb: string
   href: string
   icon: LucideIcon
+  /** CMs see this tile too. Everything else is for full users only. */
+  cm?: boolean
 }
 
 const APPS: AppTile[] = [
@@ -34,6 +37,7 @@ const APPS: AppTile[] = [
     blurb: 'Contacts, list pushes and client setup.',
     href: 'https://admin.ottaly.co.uk/index.html',
     icon: LayoutDashboard,
+    cm: true,
   },
   {
     name: 'Command',
@@ -41,6 +45,7 @@ const APPS: AppTile[] = [
     blurb: 'Stats, triage, mailboxes and capacity.',
     href: 'https://dev.ottaly.co.uk/',
     icon: Gauge,
+    cm: true,
   },
   {
     name: 'Client Portal',
@@ -75,7 +80,13 @@ const APPS: AppTile[] = [
 export default async function HomeHub() {
   // Display only. Access set this header; the session itself came from the
   // signature-checked token in the middleware, never from this value.
-  const email = (await headers()).get('cf-access-authenticated-user-email')
+  const h = await headers()
+  const email = h.get('cf-access-authenticated-user-email')
+  // Tiles follow the signed-in email: Jesse and Jamie (ACCESS_ADMIN_EMAILS)
+  // see every app, CMs see Admin and Command. Checked from the signed token,
+  // not the display header above. No Access token (key login) = all tiles.
+  const accessEmail = await verifyAccessJwt(h.get('cf-access-jwt-assertion'))
+  const apps = accessEmail && accessLevelForEmail(accessEmail) !== 'full' ? APPS.filter(a => a.cm) : APPS
 
   return (
     // Covers the app sidebar: this page is the launcher, not a Command page.
@@ -97,7 +108,7 @@ export default async function HomeHub() {
         </p>
 
         <ul className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {APPS.map(app => (
+          {apps.map(app => (
             <li key={app.name}>
               <a
                 href={app.href}
