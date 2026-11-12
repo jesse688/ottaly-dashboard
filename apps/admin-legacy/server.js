@@ -22004,6 +22004,9 @@ app.get('/api/cron/autopilot', async (req, res) => {
 const PUSH_GUARD_DEFAULTS = Object.freeze({
   sameClientDays:      30,  // this client re-pushing their own contact
   sameVerticalMonths:   6,  // a different client in the same vertical
+  // When > 0, replaces sameVerticalMonths AND every per-client snooze_months:
+  // the vertical lockout becomes N business days (Mon-Fri). Jesse, 2026-11-12.
+  sameVerticalBusinessDays: 0,
   burstGapDays:        10,  // any other client, minimum gap
   maxClientsPerWindow:  2,  // at most N clients total…
   ceilingWindowDays:   30,  // …inside this rolling window
@@ -22097,6 +22100,17 @@ function logGuardOverride(tag, req, detail = {}) {
   console.warn(`[${tag}] ⚠ SEND-RULE OVERRIDE by ${who} — ${bits}`);
 }
 
+function stampBusinessDaysAgo(n) {
+  const d = new Date();
+  let left = Math.floor(n);
+  while (left > 0) {
+    d.setDate(d.getDate() - 1);
+    const day = d.getDay();
+    if (day !== 0 && day !== 6) left--;
+  }
+  return d.toISOString().slice(0, 10);
+}
+
 function stampMonthsAgo(months) {
   const d = new Date();
   d.setMonth(d.getMonth() - months);
@@ -22172,7 +22186,9 @@ function buildCrossClientGuard(workspaceId, workspaceName, override = false) {
       const rules = db.prepare('SELECT snooze_months FROM client_verticals WHERE workspace_id = ?').get(workspaceId);
       if (rules && Number(rules.snooze_months) > 0) months = Number(rules.snooze_months);
     } catch {}
-    verticalCutoff = stampMonthsAgo(months);
+    verticalCutoff = settings.sameVerticalBusinessDays > 0
+      ? stampBusinessDaysAgo(settings.sameVerticalBusinessDays)
+      : stampMonthsAgo(months);
     try {
       for (const row of db.prepare('SELECT workspace_id, vertical FROM client_verticals').all()) {
         if (row.vertical && row.vertical === vertical && row.workspace_id !== workspaceId) {
