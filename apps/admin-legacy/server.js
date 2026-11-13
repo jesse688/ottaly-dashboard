@@ -762,6 +762,12 @@ try { db.exec(`ALTER TABLE client_verticals ADD COLUMN excluded_job_titles    TE
 // 66% of Mercantile's first leads had already been emailed by 2+ other
 // clients since August, which the 2-clients-per-30-days ceiling allows.
 try { db.exec(`ALTER TABLE client_verticals ADD COLUMN fresh_days INTEGER DEFAULT 0`); } catch {}
+// Minimum company age in years (2026-11-13). Lending clients (vertical
+// business_finance) do not want companies under 2 years old. Enforced in the
+// push guard, so a push/send of a younger company is blocked. 0 = off. A
+// contact with no known age passes: most of the pool has no Companies House
+// date, and blocking unknowns would block almost everything.
+try { db.exec(`ALTER TABLE client_verticals ADD COLUMN min_company_age_years INTEGER DEFAULT 0`); } catch {}
 
 // ── Reply-disqualifier rule settings ──────────────────────────────────────
 // Per-rule snooze duration + on/off, editable from /disqualifiers.html. Row
@@ -18514,7 +18520,7 @@ app.post('/api/admin/client-verticals', requireAdmin, (req, res) => {
   const {
     workspace_id, workspace_name, vertical, exclude_remote, require_owns_building, snooze_months, notes,
     excluded_industries, excluded_company_sizes, excluded_keywords,
-    excluded_counties, excluded_cities, excluded_job_titles, fresh_days,
+    excluded_counties, excluded_cities, excluded_job_titles, fresh_days, min_company_age_years,
   } = req.body;
   if (!workspace_id) return res.status(400).json({ error: 'workspace_id required' });
   // fresh_days is only changed when sent. Every other field here is replaced
@@ -18558,6 +18564,11 @@ app.post('/api/admin/client-verticals', requireAdmin, (req, res) => {
     norm(excluded_counties), norm(excluded_cities), norm(excluded_job_titles),
     freshDays ?? 0, freshDays, freshDays,
   );
+  // Like fresh_days: only changed when sent, so an old caller cannot wipe it.
+  if (min_company_age_years !== undefined && min_company_age_years !== null && min_company_age_years !== '') {
+    const minAge = Math.max(0, Math.floor(Number(min_company_age_years) || 0));
+    db.prepare('UPDATE client_verticals SET min_company_age_years = ? WHERE workspace_id = ?').run(minAge, workspace_id);
+  }
   res.json({ ok: true });
 });
 
@@ -22134,6 +22145,26 @@ function parseEmailedWorkspaces(contact) {
   try { return JSON.parse(raw) || {}; } catch { return {}; }
 }
 
+// Company age in whole years from whatever we hold, best evidence first:
+// exact incorporation date, stored age, Companies House founded year, then the
+// "startup (<1y)" band. Returns null when the age is unknown (those pass).
+function contactCompanyAgeYears(c) {
+  let raw = c.raw_data;
+  if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { raw = null; } }
+  const inc = raw && raw.incorporated_on ? new Date(raw.incorporated_on) : null;
+  if (inc && !Number.isNaN(inc.getTime())) {
+    const y = (Date.now() - inc.getTime()) / (365.25 * 24 * 3600 * 1000);
+    if (y >= 0) return y;
+  }
+  if (raw && raw.company_age_years != null && Number.isFinite(Number(raw.company_age_years))) {
+    return Number(raw.company_age_years);
+  }
+  const fy = parseInt(c.ch_founded_year, 10);
+  if (fy >= 1800) return new Date().getFullYear() - fy;
+  if (String(c.company_age_band || '').startsWith('startup')) return 0;
+  return null;
+}
+
 // Build the cross-client guard for one push target.
 // Returns (contact, skipped) => boolean, mutating `skipped` for reporting.
 function buildCrossClientGuard(workspaceId, workspaceName, override = false) {
@@ -22153,7 +22184,25 @@ function buildCrossClientGuard(workspaceId, workspaceName, override = false) {
       if (r && Number(r.fresh_days) > 0) freshCutoff = stampDaysAgo(Number(r.fresh_days));
     } catch {}
   }
-  const passesFresh = (contact, skipped) => {
+  // Minimum company age (per client, client_verticals.min_company_age_years).
+  // Also a promise to the client, so it holds when the master switch is off.
+  let minAgeYears = 0;
+  if (db) {
+    try {
+      const r = db.prepare('SELECT min_company_age_years FROM client_verticals WHERE workspace_id = ?').get(workspaceId);
+      if (r && Number(r.min_company_age_years) > 0) minAgeYears = Number(r.min_company_age_years);
+    } catch {}
+  }
+  const passesMinAge = (contact, skipped) => {
+    if (!minAgeYears) return true;
+    const age = contactCompanyAgeYears(contact);
+    if (age !== null && age < minAgeYears) {
+      skipped.tooYoung = (skipped.tooYoung || 0) + 1;
+      return false;
+    }
+    return true;
+  };
+  const passesFresh0 = (contact, skipped) => {
     if (!freshCutoff) return true;
     for (const [wsId, info] of Object.entries(parseEmailedWorkspaces(contact))) {
       if (wsId === workspaceId) continue;
@@ -22166,8 +22215,10 @@ function buildCrossClientGuard(workspaceId, workspaceName, override = false) {
     return true;
   };
 
-  // Master switch off → only the fresh-only rule (if set) applies. Returned
-  // before any other lookup so the disabled path stays cheap.
+  const passesFresh = (contact, skipped) => passesMinAge(contact, skipped) && passesFresh0(contact, skipped);
+
+  // Master switch off → only the per-client rules (fresh-only, min age) apply.
+  // Returned before any other lookup so the disabled path stays cheap.
   if (!settings.enabled) return passesFresh;
   const burstCutoff   = stampDaysAgo(settings.burstGapDays);
   const ceilingCutoff = stampDaysAgo(settings.ceilingWindowDays);
