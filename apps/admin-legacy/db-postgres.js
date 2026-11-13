@@ -2721,7 +2721,7 @@ class PostgresDatabase {
             corporate_phone, company_phone, email_status, email_verified_at,
             status, tags, source, do_not_contact, works_remote, owns_building,
             ccod_owns_building, ccod_building_owner, ccod_site_count, ccod_checked_at,
-            ch_company_number, ch_postcode,
+            ch_company_number, ch_postcode, ch_founded_year, company_age_band,
             snoozed_verticals, reply_notes, last_reply_at, marked_as_lead_at,
             bounced_at, bounce_type, soft_bounce_count, last_emailed_at, email_count,
             emailed_workspaces, last_campaign_name, pushed_campaigns,
