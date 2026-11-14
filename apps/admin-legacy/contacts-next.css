@@ -185,6 +185,12 @@ body.cx::after { display: none; } /* no watermark behind a data grid */
 
 /* ── Main ──────────────────────────────────────────────────────────────── */
 .cx-main { display: grid; grid-template-rows: auto auto auto 1fr auto; min-width: 0; min-height: 0; }
+.cx-sendtable td:first-child { max-width: none; font-weight: 500; }
+.cx-sendtable td.name { text-align: left; max-width: 340px; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.cx-sendtable th.l { text-align: left; }
+.cx-sendtable tr.why td { text-align: left; background: var(--cx-wash); white-space: normal; padding: 8px 14px 10px; }
+.cx-sendtable tr.clickable { cursor: pointer; }
+.cx-sendtable tr.clickable:hover td { background: #f7f9fd; }
 
 .cx-funnel { display: flex; align-items: stretch; gap: 0; padding: 12px 16px 10px; background: var(--cx-surface); border-bottom: 1px solid var(--cx-line); min-width: 0; }
 .cx-step { padding: 0 18px 0 0; margin-right: 18px; border-right: 1px solid var(--cx-line); min-width: 0; }
