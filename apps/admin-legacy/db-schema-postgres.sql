@@ -147,8 +147,9 @@ CREATE INDEX IF NOT EXISTS idx_contacts_workspace ON contacts(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_contacts_workspace_status ON contacts(workspace_id, status);
 CREATE INDEX IF NOT EXISTS idx_contacts_workspace_created ON contacts(workspace_id, created_at DESC);
 
--- Full-text search (GIN index for JSONB)
-CREATE INDEX IF NOT EXISTS idx_contacts_raw_data_gin ON contacts USING GIN(raw_data);
+-- idx_contacts_raw_data_gin (GIN on raw_data) was created here. It was 3.5 GB
+-- with zero scans: nothing queries raw_data with a containment operator.
+-- Dropped by api-contacts-next.js (DROP_INDEXES); do not re-add.
 
 -- Apollo ID lookup
 CREATE INDEX IF NOT EXISTS idx_contacts_apollo_id ON contacts(apollo_id);

@@ -1275,7 +1275,12 @@ class PostgresDatabase {
         ['job_title',         `CREATE INDEX IF NOT EXISTS idx_contacts_job_title_trgm         ON contacts USING GIN (job_title gin_trgm_ops)`],
         ['job_title_cleaned', `CREATE INDEX IF NOT EXISTS idx_contacts_job_title_cleaned_trgm ON contacts USING GIN (job_title_cleaned gin_trgm_ops)`],
         ['industry',          `CREATE INDEX IF NOT EXISTS idx_contacts_industry_trgm          ON contacts USING GIN (industry gin_trgm_ops)`],
-        ['keywords',          `CREATE INDEX IF NOT EXISTS idx_contacts_keywords_trgm          ON contacts USING GIN (keywords gin_trgm_ops)`],
+        // idx_contacts_keywords_trgm used to be built here. It was 7.1 GB and had
+        // ZERO scans: every keywords filter wraps the column in
+        // COALESCE(NULLIF(keywords,''), raw_data->>'Keywords'), which a plain
+        // trigram index on `keywords` cannot serve, and the search_tsv
+        // prefilter does that job instead. It only slowed every import and
+        // push. Dropped by api-contacts-next.js (DROP_INDEXES); do not re-add.
         ['technologies',      `CREATE INDEX IF NOT EXISTS idx_contacts_technologies_trgm      ON contacts USING GIN (technologies gin_trgm_ops)`],
         // LOWER() here matches the actual query at /api/admin/database/contacts
         // (LOWER(company_name) LIKE ...) -- a plain-column trgm index can't be
@@ -1325,9 +1330,11 @@ class PostgresDatabase {
         // load (even with zero filters) sorts by this. Measured fix: 2194ms -> 3ms.
         ['imported_at',      `CREATE INDEX IF NOT EXISTS idx_contacts_imported_at ON contacts (imported_at DESC)`],
         ['tags_gin',         `CREATE INDEX IF NOT EXISTS idx_contacts_tags_gin ON contacts USING GIN (tags)`],
-        // Per-client 60-day cooldown filter does `emailed_workspaces ? $ws`
-        // on every search/count when a client is selected — jsonb_path_ops
-        // makes that key-existence lookup index-backed.
+        // NOTE: jsonb_path_ops serves @> / @? / @@ only. It does NOT serve the
+        // key-existence operator `?` that the cooldown filter and the v2
+        // "sent to this client" queries use (0 scans measured 2026-11-14).
+        // idx_contacts_emailed_ws_keys (jsonb_ops, built by
+        // api-contacts-next.js) is the one that makes `?` an index lookup.
         ['emailed_ws_gin',   `CREATE INDEX IF NOT EXISTS idx_contacts_emailed_workspaces_gin ON contacts USING GIN (emailed_workspaces jsonb_path_ops)`],
       ];
       // Build indexes in parallel batches of 3 — sequential builds took
@@ -2702,8 +2709,21 @@ class PostgresDatabase {
     // whole-word regex ("construction" also matches "construction & engineering"),
     // which is right for typing but wrong for ticking a value in a list: the
     // count beside the value must be the count you get.
-    safe('industryIs',       () => { if (filters.industryIs)       colExact('industry', filters.industryIs); });
-    safe('industryIsNot',    () => { if (filters.industryIsNot)    colExactExclude('industry', filters.industryIsNot); });
+    // Compared through INDUSTRY_NORM_SQL on both sides, so "Staffing &
+    // Recruiting" (Apollo) and "Staffing and Recruiting" (LinkedIn) are one
+    // industry, in the filter, in the counts and in "what works".
+    safe('industryIs', () => {
+      const vals = csv(filters.industryIs).map(PostgresDatabase.normIndustry).filter(Boolean);
+      if (!vals.length) return;
+      clauses.push(`${PostgresDatabase.INDUSTRY_NORM_SQL} = ANY($${p})`);
+      params.push(vals); p++;
+    });
+    safe('industryIsNot', () => {
+      const vals = csv(filters.industryIsNot).map(PostgresDatabase.normIndustry).filter(Boolean);
+      if (!vals.length) return;
+      clauses.push(`(industry IS NULL OR ${PostgresDatabase.INDUSTRY_NORM_SQL} <> ALL($${p}))`);
+      params.push(vals); p++;
+    });
     safe('departmentIs',     () => { if (filters.departmentIs)     colExact('department', filters.departmentIs); });
     safe('companyCountryIs', () => { if (filters.companyCountryIs) colExact('company_country', filters.companyCountryIs); });
 
@@ -2721,6 +2741,15 @@ class PostgresDatabase {
       if (!want.length) return;
       clauses.push(`(${PostgresDatabase.TIER_SQL}) = ANY($${p}::text[])`);
       params.push(want); p++;
+      // The CASE above is opaque to the planner, so "tier A across the UK"
+      // read every row (5.5s measured on production). Tier A is by definition
+      // verified safe, so say so in a form idx_contacts_email_status can use.
+      // It removes nothing the CASE would keep: email_status is always stored
+      // lower case (checked 2026-11-14) and the CASE requires the same two
+      // values.
+      if (want.length === 1 && want[0] === 'A') {
+        clauses.push(`email_status IN ('safe','safe_catchall')`);
+      }
     });
 
     // Verification age. email_verified_at is TEXT in production (five string
@@ -2794,6 +2823,16 @@ class PostgresDatabase {
     });
 
     return { clauses, params };
+  }
+
+  // One spelling per industry. The data mixes two vocabularies that differ only
+  // in "&" vs "and" for dozens of industries, which split every count in two.
+  // POSIX classes rather than \s so the pattern needs no backslash escaping.
+  static INDUSTRY_NORM_SQL = `NULLIF(btrim(regexp_replace(regexp_replace(lower(industry),
+      '[[:space:]]*&[[:space:]]*', ' and ', 'g'), '[[:space:]]+', ' ', 'g')), '')`;
+  // The same normalisation for a value coming from the page.
+  static normIndustry(v) {
+    return String(v == null ? '' : v).toLowerCase().replace(/\s*&\s*/g, ' and ').replace(/\s+/g, ' ').trim();
   }
 
   // A row no push will accept: invalid address, hard bounce or do-not-contact.

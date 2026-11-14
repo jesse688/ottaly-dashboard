@@ -270,7 +270,7 @@ const SIZE_SQL = `CASE
 // widening a search: the unticked values are the "more like this" options.
 const FACETS = {
   seniority:   { expr: `NULLIF(seniority, '')`,               own: ['seniority'],          top: 20 },
-  industry:    { expr: `NULLIF(LOWER(industry), '')`,         own: ['industryIs'],         top: 60 },
+  industry:    { expr: PostgresDatabase.INDUSTRY_NORM_SQL,    own: ['industryIs'],         top: 60 },
   size:        { expr: SIZE_SQL,                              own: ['numEmployeesRanges'], top: 12 },
   region:      { expr: `NULLIF(LOWER(company_region), '')`,   own: ['companyRegion'],      top: 20 },
   county:      { expr: `NULLIF(LOWER(company_county), '')`,   own: ['companyCounty'],      top: 80 },
@@ -389,7 +389,7 @@ async function summary(db, tenant, filters, opts = {}) {
 // tenant. One full scan, on the background pool, cached for hours: it is the
 // same for every client, and it moves slowly.
 const POCKET_DIMS = {
-  industry:  { expr: `NULLIF(LOWER(industry), '')`,       filterKey: 'industryIs',         label: 'Industry' },
+  industry:  { expr: PostgresDatabase.INDUSTRY_NORM_SQL,  filterKey: 'industryIs',         label: 'Industry' },
   seniority: { expr: `NULLIF(seniority, '')`,             filterKey: 'seniority',          label: 'Seniority' },
   size:      { expr: SIZE_SQL,                            filterKey: 'numEmployeesRanges', label: 'Company size' },
   region:    { expr: `NULLIF(LOWER(company_region), '')`, filterKey: 'companyRegion',      label: 'Region' },

@@ -849,6 +849,17 @@ module.exports = (db, opts = {}) => {
         adsRunsAds: rest.adsRunsAds,     // yes | no | checked | unchecked
         adsMinCount: rest.adsMinCount,
         adsMaxCount: rest.adsMaxCount,
+        // These six are sent by the page and honoured by the sendable badge,
+        // Select-N and the export, but were missing from this list, so the
+        // grid ignored them (measured 2026-11-14: hasCompany=no returned rows
+        // that all had a company). The list therefore showed contacts the push
+        // would not take. They now apply here as they do everywhere else.
+        hasName: rest.hasName,
+        hasCompany: rest.hasCompany,
+        excludeMicrosoft: rest.excludeMicrosoft,
+        solarStatusExclude: rest.solarStatusExclude,
+        hasFact: rest.hasFact,
+        excludeFact: rest.excludeFact,
       };
 
       // If an ads filter is set but the ads_* columns aren't available, REFUSE.
