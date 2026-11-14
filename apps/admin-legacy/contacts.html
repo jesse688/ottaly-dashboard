@@ -6208,96 +6208,38 @@
       document.getElementById('bisonPushModal').classList.remove('active');
     }
 
+    // Downloads the ticked contacts as a CSV. Nothing is sent anywhere.
+    //
+    // This used to POST to /api/contacts/verify-and-push with `verify_only:
+    // true`, expecting a job that verifies and then hands back a CSV. The
+    // server has no verify-only mode: it ignores that flag, so the button
+    // labelled "Download CSV" started a REAL push of the ticked contacts into
+    // the selected PlusVibe campaign, and then reported "no safe contacts
+    // found" because the job never carries the id list the download waited for.
+    // It now does only what the label says.
     async function downloadPushCsv() {
       const contactIds = [..._selectedIds];
       if (!contactIds.length) { showMessage('No contacts selected', 'error'); return; }
-
-      const wsId   = document.getElementById('pvWorkspace').value;
-      const campId = document.getElementById('pvCampaign').value;
-      const useN2b = document.getElementById('useN2b').checked;
-      const verifyMaxAge = parseInt(document.getElementById('verifyMaxAge')?.value ?? '3', 10);
-      if (!wsId)   { showMessage('Select a client first (Filter for Client)', 'error'); return; }
-      if (!campId) { showMessage('Select a campaign first', 'error'); return; }
-
-      const wsName   = pvWorkspaces.find(w => w._id === wsId)?.name || wsId;
-      const campName = document.getElementById('pvCampaign').selectedOptions[0]?.text || campId;
-      const pushProviders = [];
-      if (document.getElementById('emailGoogle').checked)  pushProviders.push('email_google');
-      if (document.getElementById('emailOutlook').checked) pushProviders.push('email_outlook');
-      if (document.getElementById('emailOther').checked)   pushProviders.push('email_other');
-      const allowedStatuses = [...document.querySelectorAll('.pushStatus:checked')].map(el => el.value);
-
-      // Start a verify-only job (no push to PlusVibe)
-      let jobId;
       try {
-        const r = await fetch('/api/contacts/verify-and-push', {
+        const cr = await fetch('/api/contacts/by-ids', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            workspace_id: wsId, campaign_id: campId,
-            contact_ids: contactIds, workspace_name: wsName, campaign_name: campName,
-            include_risky: false, max_age_days: verifyMaxAge,
-            emailProviders: pushProviders.join(','),
-            excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '',
-            use_n2b: useN2b,
-            allowed_statuses: allowedStatuses,
-            override_send_rules: isSendRuleOverrideOn(),
-            verify_only: true,
-          })
+          body: JSON.stringify({ ids: contactIds.slice(0, 10000) })
         });
-        const d = await r.json();
-        if (!r.ok || !d.jobId) { showMessage(d.error || 'Failed to start verification', 'error'); return; }
-        jobId = d.jobId;
-      } catch (err) { showMessage('Error: ' + err.message, 'error'); return; }
-
-      closePushModal();
-      deselectAll();
-      showMessage(`Verifying ${contactIds.length} contacts — CSV will download when done…`, 'success');
-      startQueuePolling();
-
-      // Poll until job is done, then trigger CSV download
-      const poll = setInterval(async () => {
-        try {
-          const r = await fetch(`/api/contacts/push-jobs/${jobId}`);
-          const job = await r.json();
-          if (!['completed','failed','cancelled'].includes(job.status)) return;
-          clearInterval(poll);
-          if (job.status !== 'completed') {
-            showMessage(`Verification ${job.status} — no CSV downloaded`, 'error');
-            return;
-          }
-          if (!job.safe_ids || !job.safe_ids.length) {
-            showMessage(`Verification done — no safe contacts found (${job.safe || 0} safe, ${job.invalid || 0} invalid, ${job.risky || 0} risky)`, 'error');
-            return;
-          }
-          // Fetch verified safe contacts and build CSV
-          const cr = await fetch('/api/contacts/by-ids', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ids: job.safe_ids })
-          });
-          const cd = await cr.json();
-          const contacts = cd.contacts || [];
-          if (!contacts.length) { showMessage('No contact data returned from DB', 'error'); return; }
-          const cols = ['email','first_name','last_name','company_name','company_website','job_title','industry','city','state','country','phone_number'];
-          const header = cols.join(',');
-          const rows = contacts.map(c => cols.map(k => `"${String(c[k]||'').replace(/"/g,'""')}"`).join(','));
-          const csv = [header, ...rows].join('\n');
-          const blob = new Blob([csv], { type: 'text/csv' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `verified-contacts-${contacts.length}.csv`;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          setTimeout(() => URL.revokeObjectURL(url), 1000);
-          showMessage(`✅ Downloaded ${contacts.length} verified contacts`, 'success');
-        } catch (err) {
-          clearInterval(poll);
-          showMessage('CSV download error: ' + err.message, 'error');
-        }
-      }, 3000);
+        const cd = await cr.json();
+        const contacts = cd.contacts || [];
+        if (!contacts.length) { showMessage('No contact data returned', 'error'); return; }
+        const cols = ['email','first_name','last_name','company_name','company_domain','job_title','industry','city','state','country','phone','email_status'];
+        const cell = v => { let t = String(v == null ? '' : v); if (/^[=+\-@]/.test(t)) t = "'" + t; return '"' + t.replace(/"/g, '""') + '"'; };
+        const csv = [cols.join(','), ...contacts.map(c => cols.map(k => cell(c[k])).join(','))].join('\n');
+        const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+        const a = document.createElement('a');
+        a.href = url; a.download = `contacts-${contacts.length}.csv`;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        closePushModal();
+        showMessage(`Downloaded ${contacts.length} contacts` + (contactIds.length > 10000 ? ' (first 10,000 of your selection)' : ''), 'success');
+      } catch (err) { showMessage('Download failed: ' + err.message, 'error'); }
     }
 
     function showMessage(text, type = 'success') {

@@ -78,7 +78,7 @@
   const REASONS = {
     unsafe: 'Email not safe to send', dnc: 'Do not contact', departed: 'Left the company', missingName: 'No first name',
     alreadyInCampaign: 'Already in this campaign', cooldownWorkspace: 'This client emailed them recently',
-    verticalCollision: 'Another client in the same vertical emailed them', burstGap: 'Emailed by another client days ago',
+    verticalCollision: 'Another client in the same vertical emailed them', burstGap: 'Another client emailed them in the last few days',
     densityCeiling: 'Emailed by too many clients lately', snoozed: 'Snoozed for this vertical',
     missingEnrichment: 'No industry on file', notFresh: 'Another client emailed them inside the fresh window', tooYoung: 'Company too young',
   };
@@ -711,6 +711,7 @@
         held > 0 ? held + '% held back by send rules. <button class="why" data-act="why">See why</button>' : 'passes every send rule', 'ready' + (n ? '' : ' zero'));
     }
     html += '<div class="grow"></div><div class="cx-actions">' +
+      '<div class="cx-rel"><button class="cx-btn" data-act="download" title="Download contacts as a CSV file">Download</button></div>' +
       '<button class="cx-btn primary" data-act="send"' + (S.client ? '' : ' disabled title="Choose a client first"') + '>Send to a campaign</button></div>';
     el.innerHTML = html;
   }
@@ -723,7 +724,7 @@
     let right = '';
     if (S.tab === 'contacts') {
       if (S.sel.size) {
-        right = '<div class="cx-selbar">' + num(S.sel.size) + ' ticked <button class="cx-btn sm primary" data-act="send-sel"' + (S.client ? '' : ' disabled title="Choose a client first"') + '>Send these</button><button class="cx-btn sm" data-act="clear-sel">Clear</button></div>';
+        right = '<div class="cx-selbar">' + num(S.sel.size) + ' ticked <button class="cx-btn sm primary" data-act="send-sel"' + (S.client ? '' : ' disabled title="Choose a client first"') + '>Send these</button><button class="cx-btn sm" data-act="download-sel">Download these</button><button class="cx-btn sm" data-act="clear-sel">Clear</button></div>';
       }
       right += '<label>Sort <select data-act="sort">' + Object.keys(SORT_LABEL).filter((k) => ['best', 'imported', 'last_emailed', 'verified', 'employees', 'company', 'name'].includes(k) || k === S.sort)
         .map((k) => '<option value="' + k + '"' + (k === S.sort ? ' selected' : '') + '>' + SORT_LABEL[k] + '</option>').join('') + '</select></label>';
@@ -837,7 +838,11 @@
         if (a === 'use-pocket') return usePocket(act.dataset.key, act.dataset.val);
         if (a === 'use-campaign') return useCampaign(act.dataset.id, act.dataset.name);
         if (a === 'works-refresh') return loadPockets(true);
-        if (a === 'sends-refresh') return loadSends();
+        if (a === 'sends-refresh') { pollJobs(true); return loadSends(); }
+        if (a === 'sends-parked') { S.showParked = !S.showParked; return renderSends(); }
+        if (a === 'job') return jobAction(act.dataset.id, act.dataset.what);
+        if (a === 'download') return (openPop && openPop.parentElement === act.parentElement ? closePop() : openDownloadPop(act.parentElement));
+        if (a === 'download-sel') { downloadRowsCsv([...S.sel.values()], 'contacts-ticked-' + S.sel.size + '.csv'); return toast('Downloaded ' + num(S.sel.size) + ' rows'); }
         if (a === 'sends-all') { S.sendsAll = !S.sendsAll; return renderSends(); }
         if (a === 'send-row') { const id = act.dataset.id; S.sendOpen = S.sendOpen === id ? '' : id; return renderSends(); }
         return;
@@ -961,40 +966,79 @@
   // rest did not. With a client selected it shows that client's sends.
   async function loadSends() {
     S.sends = null; renderSends();
+    pollJobs(true);
     try { S.sends = (await api('/api/contacts/push-history?limit=200')).jobs || []; }
     catch (e) { S.sends = { error: e.message }; }
     renderSends();
   }
+  function nowCard(j) {
+    const goal = jobGoal(j);
+    const done = j.status === 'verifying' ? (j.verified || 0) : (j.pushed || 0);
+    const of = j.status === 'verifying' ? (j.toVerify || j.total || 0) : goal;
+    const w = of ? Math.min(100, Math.round((done / of) * 100)) : Math.round(j.progress || 0);
+    const eta = j.etaSeconds > 0 ? ' · about ' + (j.etaSeconds < 60 ? j.etaSeconds + 's' : Math.round(j.etaSeconds / 60) + ' min') + ' left' : '';
+    const chip = (cls, label, n) => '<span class="cx-badge ' + cls + '">' + label + ' ' + num(n || 0) + '</span>';
+    let skipped = j.skipped;
+    const reasons = skipped && typeof skipped === 'object' ? Object.entries(skipped).filter(([, n]) => Number(n) > 0).sort((x, y) => y[1] - x[1]) : [];
+    return '<div class="cx-now' + (isFailed(j) ? ' bad' : '') + '">' +
+      '<div class="top"><div class="ttl"><b title="' + esc(j.campaign_name || '') + '">' + esc(j.campaign_name || '') + '</b><span>' + esc(j.workspace_name || '') + '</span></div>' +
+      '<div class="acts">' +
+      (isLive(j) && j.status !== 'pausing' ? '<button class="cx-btn sm" data-act="job" data-what="pause" data-id="' + esc(j.id) + '">Pause</button>' : '') +
+      (j.status === 'paused' ? '<button class="cx-btn sm primary" data-act="job" data-what="resume" data-id="' + esc(j.id) + '">Resume</button>' : '') +
+      (isLive(j) || j.status === 'paused' ? '<button class="cx-btn sm danger" data-act="job" data-what="cancel" data-id="' + esc(j.id) + '">Stop</button>' : '') +
+      '</div></div>' +
+      '<div class="bar"><i style="width:' + w + '%"></i></div>' +
+      '<div class="line">' + esc(jobLine(j)) + esc(eta) + '</div>' +
+      '<div class="chips">' + chip('good', 'Safe', j.safe) + chip('good', 'Catch-all safe', j.safe_catchall) + chip('warn', 'Risky', j.risky) + chip('bad', 'Invalid', j.invalid) + chip('mute', 'Unknown', j.unknown) +
+      (j.n2bTotal ? '<span class="cx-dim">Second check: ' + num(j.n2bDone || 0) + ' of ' + num(j.n2bTotal) + ' done, ' + num(j.n2bSafe || 0) + ' passed</span>' : '') + '</div>' +
+      (reasons.length ? '<div class="cx-reasons" style="max-width:420px;margin-top:8px">' + reasons.map(([k, n]) => '<span>' + esc(REASONS[k] || (k === 'wrongProvider' ? 'Wrong email provider for this send' : k)) + '</span><span>' + num(n) + '</span>').join('') + '</div>' : '') +
+      '</div>';
+  }
+
   function renderSends() {
     const el = $('#sends');
-    if (!S.sends) { el.innerHTML = '<div class="cx-state"><p>Loading sends…</p></div>'; return; }
-    if (S.sends.error) { el.innerHTML = '<div class="cx-state"><h3>Could not load sends</h3><p>' + esc(S.sends.error) + '</p><button class="cx-btn" data-act="sends-refresh">Try again</button></div>'; return; }
     const mineOnly = S.client && !S.sendsAll;
-    const rows = S.sends.filter((j) => !mineOnly || j.workspace_id === S.client)
-      .sort((a, b) => String(b.finished_at || b.started_at || '').localeCompare(String(a.finished_at || a.started_at || '')));
-    const word = (st) => JOB_WORD[st] || (st === 'cancelled' ? 'Stopped' : title(st));
-    const cls = (st) => (st === 'completed' ? 'good' : st === 'failed' || st === 'error' ? 'bad' : st === 'paused' || st === 'cancelled' ? 'mute' : 'blue');
-    const when = (j) => { const d = parseDate(j.finished_at || j.started_at); return d ? d.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''; };
-    let html = '<div class="cx-card"><header><h3>Sends' + (mineOnly ? ' for ' + esc(clientName()) : '') + '</h3><p>newest first, last 200</p><span class="grow"></span>' +
+    const mine = (j) => !mineOnly || j.workspace_id === S.client;
+
+    // Now: running, failed and recently paused. Sends paused over a day ago are
+    // folded away under one line, so three forgotten pauses do not push the
+    // live one down the page.
+    const current = lastJobs.filter(mine).filter((j) => !(j.status === 'paused' && jobAgeHours(j) > 24));
+    const parked = lastJobs.filter(mine).filter((j) => j.status === 'paused' && jobAgeHours(j) > 24);
+    let html = '<div class="cx-card"><header><h3>Now' + (mineOnly ? ' for ' + esc(clientName()) : '') + '</h3><p>' +
+      (current.some(isLive) ? 'updates every few seconds' : 'nothing is sending') + '</p><span class="grow"></span>' +
       (S.client ? '<button class="cx-btn sm" data-act="sends-all">' + (S.sendsAll ? 'Only ' + esc(clientName()) : 'All clients') + '</button>' : '') +
       '<button class="cx-btn sm" data-act="sends-refresh">Refresh</button></header>';
-    if (!rows.length) {
-      html += '<div class="cx-state"><p>No sends' + (mineOnly ? ' for ' + esc(clientName()) + ' yet' : ' yet') + '.</p></div></div>';
-      el.innerHTML = html; return;
+    if (current.length) html += '<div class="cx-nowlist">' + current.map(nowCard).join('') + '</div>';
+    else html += '<div class="cx-note" style="border:0">No sends are running' + (mineOnly ? ' for ' + esc(clientName()) : '') + '. Start one with “Send to a campaign”.</div>';
+    if (parked.length) {
+      html += '<div class="cx-note"><button class="cx-more" data-act="sends-parked">' + (S.showParked ? 'Hide ' : 'Show ') + parked.length + ' send' + (parked.length === 1 ? '' : 's') + ' paused more than a day ago</button></div>';
+      if (S.showParked) html += '<div class="cx-nowlist">' + parked.map(nowCard).join('') + '</div>';
     }
+    html += '</div>';
+
+    // History.
+    html += '<div class="cx-card"><header><h3>History' + (mineOnly ? ' for ' + esc(clientName()) : '') + '</h3><p>finished sends, newest first, last 200</p></header>';
+    if (!S.sends) { el.innerHTML = html + '<div class="cx-state"><p>Loading…</p></div></div>'; return; }
+    if (S.sends.error) { el.innerHTML = html + '<div class="cx-state"><h3>Could not load the history</h3><p>' + esc(S.sends.error) + '</p><button class="cx-btn" data-act="sends-refresh">Try again</button></div></div>'; return; }
+    const rows = S.sends.filter(mine).filter((j) => j.source !== 'live')
+      .sort((x, y) => String(y.finished_at || y.started_at || '').localeCompare(String(x.finished_at || x.started_at || '')));
+    const cls = (st) => (st === 'completed' ? 'good' : st === 'failed' || st === 'error' ? 'bad' : st === 'paused' || st === 'cancelled' ? 'mute' : 'blue');
+    const when = (j) => { const d = parseDate(j.finished_at || j.started_at); return d ? d.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''; };
+    if (!rows.length) { el.innerHTML = html + '<div class="cx-state"><p>No finished sends' + (mineOnly ? ' for ' + esc(clientName()) : '') + ' yet.</p></div></div>'; return; }
     html += '<div class="scroll"><table class="cx-ptable cx-sendtable"><thead><tr><th class="l">When</th>' + (mineOnly ? '' : '<th class="l">Client</th>') +
-      '<th class="l">Campaign</th><th class="l">Status</th><th>Asked for</th><th>Verified</th><th>Sent to PlusVibe</th><th>Held back</th></tr></thead><tbody>';
+      '<th class="l">Campaign</th><th class="l">Result</th><th>Asked for</th><th>Checked</th><th>Sent to PlusVibe</th><th>Held back</th></tr></thead><tbody>';
     for (const j of rows) {
       let skipped = j.skipped;
       if (typeof skipped === 'string') { try { skipped = JSON.parse(skipped); } catch { skipped = {}; } }
-      const reasons = Object.entries(skipped || {}).filter(([, n]) => Number(n) > 0).sort((a, b) => b[1] - a[1]);
-      const held = j.skipped_total || reasons.reduce((a, [, n]) => a + Number(n), 0);
+      const reasons = Object.entries(skipped || {}).filter(([, n]) => Number(n) > 0).sort((x, y) => y[1] - x[1]);
+      const held = j.skipped_total || reasons.reduce((t, [, n]) => t + Number(n), 0);
       const open = S.sendOpen === j.id;
       const detail = reasons.length || j.error;
       html += '<tr class="' + (detail ? 'clickable' : '') + '"' + (detail ? ' data-act="send-row" data-id="' + esc(j.id) + '" title="Click to see why contacts were held back"' : '') + '>' +
         '<td class="cx-nowrap" style="text-align:left">' + esc(when(j)) + '</td>' + (mineOnly ? '' : '<td class="name">' + esc(j.workspace_name || '') + '</td>') +
         '<td class="name" title="' + esc(j.campaign_name || '') + '">' + esc(j.campaign_name || '') + '</td>' +
-        '<td style="text-align:left"><span class="cx-badge ' + cls(j.status) + '">' + esc(word(j.status)) + '</span></td>' +
+        '<td style="text-align:left"><span class="cx-badge ' + cls(j.status) + '">' + esc(JOB_WORD[j.status] || title(j.status)) + '</span></td>' +
         '<td>' + num(j.requested || 0) + '</td><td>' + num(j.verified || 0) + '</td><td><b>' + num(j.pushed || 0) + '</b></td>' +
         '<td>' + (held ? num(held) + (detail ? ' ' + (open ? '▾' : '▸') : '') : '<span class="cx-dim">0</span>') + '</td></tr>';
       if (open && detail) {
@@ -1181,10 +1225,7 @@
 
   function openMorePop() {
     const el = pop($('#moreWrap'),
-      '<div class="list"><div class="sect">Download</div>' +
-      '<button class="item" data-more="csv">Everything that matches (CSV)</button>' +
-      '<button class="item" data-more="csv-clean">Verified-safe only (CSV)</button>' +
-      '<div class="sect">Table</div>' +
+      '<div class="list"><div class="sect">Table</div>' +
       COLS.filter((c) => c.label).map((c) => '<label class="item" style="cursor:pointer"><input type="checkbox" data-col="' + c.id + '"' + (S.cols.includes(c.id) ? ' checked' : '') + ' style="accent-color:var(--cx-accent)"> ' + esc(c.label) + '</label>').join('') +
       '<label class="item" style="cursor:pointer"><input type="checkbox" data-more="compact"' + (S.compact ? ' checked' : '') + ' style="accent-color:var(--cx-accent)"> Compact rows</label>' +
       '<div class="sect">Other</div>' +
@@ -1368,58 +1409,111 @@
     });
   }
 
-  // ── Send jobs tray ───────────────────────────────────────────────────────
+  // ── Sends in progress ────────────────────────────────────────────────────
+  // The corner shows ONE small pill ("1 send running · 120 of 500"). Everything
+  // else about sends lives in the Sends tab, so the table is never covered.
   let jobsTimer = null;
-  const JOB_WORD = { queued: 'Waiting', verifying: 'Verifying', n2b_verifying: 'Second check', pushing: 'Sending', pausing: 'Pausing', paused: 'Paused', failed: 'Failed', error: 'Failed', completed: 'Done' };
-  // Old paused sends are parked, not shown. A send someone paused weeks ago is
-  // reloaded on every server start and would otherwise sit over the bottom
-  // right of the table for ever. Anything running, failed, or paused in the
-  // last day shows as a card; the rest collapse into one small pill.
-  let showParked = false;
+  let lastJobs = [];
+  let liveIds = '';
+  const JOB_WORD = { queued: 'Waiting', verifying: 'Verifying', n2b_verifying: 'Second check', pushing: 'Sending', pausing: 'Pausing', paused: 'Paused', failed: 'Failed', error: 'Failed', completed: 'Done', cancelled: 'Stopped' };
+  const LIVE = ['queued', 'verifying', 'n2b_verifying', 'pushing', 'pausing'];
+  const isLive = (j) => LIVE.includes(j.status);
+  const isFailed = (j) => j.status === 'failed' || j.status === 'error';
   const jobAgeHours = (j) => {
     const t = j.paused_at ? Date.parse(String(j.paused_at).replace(' ', 'T') + 'Z') : (j.created_at || 0);
     return t ? (Date.now() - t) / 3600000 : 0;
   };
-  function jobCard(j) {
-    const goal = j.target || j.total || 0;
-    const done = j.pushed || 0;
-    const w = goal ? Math.min(100, Math.round((done / goal) * 100)) : Math.round((j.progress || 0));
-    const live = ['queued', 'verifying', 'n2b_verifying', 'pushing'].includes(j.status);
-    const failed = j.status === 'failed' || j.status === 'error';
-    return '<div class="cx-job' + (failed ? ' failed' : '') + '"><div class="t"><b title="' + esc(j.campaign_name) + '">' + esc(j.workspace_name || '') + ' · ' + esc(j.campaign_name || '') + '</b><span>' + esc(JOB_WORD[j.status] || j.status) + (j.queuePosition ? ' (' + j.queuePosition + ')' : '') + '</span></div>' +
-      '<div class="p"><i style="width:' + w + '%"></i></div><div class="m"><span>' + num(done) + (goal ? ' of ' + num(goal) : '') + ' sent</span><span>' + num(j.verified || 0) + ' verified</span>' +
-      (j.status === 'paused' && j.paused_at ? '<span>since ' + esc(shortDate(j.paused_at)) + '</span>' : '') +
-      (failed && j.error ? '<span title="' + esc(j.error) + '">' + esc(String(j.error).slice(0, 40)) + '</span>' : '') +
-      (live ? '<button data-job="pause" data-id="' + esc(j.id) + '">Pause</button><button data-job="cancel" data-id="' + esc(j.id) + '">Stop</button>' : '') +
-      (j.status === 'paused' ? '<button data-job="resume" data-id="' + esc(j.id) + '">Resume</button><button data-job="cancel" data-id="' + esc(j.id) + '">Stop</button>' : '') + '</div></div>';
+  const jobGoal = (j) => j.target || j.total || 0;
+
+  // One plain sentence for where a send is.
+  function jobLine(j) {
+    const goal = j.target > 0 ? ' of ' + num(j.target) : '';
+    const round = j.round > 1 ? ' (top-up round ' + j.round + ')' : '';
+    if (j.status === 'queued') return j.queuePosition ? 'Waiting: ' + j.queuePosition + ' ahead of it' : 'Waiting for a free verifier slot';
+    if (j.status === 'verifying') return 'Checking emails: ' + num(j.verified || 0) + ' of ' + num(j.toVerify || j.total || 0) + round;
+    if (j.status === 'n2b_verifying') return 'Second check on ' + num(j.n2bTotal || 0) + ' catch-all addresses';
+    if (j.status === 'pushing') return 'Sending to PlusVibe: ' + num(j.pushed || 0) + goal + round;
+    if (j.status === 'pausing') return 'Pausing after the current batch';
+    if (j.status === 'paused') return 'Paused: ' + num(j.verified || 0) + ' checked, ' + num(j.pushed || 0) + ' sent so far' + (j.paused_at ? ', since ' + shortDate(j.paused_at) : '');
+    if (j.status === 'completed') return j.shortfall > 0 ? num(j.pushed || 0) + goal + ' sent, ' + num(j.shortfall) + ' short: ' + (j.shortfallReason || 'ran out of contacts that pass') : 'Done: ' + num(j.pushed || 0) + goal + ' sent';
+    if (j.status === 'cancelled') return 'Stopped';
+    return j.error || 'Failed';
   }
-  let lastJobs = [];
+
   function renderJobs() {
-    const parked = lastJobs.filter((j) => j.status === 'paused' && jobAgeHours(j) > 24);
-    const shown = lastJobs.filter((j) => !parked.includes(j));
-    const cards = (showParked ? shown.concat(parked) : shown).slice(0, 6).map(jobCard).join('');
-    const pill = parked.length ? '<button class="cx-jobpill" data-job-toggle>' + (showParked ? 'Hide ' : '') + parked.length + ' paused send' + (parked.length === 1 ? '' : 's') + (showParked ? '' : ' ›') + '</button>' : '';
-    $('#jobs').innerHTML = cards + pill;
-    if (S.tab === 'sends' && Array.isArray(S.sends) && lastJobs.some((j) => ['verifying', 'n2b_verifying', 'pushing'].includes(j.status))) {
-      // keep the record moving while a send runs
-      api('/api/contacts/push-history?limit=200').then((d) => { S.sends = d.jobs || []; renderSends(); }).catch(() => {});
-    }
+    const live = lastJobs.filter(isLive);
+    const paused = lastJobs.filter((j) => j.status === 'paused');
+    const failed = lastJobs.filter(isFailed);
+    const parts = [];
+    if (live.length === 1) parts.push('1 send running · ' + num(live[0].pushed || 0) + (jobGoal(live[0]) ? ' of ' + num(jobGoal(live[0])) : ''));
+    else if (live.length) parts.push(live.length + ' sends running');
+    if (failed.length) parts.push(failed.length + ' failed');
+    if (!live.length && paused.length) parts.push(paused.length + ' paused');
+    $('#jobs').innerHTML = parts.length
+      ? '<button class="cx-jobpill' + (live.length ? ' live' : '') + (failed.length ? ' bad' : '') + '" data-job-open title="Open the Sends tab">' + (live.length ? '<i></i>' : '') + esc(parts.join(' · ')) + '</button>'
+      : '';
+    if (S.tab === 'sends') renderSends();
   }
   async function pollJobs(soon) {
     clearTimeout(jobsTimer);
-    try { lastJobs = (await api('/api/contacts/push-jobs')).jobs || []; } catch { /* tray is optional */ }
+    try { lastJobs = (await api('/api/contacts/push-jobs')).jobs || []; } catch { /* optional */ }
+    // A send just started or finished: the history below it has changed too.
+    const ids = lastJobs.filter(isLive).map((j) => j.id).sort().join(',');
+    if (ids !== liveIds && S.tab === 'sends' && Array.isArray(S.sends)) {
+      api('/api/contacts/push-history?limit=200').then((d) => { S.sends = d.jobs || []; renderSends(); }).catch(() => {});
+    }
+    liveIds = ids;
     renderJobs();
-    const active = lastJobs.some((j) => ['queued', 'verifying', 'n2b_verifying', 'pushing', 'pausing'].includes(j.status));
-    jobsTimer = setTimeout(pollJobs, active || soon ? 4000 : 60000);
+    const active = lastJobs.some(isLive);
+    jobsTimer = setTimeout(pollJobs, active || soon ? 4000 : (S.tab === 'sends' ? 15000 : 60000));
+  }
+  async function jobAction(id, what) {
+    if (what === 'cancel' && !confirm('Stop this send? Contacts already sent stay in the campaign.')) return;
+    try { await api('/api/contacts/push-jobs/' + id + '/' + what, { method: 'POST' }); pollJobs(true); }
+    catch (err) { toast(err.message, true); }
   }
   function bindJobs() {
-    $('#jobs').addEventListener('click', async (e) => {
-      if (e.target.closest('[data-job-toggle]')) { showParked = !showParked; renderJobs(); return; }
-      const b = e.target.closest('[data-job]');
+    $('#jobs').addEventListener('click', (e) => {
+      if (!e.target.closest('[data-job-open]')) return;
+      S.tab = 'sends'; writeUrl(); renderTabs(); loadSends();
+    });
+  }
+
+  // ── CSV of rows held in the browser ──────────────────────────────────────
+  const CSV_COLS = ['email', 'first_name', 'last_name', 'job_title', 'seniority', 'company_name', 'company_domain', 'industry', 'num_employees',
+    'company_town', 'company_county', 'company_region', 'company_country', 'linkedin_url', 'email_status', 'email_verified_at', 'mx_provider', 'source', 'last_emailed_at'];
+  function downloadRowsCsv(rows, name) {
+    const cell = (v) => {
+      if (v == null) return '';
+      let t = String(v);
+      if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; // a leading = + - @ would run as a formula in a spreadsheet
+      return /[",\n\r]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+    };
+    const csvText = '﻿' + CSV_COLS.join(',') + '\n' + rows.map((r) => CSV_COLS.map((c) => cell(r[c])).join(',')).join('\n') + '\n';
+    const url = URL.createObjectURL(new Blob([csvText], { type: 'text/csv;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+  function downloadMatching(clean) {
+    const p = filterParams(); if (clean) p.set('clean', '1');
+    toast('Preparing the download…');
+    location.href = '/api/cx/export.csv?' + p.toString();
+  }
+  function openDownloadPop(anchor) {
+    const el = pop(anchor,
+      '<div class="list"><div class="sect">Download as CSV</div>' +
+      '<button class="item" data-dl="all">Everything that matches<span class="sub">up to 200,000</span></button>' +
+      '<button class="item" data-dl="clean">Verified-safe only<span class="sub">safe to send to</span></button>' +
+      (S.sel.size ? '<button class="item" data-dl="ticked">The ' + num(S.sel.size) + ' ticked rows</button>' : '<div class="empty" style="padding:8px 10px;font-size:12px">Tick rows to download just those.</div>') +
+      '</div>', true);
+    el.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-dl]');
       if (!b) return;
-      if (b.dataset.job === 'cancel' && !confirm('Stop this send? Contacts already sent stay in the campaign.')) return;
-      try { await api('/api/contacts/push-jobs/' + b.dataset.id + '/' + b.dataset.job, { method: 'POST' }); pollJobs(true); }
-      catch (err) { toast(err.message, true); }
+      closePop();
+      if (b.dataset.dl === 'ticked') { downloadRowsCsv([...S.sel.values()], 'contacts-ticked-' + S.sel.size + '.csv'); toast('Downloaded ' + num(S.sel.size) + ' rows'); }
+      else downloadMatching(b.dataset.dl === 'clean');
     });
   }
 
