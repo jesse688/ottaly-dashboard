@@ -1153,7 +1153,7 @@ app.use(async (req, res, next) => {
   }
   next();
 });
-const PUBLIC_BROWSER_JS = new Set(['/nav.js', '/splash.js', '/next-step.js', '/ch-fields-client.js']);
+const PUBLIC_BROWSER_JS = new Set(['/nav.js', '/splash.js', '/next-step.js', '/ch-fields-client.js', '/contacts-next-app.js']);
 const PUBLIC_STATIC_RE  = /^\/(?:[A-Za-z0-9_-]+\.(?:html|css|svg|png|ico)|assets\/[A-Za-z0-9_.-]+\.(?:svg|png|jpe?g|webp|gif|ico))$/;
 app.use((req, res, next) => {
   const p = req.path;
@@ -27490,7 +27490,13 @@ function scheduleAudienceScoring(pgdb) {
         }
       } catch (e) { console.warn('[enrich] auto-resume check failed:', e.message); }
     }, 8000);
-    app.use('/api', contactsAPI(pgdb));
+    app.use('/api', contactsAPI(pgdb, { requireSession, requireAdmin }));
+    // Contacts v2 (contacts-next.html). Read API + saved views; pushing still
+    // goes through the existing push routes. See api-contacts-next.js.
+    app.use('/api/cx', requireSession, require('./api-contacts-next')({ pgdb, getSqlite: () => db }));
+    app.get('/contacts-next', (req, res) => {
+      res.sendFile(path.join(__dirname, 'contacts-next.html'));
+    });
     app.get('/contacts', (req, res) => {
       res.sendFile(path.join(__dirname, 'contacts.html'));
     });

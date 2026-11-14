@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="theme-color" content="#050C29">
+  <title>Contacts — Ottaly</title>
+  <link href="https://fonts.googleapis.com/css2?family=Genos:wght@600;700;800&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/ottaly.css">
+  <link rel="stylesheet" href="/contacts-next.css">
+  <script src="/nav.js" defer></script>
+</head>
+<body class="cx">
+<div class="cx-shell">
+
+  <!-- Top bar: the client is the anchor of the page, so it sits first. -->
+  <div class="cx-top">
+    <button class="cx-topbtn cx-railbtn" id="railBtn" aria-label="Show filters">Filters</button>
+    <div class="cx-brand">Contacts<small>new</small></div>
+
+    <div class="cx-client" id="clientWrap">
+      <button class="cx-client-btn" id="clientBtn" aria-haspopup="listbox" aria-expanded="false">
+        <span>
+          <span class="lbl">Client</span><br>
+          <span class="val" id="clientVal">Choose a client</span>
+        </span>
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" style="margin-left:auto"><path d="M2.5 4.5 6 8l3.5-3.5"/></svg>
+      </button>
+    </div>
+
+    <div class="cx-search">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="7" cy="7" r="5"/><path d="m11 11 3.5 3.5"/></svg>
+      <input id="q" type="search" placeholder="Search name, email, company, or what the business does" autocomplete="off" spellcheck="false">
+      <kbd>/</kbd>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="cx-rel" id="viewsWrap"><button class="cx-topbtn" id="viewsBtn">Saved views</button></div>
+    <div class="cx-rel" id="moreWrap"><button class="cx-topbtn" id="moreBtn" aria-label="More">More</button></div>
+  </div>
+
+  <div class="cx-body">
+    <!-- Filters -->
+    <aside class="cx-rail" id="rail" aria-label="Filters"></aside>
+
+    <!-- Results -->
+    <main class="cx-main">
+      <div class="cx-funnel" id="funnel"></div>
+      <div class="cx-chips" id="chips"></div>
+      <div class="cx-tabs" id="tabs"></div>
+      <div class="cx-tablewrap" id="tablewrap"></div>
+      <div class="cx-works" id="works" hidden></div>
+      <div class="cx-foot" id="foot"></div>
+    </main>
+  </div>
+</div>
+
+<aside class="cx-drawer" id="drawer" aria-label="Contact details" aria-hidden="true"></aside>
+<div id="dialogHost"></div>
+<div class="cx-jobs" id="jobs"></div>
+<div id="toastHost"></div>
+
+<script src="/contacts-next-app.js" defer></script>
+</body>
+</html>
