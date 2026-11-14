@@ -183,6 +183,36 @@ async function backfillHeadcount(client) {
   return true;
 }
 
+// ── Empty the stale audience scores ─────────────────────────────────────────
+// audience_scores held 6.7M rows / 7.9 GB, last computed 2026-09-11. Its only
+// reader is the "recommended" panel on the classic contacts page; the "What
+// works" tab on the new page replaces it and reads live reply data instead.
+// Emptied once, with Jesse's OK (2026-11-14). The table itself stays, so the
+// classic panel shows "no scores yet" rather than an error, and its Refresh
+// button can still rebuild scores if anyone wants them back.
+const AUDIENCE_MIGRATION = 'audience-scores-truncate-v1';
+async function emptyAudienceScores(client) {
+  await client.query(`CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, ran_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
+  if ((await client.query(`SELECT 1 FROM _migrations WHERE name = $1`, [AUDIENCE_MIGRATION])).rows.length) return true;
+  try {
+    const exists = await client.query(`SELECT to_regclass('public.audience_scores') AS t`);
+    if (exists.rows[0].t) {
+      const before = await client.query(`SELECT pg_size_pretty(pg_total_relation_size('audience_scores')) AS size, (SELECT reltuples::bigint FROM pg_class WHERE oid = 'audience_scores'::regclass) AS n`);
+      await client.query('BEGIN');
+      await client.query(`SET LOCAL lock_timeout = '5s'`);
+      await client.query(`TRUNCATE TABLE audience_scores`);
+      await client.query('COMMIT');
+      log(`audience_scores emptied (was ${before.rows[0].size}, about ${before.rows[0].n} rows)`);
+    }
+    await client.query(`INSERT INTO _migrations (name) VALUES ($1) ON CONFLICT DO NOTHING`, [AUDIENCE_MIGRATION]);
+    return true;
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch { /* not in a transaction */ }
+    warn('audience_scores not emptied:', e.message);
+    return false;
+  }
+}
+
 // One pass. Returns true when nothing is left to do.
 async function runOnce(pgdb) {
   const pool = pgdb.bgPool || pgdb.pool;
@@ -195,7 +225,8 @@ async function runOnce(pgdb) {
     const dropped = await dropUnused(client);
     const built = await buildNeeded(client);
     const filled = process.env.CONTACTS_NEXT_SKIP_HEADCOUNT === '1' ? true : await backfillHeadcount(client);
-    return dropped && built && filled;
+    const emptied = await emptyAudienceScores(client);
+    return dropped && built && filled && emptied;
   } finally {
     if (locked) { try { await client.query(`SELECT pg_advisory_unlock($1)`, [LOCK_KEY]); } catch { /* ending the session frees it */ } }
     try { await client.query(`SET statement_timeout = 45000`); } catch { /* connection may be dead */ }
