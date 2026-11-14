@@ -38,8 +38,8 @@
       color: '#0891B2',
       icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>',
       pages: [
-        { href: 'contacts.html',        label: 'Contacts' },
-        { href: 'contacts-next.html',   label: 'Contacts (new)' },
+        { href: 'contacts-next.html',   label: 'Contacts' },
+        { href: 'contacts.html',        label: 'Contacts (classic)' },
         { href: 'engine-leads.html',    label: 'Engine Leads' },
         { href: 'companies-house.html', label: 'CH Pipeline' },
         { href: 'database.html',        label: 'Database' },

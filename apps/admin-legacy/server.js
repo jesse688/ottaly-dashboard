@@ -27501,8 +27501,10 @@ function scheduleAudienceScoring(pgdb) {
     app.get('/contacts-next', (req, res) => {
       res.sendFile(path.join(__dirname, 'contacts-next.html'));
     });
+    // /contacts opens the new page. The original stays at /contacts.html for
+    // imports and admin tools.
     app.get('/contacts', (req, res) => {
-      res.sendFile(path.join(__dirname, 'contacts.html'));
+      res.sendFile(path.join(__dirname, 'contacts-next.html'));
     });
     // Sync technologies → email_* tags for all contacts. Fast single-pass
     // bulk UPDATE so Email Provider counts include tech-stack data.

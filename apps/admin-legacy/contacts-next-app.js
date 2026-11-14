@@ -298,7 +298,7 @@
       if (my !== seq) return;
       S.rows = d.contacts || []; S.total = d.total || 0; S.capped = !!d.capped;
       S.rules = d.rules || []; S.plan = d.plan; S.ms = d.ms; S.unsorted = !!d.unsorted;
-      S.maxOffset = d.maxOffset || 100000; S.countUnknown = !!d.countUnknown;
+      S.maxOffset = d.maxOffset || 100000; S.countUnknown = !!d.countUnknown; S.countPending = !!d.countPending;
     } catch (e) {
       if (e.name === 'AbortError' || my !== seq) return;
       S.rows = []; S.total = 0; S.capped = false; S.error = e.message;
@@ -307,7 +307,19 @@
     setBusy(false);
     renderTable(); renderFoot(); renderChips(); renderTabs(); renderFunnel();
     if (S.error) return;
+    if (S.countPending) loadCount(my);
     loadSummary(my); loadFacets(my); loadSendability(my);
+  }
+
+  // The list came back before the server finished counting. Fill the total in
+  // when it is ready; the rows on screen do not change.
+  async function loadCount(my) {
+    try {
+      const d = await api('/api/cx/count?' + filterParams().toString());
+      if (my !== seq) return;
+      S.total = d.total || 0; S.capped = !!d.capped; S.countUnknown = !!d.countUnknown; S.countPending = false;
+    } catch { if (my === seq) { S.countPending = false; S.countUnknown = true; } }
+    renderFunnel(); renderFoot();
   }
 
   async function loadSummary(my) {
@@ -679,7 +691,7 @@
     const el = $('#funnel');
     const sm = S.summary && !S.summary.failed ? S.summary : null;
     const approx = sm && sm.approx ? '~' : '';
-    const matched = S.capped ? (sm ? approx + num(sm.matched) : (S.countUnknown ? 'Many' : num(S.total) + '+')) : num(S.total);
+    const matched = S.capped ? (sm ? approx + num(sm.matched) : (S.countPending ? 'Counting…' : S.countUnknown ? 'Many' : num(S.total) + '+')) : num(S.total);
     const step = (k, v, s, cls) => '<div class="cx-step ' + (cls || '') + '"><div class="k">' + k + '</div><div class="v">' + v + '</div><div class="s">' + (s || '&nbsp;') + '</div></div>';
     let html = step('Matching contacts', S.busy && !S.rows.length ? '…' : matched, sm && sm.companies != null ? num(sm.companies) + ' companies' : (sm && sm.approx ? 'estimated from a sample' : ''));
     html += step('Verified safe', sm ? approx + num(sm.verified) : '…', sm ? approx + num(sm.verifiedFresh) + ' checked in the last ' + sm.freshVerdictDays + ' days' : '');
@@ -775,7 +787,7 @@
     const from = S.total ? S.page * S.pageSize + 1 : 0;
     const to = S.page * S.pageSize + S.rows.length;
     const sm = S.summary && !S.summary.failed ? S.summary : null;
-    const of = S.capped ? (sm ? (sm.approx ? 'about ' : '') + num(sm.matched) : num(S.total) + '+') : num(S.total);
+    const of = S.capped ? (sm ? (sm.approx ? 'about ' : '') + num(sm.matched) : (S.countPending || S.countUnknown ? 'many' : num(S.total) + '+')) : num(S.total);
     const last = (!S.capped && to >= S.total) || (S.page + 1) * S.pageSize > (S.maxOffset || 100000);
     el.innerHTML = '<span>' + (S.total ? num(from) + '–' + num(to) + ' of ' + of : 'No results') + '</span>' +
       '<button class="cx-btn sm" data-act="prev"' + (S.page ? '' : ' disabled') + '>Previous</button>' +
