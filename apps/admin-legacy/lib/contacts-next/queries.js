@@ -145,14 +145,15 @@ function once(key, fn) {
 // Exact up to COUNT_CAP, then { capped: true }. Returns both values together;
 // the original read a `_lastCountCapped` instance field after an await, which
 // two concurrent searches could swap.
-async function cappedCount(db, tenant, filters) {
-  const key = `cnt|${tenant}|${filterSignature(filters)}`;
+async function cappedCount(db, tenant, filters, cap = COUNT_CAP) {
+  cap = Math.max(1, Math.min(parseInt(cap, 10) || COUNT_CAP, COUNT_CAP));
+  const key = `cnt|${cap}|${tenant}|${filterSignature(filters)}`;
   const hit = countCache.get(key);
   if (hit) return hit;
   return once(key, async () => {
     const { where, params } = whereFor(db, filters);
     const sql = `SELECT COUNT(*)::int AS n FROM (
-        SELECT 1 FROM contacts WHERE workspace_id = $1${where} LIMIT ${COUNT_CAP + 1}
+        SELECT 1 FROM contacts WHERE workspace_id = $1${where} LIMIT ${cap + 1}
       ) t`;
     let n;
     try {
@@ -161,71 +162,100 @@ async function cappedCount(db, tenant, filters) {
       if (!isTimeout(e)) throw e;
       // Too slow to count. Report "unknown" rather than hold the connection:
       // callers treat it like a broad filter and bound their own work.
-      return countCache.set(key, { count: COUNT_CAP, capped: true, unknown: true }, 30000);
+      return countCache.set(key, { count: cap, capped: true, unknown: true }, 30000);
     }
-    const out = { count: Math.min(n, COUNT_CAP), capped: n > COUNT_CAP, unknown: false };
+    const out = { count: Math.min(n, cap), capped: n > cap, unknown: false };
     return countCache.set(key, out, 30000);
   });
 }
 
 // ── Search ──────────────────────────────────────────────────────────────────
+// The list must never wait on the count. Counting up to COUNT_CAP matches can
+// take seconds when every row has to pass expensive checks (a client's reply
+// facts, keyword exclusions: 7.5s measured on production for "Ready now" with
+// a client), while the first page of the same filter comes back in under a
+// second. So:
+//
+//   1. A cheap probe: "are there more than PROBE_CAP matches?" It stops at
+//      PROBE_CAP+1, so it costs a fraction of the full count.
+//   2. Few matches  -> NARROW plan: fetch them all by whatever suits the
+//      filter, sort that small set. The probe's count is the exact total.
+//   3. Many matches -> start the full capped count AND the sorted page read
+//      together and answer with whichever settles the question first. If the
+//      page arrives while the count is still running, the rows go out now with
+//      countPending:true and the page asks /api/cx/count for the total.
+const PROBE_CAP = 500;
+
+function narrowSql(where, order, n) {
+  // OFFSET 0 is an optimisation fence: it stops the planner from "helpfully"
+  // walking an ordering index and discarding millions of non-matching rows.
+  const inner = [...new Set([...LIST_COLS, 'pushed_campaigns'])].join(', ');
+  return `SELECT ${LIST_SELECT} FROM (
+      SELECT ${inner} FROM contacts WHERE workspace_id = $1${where} OFFSET 0
+    ) contacts
+    ORDER BY ${order} LIMIT $${n + 2} OFFSET $${n + 3}`;
+}
+
 async function search(db, tenant, filters, opts = {}) {
   const limit = Math.max(1, Math.min(parseInt(opts.limit, 10) || 100, 500));
   const offset = Math.max(0, Math.min(parseInt(opts.offset, 10) || 0, MAX_OFFSET));
   const order = orderBy(opts.sort, opts.dir, filters);
   const { where, params } = whereFor(db, filters);
+  const args = [tenant, ...params, limit, offset];
   const t0 = Date.now();
+  const done = (o) => ({ limit, offset, maxOffset: MAX_OFFSET, unsorted: false, countPending: false, countUnknown: false, ...o, ms: Date.now() - t0 });
 
-  const { count, capped, unknown } = await cappedCount(db, tenant, filters);
-  let rows = [];
-  let plan = 'empty';
-  let unsorted = false;
-  if (count > 0) {
-    if (!capped) {
-      // NARROW (<= COUNT_CAP matches). Find the matching rows by whatever
-      // access path suits the FILTER, then sort that small set. OFFSET 0 is an
-      // optimisation fence: it stops the planner from "helpfully" walking an
-      // ordering index and discarding millions of non-matching rows.
-      plan = 'narrow';
-      const inner = [...new Set([...LIST_COLS, 'pushed_campaigns'])].join(', ');
-      const sql = `SELECT ${LIST_SELECT} FROM (
-          SELECT ${inner} FROM contacts WHERE workspace_id = $1${where} OFFSET 0
-        ) contacts
-        ORDER BY ${order} LIMIT $${params.length + 2} OFFSET $${params.length + 3}`;
-      rows = (await db.query(sql, [tenant, ...params, limit, offset])).rows;
-    } else {
-      // BROAD (> COUNT_CAP matches). Matches are dense, so reading rows in
-      // sort order and filtering as we go fills a page after a short walk.
-      plan = 'broad';
-      const sql = `SELECT ${LIST_SELECT} FROM contacts
-        WHERE workspace_id = $1${where}
-        ORDER BY ${order} LIMIT $${params.length + 2} OFFSET $${params.length + 3}`;
-      try {
-        rows = (await timedQuery(db, sql, [tenant, ...params, limit, offset], BROAD_SORT_TIMEOUT_MS)).rows;
-      } catch (e) {
-        if (!isTimeout(e)) throw e;
-        // The ordered read did not finish in time. That happens when the
-        // matches sit at the far end of the sort order (or before
-        // idx_contacts_best_order has been built: measured 4.9s on production
-        // without it). Rather than a spinner or an error, return the page in
-        // id order, which stops as soon as the page is full, and say so. id
-        // order (not "no order") keeps pages from overlapping.
-        plan = 'broad-unsorted';
-        unsorted = true;
-        const fast = `SELECT ${LIST_SELECT} FROM contacts
-          WHERE workspace_id = $1${where} ORDER BY id LIMIT $${params.length + 2} OFFSET $${params.length + 3}`;
-        try {
-          rows = (await timedQuery(db, fast, [tenant, ...params, limit, offset], BROAD_SORT_TIMEOUT_MS * 2)).rows;
-        } catch (e2) {
-          if (!isTimeout(e2)) throw e2;
-          const err = new Error('This filter is too slow to run on its own. Add another filter (a region, a size or a seniority) to narrow it first.');
-          err.tooSlow = true;
-          throw err;
-        }
-      }
-    }
+  const probe = await cappedCount(db, tenant, filters, PROBE_CAP);
+  if (!probe.capped) {
+    if (!probe.count) return done({ contacts: [], total: 0, capped: false, plan: 'empty' });
+    const rows = (await db.query(narrowSql(where, order, params.length), args)).rows;
+    return done({ contacts: rows, total: probe.count, capped: false, plan: 'narrow' });
   }
-  return { contacts: rows, total: count, capped, countUnknown: !!unknown, limit, offset, maxOffset: MAX_OFFSET, plan, unsorted, ms: Date.now() - t0 };
+
+  // More than PROBE_CAP matches (or the probe itself timed out).
+  const broadSql = `SELECT ${LIST_SELECT} FROM contacts
+    WHERE workspace_id = $1${where}
+    ORDER BY ${order} LIMIT $${params.length + 2} OFFSET $${params.length + 3}`;
+  const countP = cappedCount(db, tenant, filters);
+  const pageP = timedQuery(db, broadSql, args, BROAD_SORT_TIMEOUT_MS).then((r) => ({ rows: r.rows }), (e) => ({ error: e }));
+  countP.catch(() => {}); // never an unhandled rejection if the page answers first
+
+  const first = await Promise.race([countP.then((c) => ({ count: c }), (e) => ({ countError: e })), pageP]);
+
+  if (first.rows) {
+    // The sorted page is in. Use the count if it happens to be ready (cache
+    // hit), otherwise say it is still coming.
+    const ready = await Promise.race([countP.catch(() => null), new Promise((ok) => setTimeout(() => ok(undefined), 5))]);
+    if (ready) return done({ contacts: first.rows, total: ready.count, capped: ready.capped, countUnknown: !!ready.unknown, plan: 'broad' });
+    return done({ contacts: first.rows, total: PROBE_CAP, capped: true, countPending: true, plan: 'broad' });
+  }
+
+  // The count settled first (or the sorted read failed).
+  const count = first.count || (await countP);
+  if (!count.capped) {
+    // Between PROBE_CAP and COUNT_CAP matches: small enough to sort outright.
+    const rows = (await db.query(narrowSql(where, order, params.length), args)).rows;
+    return done({ contacts: rows, total: count.count, capped: false, plan: 'narrow' });
+  }
+  const page = first.error ? first : await pageP;
+  if (page.rows) return done({ contacts: page.rows, total: count.count, capped: true, countUnknown: !!count.unknown, plan: 'broad' });
+  if (!isTimeout(page.error)) throw page.error;
+
+  // The ordered read did not finish in time. That happens when the matches sit
+  // at the far end of the sort order. Rather than a spinner or an error, return
+  // the page in id order, which stops as soon as the page is full, and say so.
+  // id order (not "no order") keeps pages from overlapping.
+  const fast = `SELECT ${LIST_SELECT} FROM contacts
+    WHERE workspace_id = $1${where} ORDER BY id LIMIT $${params.length + 2} OFFSET $${params.length + 3}`;
+  try {
+    const rows = (await timedQuery(db, fast, args, BROAD_SORT_TIMEOUT_MS * 2)).rows;
+    return done({ contacts: rows, total: count.count, capped: true, countUnknown: !!count.unknown, unsorted: true, plan: 'broad-unsorted' });
+  } catch (e2) {
+    if (!isTimeout(e2)) throw e2;
+    const err = new Error('This filter is too slow to run on its own. Add another filter (a region, a size or a seniority) to narrow it first.');
+    err.tooSlow = true;
+    throw err;
+  }
 }
 
 // ── Sampling ────────────────────────────────────────────────────────────────
@@ -242,8 +272,22 @@ async function tableRows(db) {
 // fixed-seed table sample is read and every count is scaled up; `sampled` tells
 // the UI to show "~". The seed is fixed so the same filter gives the same
 // numbers on every refresh instead of jittering.
+// How long facets / the funnel wait for the full count before assuming the
+// filter is broad and reading a sample instead.
+const SAMPLE_DECISION_WAIT_MS = 2500;
 async function sampleSource(db, tenant, filters) {
-  const { capped } = await cappedCount(db, tenant, filters);
+  const probe = await cappedCount(db, tenant, filters, PROBE_CAP);
+  let capped = probe.capped;
+  if (capped) {
+    const full = await Promise.race([
+      cappedCount(db, tenant, filters).catch(() => null),
+      new Promise((ok) => setTimeout(() => ok(null), SAMPLE_DECISION_WAIT_MS)),
+    ]);
+    // Not known in time: treat as broad. A sample of a mid-sized filter is a
+    // rougher number, shown with "~", and is replaced by an exact one on the
+    // next refresh once the count is cached.
+    capped = full ? full.capped : true;
+  }
   const total = await tableRows(db);
   if (!capped || total <= SAMPLE_TARGET_ROWS * 1.5) return { from: 'contacts', scale: 1, sampled: false };
   const pct = Math.max(1, Math.min(100, Math.round((SAMPLE_TARGET_ROWS / total) * 1000) / 10));

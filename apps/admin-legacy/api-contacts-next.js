@@ -118,6 +118,17 @@ module.exports = ({ pgdb, getSqlite }) => {
     }
   });
 
+  // The (capped) total for the current filter. The list answers before a slow
+  // count has finished; the page then asks here. Shares the in-flight count
+  // the search already started, so it costs nothing extra.
+  router.get('/count', async (req, res) => {
+    try {
+      const { filters } = resolve(req);
+      const c = await Q.cappedCount(pgdb, tenantOf(req), filters);
+      res.json({ total: c.count, capped: c.capped, countUnknown: !!c.unknown });
+    } catch (err) { fail(res, 'count', err); }
+  });
+
   // The resolved filter for the page's current state, without running a
   // search. The send dialog calls this at the moment of sending, so the filter
   // it hands to the push can never be a stale or missing one.

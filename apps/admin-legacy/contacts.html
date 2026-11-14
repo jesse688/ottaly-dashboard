@@ -923,6 +923,10 @@
     <script src="/nav.js" defer></script>
 </head>
 <body>
+<div style="background:#fde68a;color:#5b3d00;font:600 12px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;text-align:center;padding:6px 12px;">
+  This is the classic contacts page, kept for imports and admin tools.
+  <a href="/contacts-next.html" style="color:#1f6f78;font-weight:700;">Open the new Contacts page</a>
+</div>
 <div style="background:#050C29;padding:.6rem 1.5rem;border-bottom:3px solid #1F6F78;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:200;gap:.5rem">
   <div style="display:flex;align-items:center;gap:.5rem;flex-shrink:0">
     <button id="mobFilterToggle" onclick="toggleMobSidebar()" aria-label="Show filters">
@@ -3456,6 +3460,29 @@
     }
 
     function clearFilters() {
+      // Reset EVERY control in the filter sidebar to how the page loads, not
+      // just a hand-kept list of ids. The list below predates most of the
+      // sidebar, so Clear used to leave on: sources, batch tag, data age,
+      // fresh/stale, remote, building, solar, ads, Companies House status and
+      // flags, name/company presence, Apollo/PlusVibe history and reply facts.
+      // Results stayed narrowed with nothing on screen saying why.
+      // The client picker and the campaign-recall pickers are context, not
+      // filters, and are left as they are.
+      const KEEP_ON_CLEAR = new Set(['clientFilter', 'recallClient', 'recallCampaign']);
+      document.querySelectorAll('.sidebar input, .sidebar select, .sidebar textarea').forEach(el => {
+        if (KEEP_ON_CLEAR.has(el.id)) return;
+        if (el.type === 'checkbox' || el.type === 'radio') { el.checked = el.defaultChecked; return; }
+        if (el.type === 'button' || el.type === 'submit' || el.type === 'file') return;
+        if (el.tagName === 'SELECT') {
+          const def = [...el.options].find(o => o.defaultSelected);
+          el.value = def ? def.value : (el.options[0] ? el.options[0].value : '');
+          return;
+        }
+        el.value = el.defaultValue || '';
+      });
+      document.querySelectorAll('.factRow').forEach(r => { try { setFactState(r, 'off'); } catch {} });
+      // Apollo priority tiers sit in the toolbar but are a search filter.
+      document.querySelectorAll('.tierCb').forEach(cb => { cb.checked = false; });
       ['globalSearch','company','status'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.value = '';
@@ -3480,7 +3507,12 @@
       popupMode = 'include';
       closePopup();
       currentPage = 0;
-      search();
+      // With a client selected, re-apply that client's own settings (remote,
+      // building, do-not-contact), which the reset above just returned to page
+      // defaults. applyClientFilter() runs the search itself.
+      const _cf = document.getElementById('clientFilter');
+      if (_cf && _cf.value && typeof applyClientFilter === 'function') applyClientFilter();
+      else search();
     }
 
     function handleQuickSearch(event) {
