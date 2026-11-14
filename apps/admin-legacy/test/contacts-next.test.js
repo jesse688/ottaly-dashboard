@@ -187,7 +187,7 @@ test('industry values are normalised the same way in JS and in the filter', () =
 });
 
 test('tier A alone adds an index-friendly status condition; other tier sets do not', () => {
-  const hint = "email_status IN ('safe','safe_catchall')";
+  const hint = PostgresDatabase.TIER_A_INDEX_PREDICATE;
   assert.ok(build({ tier: 'A' }).clauses.includes(hint));
   assert.ok(!build({ tier: 'A,B' }).clauses.includes(hint));
   assert.ok(!build({ tier: 'C' }).clauses.includes(hint));
@@ -211,4 +211,13 @@ test('upkeep drops only the two indexes proven unused, and never one it builds',
   const built = m.BUILD_INDEXES.map((x) => x[0]);
   for (const d of m.DROP_INDEXES) assert.ok(!built.includes(d));
   assert.ok(!m.DROP_INDEXES.includes('idx_contacts_technologies_trgm'), 'the Technologies filter uses this index');
+});
+
+test('the tier A index uses the same predicate text as the tier A filter', () => {
+  const m = require('../lib/contacts-next/maintenance');
+  const idx = m.BUILD_INDEXES.find((x) => x[0] === 'idx_contacts_tier_a');
+  assert.ok(idx, 'idx_contacts_tier_a is not in BUILD_INDEXES');
+  assert.ok(idx[1].includes(PostgresDatabase.TIER_A_INDEX_PREDICATE));
+  // Tier A in TIER_SQL requires both halves of that predicate.
+  assert.ok(PostgresDatabase.UNTOUCHED_SQL.includes('last_emailed_at IS NULL'));
 });

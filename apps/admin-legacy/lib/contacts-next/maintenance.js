@@ -43,7 +43,15 @@ const DROP_INDEXES = ['idx_contacts_keywords_trgm', 'idx_contacts_raw_data_gin']
 //   idx_contacts_emailed_ws_keys makes `emailed_workspaces ? <client>` an index
 //       lookup. The older GIN on that column is jsonb_path_ops, which does not
 //       support `?`, so "everything this client was sent" was a full scan.
+//   idx_contacts_tier_a          a small partial index over tier A candidates
+//       (verified safe, never emailed), newest import first. Serves the "Ready
+//       now" quick pick, which was a 6s walk of the general sort index.
+const { TIER_A_INDEX_PREDICATE } = require('../../db-postgres');
 const BUILD_INDEXES = [
+  ['idx_contacts_tier_a',
+   `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_contacts_tier_a
+      ON contacts (workspace_id, imported_at DESC NULLS LAST, id)
+      WHERE ${TIER_A_INDEX_PREDICATE}`],
   ['idx_contacts_best_order',
    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_contacts_best_order
       ON contacts (workspace_id, last_emailed_at ASC NULLS FIRST, imported_at DESC NULLS LAST, id)`],
