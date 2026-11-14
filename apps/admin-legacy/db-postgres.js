@@ -2750,8 +2750,14 @@ class PostgresDatabase {
       // It removes nothing the CASE would keep: email_status is always stored
       // lower case (checked 2026-11-14) and the CASE requires the same two
       // values.
+      //
+      // Tier A also means never sent, so last_emailed_at IS NULL. Stating both
+      // lets idx_contacts_tier_a (a small partial index over exactly these
+      // rows, newest import first) answer "Ready now" directly: the status
+      // condition alone still left a 6s walk of the general sort index
+      // (measured on production after the first attempt).
       if (want.length === 1 && want[0] === 'A') {
-        clauses.push(`email_status IN ('safe','safe_catchall')`);
+        clauses.push(PostgresDatabase.TIER_A_INDEX_PREDICATE);
       }
     });
 
@@ -2827,6 +2833,11 @@ class PostgresDatabase {
 
     return { clauses, params };
   }
+
+  // The WHERE of idx_contacts_tier_a (lib/contacts-next/maintenance.js). The
+  // filter clause and the index must use this exact text or Postgres will not
+  // match them, so both read it from here.
+  static TIER_A_INDEX_PREDICATE = `email_status IN ('safe','safe_catchall') AND last_emailed_at IS NULL`;
 
   // One spelling per industry. The data mixes two vocabularies that differ only
   // in "&" vs "and" for dozens of industries, which split every count in two.

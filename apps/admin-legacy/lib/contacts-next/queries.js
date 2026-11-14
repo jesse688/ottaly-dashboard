@@ -74,7 +74,15 @@ const SORTS = {
   industry:     { asc: `LOWER(industry) ASC NULLS LAST, id`,      desc: `LOWER(industry) DESC NULLS LAST, id` },
 };
 
-function orderBy(sort, dir) {
+function orderBy(sort, dir, filters) {
+  // Tier A alone + "best first": every tier A row has last_emailed_at NULL, so
+  // the first sort key is the same for all of them and "best first" reduces to
+  // newest import first. Written that way, the ORDER BY matches
+  // idx_contacts_tier_a and the page comes straight off that index. The rows
+  // and their order are identical either way.
+  if ((!sort || sort === 'best' || !SORTS[sort]) && filters && String(filters.tier || '').trim().toUpperCase() === 'A') {
+    return `imported_at DESC NULLS LAST, id`;
+  }
   const s = SORTS[sort] || SORTS.best;
   return dir === 'asc' ? s.asc : s.desc;
 }
@@ -164,7 +172,7 @@ async function cappedCount(db, tenant, filters) {
 async function search(db, tenant, filters, opts = {}) {
   const limit = Math.max(1, Math.min(parseInt(opts.limit, 10) || 100, 500));
   const offset = Math.max(0, Math.min(parseInt(opts.offset, 10) || 0, MAX_OFFSET));
-  const order = orderBy(opts.sort, opts.dir);
+  const order = orderBy(opts.sort, opts.dir, filters);
   const { where, params } = whereFor(db, filters);
   const t0 = Date.now();
 
