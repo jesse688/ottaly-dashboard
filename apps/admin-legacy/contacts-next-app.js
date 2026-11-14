@@ -248,7 +248,7 @@
       if (k === 'client') S.client = v;
       else if (k === 'sort') S.sort = v;
       else if (k === 'dir') S.dir = v === 'asc' ? 'asc' : 'desc';
-      else if (k === 'tab') S.tab = v === 'works' ? 'works' : 'contacts';
+      else if (k === 'tab') S.tab = v === 'works' || v === 'sends' ? v : 'contacts';
       else if (k === 'page') S.page = Math.max(0, (parseInt(v, 10) || 1) - 1);
       else if (known.has(k)) { if (v === '') delete f[k]; else f[k] = v; }
     }
@@ -730,9 +730,11 @@
     }
     el.innerHTML = '<button class="cx-tab' + (S.tab === 'contacts' ? ' on' : '') + '" data-tab="contacts">Contacts</button>' +
       '<button class="cx-tab' + (S.tab === 'works' ? ' on' : '') + '" data-tab="works">What works' + (S.client ? ' for ' + esc(clientName()) : '') + (works ? '<span class="dot"></span>' : '') + '</button>' +
+      '<button class="cx-tab' + (S.tab === 'sends' ? ' on' : '') + '" data-tab="sends">Sends</button>' +
       '<div class="grow"></div><div class="meta">' + right + '</div>';
     $('#tablewrap').hidden = S.tab !== 'contacts';
     $('#works').hidden = S.tab !== 'works';
+    $('#sends').hidden = S.tab !== 'sends';
     $('#foot').hidden = S.tab !== 'contacts';
   }
 
@@ -809,7 +811,7 @@
     main.addEventListener('click', (e) => {
       if (e.target.closest('[data-chip-reset]') && !e.target.closest('#chips')) { S.f = Object.assign({}, S.defaults); $('#q').value = ''; commit({ now: true }); return; }
       const tab = e.target.closest('[data-tab]');
-      if (tab) { S.tab = tab.dataset.tab; writeUrl(); renderTabs(); if (S.tab === 'works') { loadPockets(); renderWorks(); } return; }
+      if (tab) { S.tab = tab.dataset.tab; writeUrl(); renderTabs(); if (S.tab === 'works') { loadPockets(); renderWorks(); } if (S.tab === 'sends') loadSends(); return; }
       const th = e.target.closest('th[data-sort]');
       if (th) {
         if (S.sort === th.dataset.sort) S.dir = S.dir === 'asc' ? 'desc' : 'asc';
@@ -835,6 +837,9 @@
         if (a === 'use-pocket') return usePocket(act.dataset.key, act.dataset.val);
         if (a === 'use-campaign') return useCampaign(act.dataset.id, act.dataset.name);
         if (a === 'works-refresh') return loadPockets(true);
+        if (a === 'sends-refresh') return loadSends();
+        if (a === 'sends-all') { S.sendsAll = !S.sendsAll; return renderSends(); }
+        if (a === 'send-row') { const id = act.dataset.id; S.sendOpen = S.sendOpen === id ? '' : id; return renderSends(); }
         return;
       }
       if (e.target.closest('[data-stop]') || e.target.closest('a')) return;
@@ -950,6 +955,59 @@
     } catch (e) { toast(e.message, true); }
   }
 
+  // ── Sends: every push, running and finished ──────────────────────────────
+  // Running sends also show as cards bottom right. This tab is the record:
+  // what was asked for, what was verified, what reached PlusVibe, and why the
+  // rest did not. With a client selected it shows that client's sends.
+  async function loadSends() {
+    S.sends = null; renderSends();
+    try { S.sends = (await api('/api/contacts/push-history?limit=200')).jobs || []; }
+    catch (e) { S.sends = { error: e.message }; }
+    renderSends();
+  }
+  function renderSends() {
+    const el = $('#sends');
+    if (!S.sends) { el.innerHTML = '<div class="cx-state"><p>Loading sends…</p></div>'; return; }
+    if (S.sends.error) { el.innerHTML = '<div class="cx-state"><h3>Could not load sends</h3><p>' + esc(S.sends.error) + '</p><button class="cx-btn" data-act="sends-refresh">Try again</button></div>'; return; }
+    const mineOnly = S.client && !S.sendsAll;
+    const rows = S.sends.filter((j) => !mineOnly || j.workspace_id === S.client)
+      .sort((a, b) => String(b.finished_at || b.started_at || '').localeCompare(String(a.finished_at || a.started_at || '')));
+    const word = (st) => JOB_WORD[st] || (st === 'cancelled' ? 'Stopped' : title(st));
+    const cls = (st) => (st === 'completed' ? 'good' : st === 'failed' || st === 'error' ? 'bad' : st === 'paused' || st === 'cancelled' ? 'mute' : 'blue');
+    const when = (j) => { const d = parseDate(j.finished_at || j.started_at); return d ? d.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''; };
+    let html = '<div class="cx-card"><header><h3>Sends' + (mineOnly ? ' for ' + esc(clientName()) : '') + '</h3><p>newest first, last 200</p><span class="grow"></span>' +
+      (S.client ? '<button class="cx-btn sm" data-act="sends-all">' + (S.sendsAll ? 'Only ' + esc(clientName()) : 'All clients') + '</button>' : '') +
+      '<button class="cx-btn sm" data-act="sends-refresh">Refresh</button></header>';
+    if (!rows.length) {
+      html += '<div class="cx-state"><p>No sends' + (mineOnly ? ' for ' + esc(clientName()) + ' yet' : ' yet') + '.</p></div></div>';
+      el.innerHTML = html; return;
+    }
+    html += '<div class="scroll"><table class="cx-ptable cx-sendtable"><thead><tr><th class="l">When</th>' + (mineOnly ? '' : '<th class="l">Client</th>') +
+      '<th class="l">Campaign</th><th class="l">Status</th><th>Asked for</th><th>Verified</th><th>Sent to PlusVibe</th><th>Held back</th></tr></thead><tbody>';
+    for (const j of rows) {
+      let skipped = j.skipped;
+      if (typeof skipped === 'string') { try { skipped = JSON.parse(skipped); } catch { skipped = {}; } }
+      const reasons = Object.entries(skipped || {}).filter(([, n]) => Number(n) > 0).sort((a, b) => b[1] - a[1]);
+      const held = j.skipped_total || reasons.reduce((a, [, n]) => a + Number(n), 0);
+      const open = S.sendOpen === j.id;
+      const detail = reasons.length || j.error;
+      html += '<tr class="' + (detail ? 'clickable' : '') + '"' + (detail ? ' data-act="send-row" data-id="' + esc(j.id) + '" title="Click to see why contacts were held back"' : '') + '>' +
+        '<td class="cx-nowrap" style="text-align:left">' + esc(when(j)) + '</td>' + (mineOnly ? '' : '<td class="name">' + esc(j.workspace_name || '') + '</td>') +
+        '<td class="name" title="' + esc(j.campaign_name || '') + '">' + esc(j.campaign_name || '') + '</td>' +
+        '<td style="text-align:left"><span class="cx-badge ' + cls(j.status) + '">' + esc(word(j.status)) + '</span></td>' +
+        '<td>' + num(j.requested || 0) + '</td><td>' + num(j.verified || 0) + '</td><td><b>' + num(j.pushed || 0) + '</b></td>' +
+        '<td>' + (held ? num(held) + (detail ? ' ' + (open ? '▾' : '▸') : '') : '<span class="cx-dim">0</span>') + '</td></tr>';
+      if (open && detail) {
+        html += '<tr class="why"><td colspan="' + (mineOnly ? 7 : 8) + '">' +
+          (j.error ? '<div class="cx-low">' + esc(j.error) + '</div>' : '') +
+          (reasons.length ? '<div class="cx-reasons" style="max-width:420px">' + reasons.map(([k, n]) => '<span>' + esc(REASONS[k] || (k === 'wrongProvider' ? 'Wrong email provider for this send' : k)) + '</span><span>' + num(n) + '</span>').join('') + '</div>' : '') +
+          '<div class="cx-dim" style="margin-top:6px">Verifier results: ' + num(j.safe || 0) + ' safe, ' + num(j.safe_catchall || 0) + ' catch-all, ' + num(j.risky || 0) + ' risky, ' + num(j.invalid || 0) + ' invalid, ' + num(j.unknown || 0) + ' unknown.</div></td></tr>';
+      }
+    }
+    html += '</tbody></table></div></div>';
+    el.innerHTML = html;
+  }
+
   // ── Row drawer ───────────────────────────────────────────────────────────
   function closeDrawer() { const d = $('#drawer'); d.classList.remove('open'); d.setAttribute('aria-hidden', 'true'); }
   function tierReasons(c) {
@@ -1049,6 +1107,7 @@
     S.pockets = null; S.pocketsFor = '';
     commit({ now: true });
     loadPockets();
+    if (S.tab === 'sends') renderSends();
   }
   function renderClient() {
     const name = clientName();
@@ -1302,7 +1361,8 @@
         }
         closeDialog();
         if (useSel) { S.sel.clear(); renderTable(); renderTabs(); }
-        toast(r.jobId ? 'Send started for “' + c.name + '”. Progress is bottom right.' : 'Send started.');
+        toast(r.jobId ? 'Send started for “' + c.name + '”. Progress is bottom right, and under Sends.' : 'Send started.');
+        if (S.tab === 'sends') loadSends();
         pollJobs(true);
       } catch (e) { err.textContent = e.message; go.disabled = false; go.textContent = label; }
     });
@@ -1340,6 +1400,10 @@
     const cards = (showParked ? shown.concat(parked) : shown).slice(0, 6).map(jobCard).join('');
     const pill = parked.length ? '<button class="cx-jobpill" data-job-toggle>' + (showParked ? 'Hide ' : '') + parked.length + ' paused send' + (parked.length === 1 ? '' : 's') + (showParked ? '' : ' ›') + '</button>' : '';
     $('#jobs').innerHTML = cards + pill;
+    if (S.tab === 'sends' && Array.isArray(S.sends) && lastJobs.some((j) => ['verifying', 'n2b_verifying', 'pushing'].includes(j.status))) {
+      // keep the record moving while a send runs
+      api('/api/contacts/push-history?limit=200').then((d) => { S.sends = d.jobs || []; renderSends(); }).catch(() => {});
+    }
   }
   async function pollJobs(soon) {
     clearTimeout(jobsTimer);
@@ -1419,6 +1483,7 @@
     runSearch();
     loadPockets();
     if (S.tab === 'works') renderWorks();
+    if (S.tab === 'sends') loadSends();
     pollJobs();
   }
   boot();
