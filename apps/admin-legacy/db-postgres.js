@@ -228,7 +228,11 @@ class PostgresDatabase {
       // — those columns exist from a prior deploy. The only thing we'd
       // be racing against is adding a brand-new column, which won't be
       // referenced until this deploy's code runs queries that need it.
-      this.setupSchema().catch(err => {
+      // Kept as a promise so background upkeep (lib/contacts-next/maintenance.js)
+      // can wait for it. setupSchema runs ~90 ALTER TABLE contacts statements,
+      // each needing a brief exclusive lock; a CREATE INDEX CONCURRENTLY that
+      // overlaps them is killed as a deadlock (seen twice on 2026-11-14).
+      this.schemaReady = this.setupSchema().catch(err => {
         console.error('[PostgreSQL] Background schema setup failed:', err.message);
       });
     } catch (err) {
@@ -1601,18 +1605,17 @@ class PostgresDatabase {
         } catch (err) { console.error('[PostgreSQL] num_employees backfill error:', err.message); }
       }
 
-      // 3. Company-name + job-title cleanup regex passes
-      if (!await ran('company-name-job-title-clean-v1')) {
-        try {
-          const t0 = Date.now();
-          await this.pool.query(`UPDATE contacts SET company_name = TRIM(REGEXP_REPLACE(company_name, '\\s+[-–—]\\s+.+$', '', 'g')) WHERE company_name LIKE '%-%' OR company_name LIKE '%–%'`);
-          await this.pool.query(`UPDATE contacts SET company_name = TRIM(REGEXP_REPLACE(company_name, '\\s*\\([^)]*\\)', '', 'g')) WHERE company_name LIKE '%(%)%'`);
-          await this.pool.query(`UPDATE contacts SET company_name = TRIM(REGEXP_REPLACE(company_name, '\\s+(Ltd\\.?|Inc\\.?|LLC\\.?|PLC|plc|Limited|Group|Holdings?|International|Solutions?|Services?|Consulting|Technologies?)\\s*$', '', 'gi')) WHERE company_name IS NOT NULL`);
-          await this.pool.query(`UPDATE contacts SET job_title_cleaned = INITCAP(TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(job_title, '\\s*\\([^)]*\\)', '', 'g'), '\\s*,\\s*.+$', '', 'g'), '\\s+[-–—]\\s+.+$', '', 'g'))) WHERE job_title IS NOT NULL`);
-          await mark('company-name-job-title-clean-v1');
-          console.log(`[PostgreSQL] Job titles and company names re-cleaned (${Date.now() - t0}ms)`);
-        } catch (err) { console.error('[PostgreSQL] Cleaning error:', err.message); }
-      }
+      // 3. (retired) 'company-name-job-title-clean-v1'.
+      //    It ran four unbounded UPDATEs over the whole contacts table on the web
+      //    pool. Once the table outgrew the 45s statement_timeout the first one
+      //    was cancelled on EVERY boot, so the migration was never marked done
+      //    and ran again on every deploy: 45 seconds of row locks on contacts,
+      //    rolled back, each time (confirmed in the production log 2026-11-14,
+      //    "Cleaning error: canceling statement due to statement timeout").
+      //    It is not made to "work" instead: finishing it now would rewrite
+      //    company names and job titles on millions of rows and bump updated_at
+      //    on all of them. Names are cleaned at import time (csv-importer), and
+      //    the later company-name-clean-v2 pass did complete.
 
       // 4. Title-case ALL-CAPS company names left over from raw imports.
       //    Only touches MULTI-WORD all-caps strings ("DESIGNER CONTRACTS"

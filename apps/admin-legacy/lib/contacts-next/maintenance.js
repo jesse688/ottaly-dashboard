@@ -7,18 +7,22 @@
 //   2. BUILD the two indexes contacts v2 is shaped around.
 //   3. One-off data fix: store the exact head-count on contacts that have one.
 //
-// Why "a few minutes after boot" and not straight away: on every start the app
-// re-creates the updated_at trigger on contacts (DROP TRIGGER / CREATE TRIGGER)
-// and runs its ALTER TABLE ... ADD COLUMN IF NOT EXISTS list. Those need a
-// brief exclusive lock on the table. A CREATE INDEX CONCURRENTLY started 20s
-// after boot ran straight into them and Postgres killed it ("deadlock
-// detected", production, 2026-11-14), leaving an invalid index behind. So this
-// waits for boot to settle, and retries if a step still fails.
+// Why it waits for the app's own schema setup instead of a fixed delay: on
+// every start setupSchema() runs ~90 `ALTER TABLE contacts ADD COLUMN IF NOT
+// EXISTS` statements and re-creates the updated_at trigger. Each needs a brief
+// exclusive lock on contacts, with a 5s lock timeout. A CREATE INDEX
+// CONCURRENTLY that overlaps them is a mutual block: the ALTERs time out one by
+// one (stretching the list to many minutes), and when the index build reaches
+// its "wait for older transactions" phase Postgres kills it as a deadlock. That
+// happened at 20s after boot and again at 3 minutes (production, 2026-11-14),
+// each time leaving an invalid index. So upkeep starts only after
+// pgdb.schemaReady resolves plus a short settle, and retries a failed step.
 
 const LOCK_KEY = 772011514; // arbitrary constant, unique to this helper
-const START_DELAY_MS = Number(process.env.CONTACTS_NEXT_MAINT_DELAY_MS) || 3 * 60 * 1000;
-const RETRY_DELAY_MS = 10 * 60 * 1000;
-const MAX_ATTEMPTS = 4;
+// Settle time AFTER the app's schema setup has finished.
+const SETTLE_MS = Number(process.env.CONTACTS_NEXT_MAINT_DELAY_MS) || 90 * 1000;
+const RETRY_DELAY_MS = Number(process.env.CONTACTS_NEXT_MAINT_RETRY_MS) || 3 * 60 * 1000;
+const MAX_ATTEMPTS = 6;
 
 // Indexes with zero scans that cost real money on every write. Measured on
 // production 2026-11-14 (stats covering 27 days of normal use):
@@ -195,8 +199,12 @@ function schedule(pgdb) {
     if (!done && attempt < MAX_ATTEMPTS) { const t = setTimeout(tick, RETRY_DELAY_MS); if (t.unref) t.unref(); }
     else if (!done) warn(`upkeep still incomplete after ${attempt} attempts; it will try again on the next start`);
   };
-  const t = setTimeout(tick, START_DELAY_MS);
-  if (t.unref) t.unref();
+  // schemaReady never rejects (db-postgres.js catches); the fallback covers a
+  // database class that does not expose it.
+  Promise.resolve(pgdb.schemaReady).catch(() => {}).then(() => {
+    const t = setTimeout(tick, SETTLE_MS);
+    if (t.unref) t.unref();
+  });
 }
 
 module.exports = { schedule, runOnce, DROP_INDEXES, BUILD_INDEXES, HEADCOUNT_MIGRATION };
