@@ -27490,7 +27490,7 @@ function scheduleAudienceScoring(pgdb) {
         }
       } catch (e) { console.warn('[enrich] auto-resume check failed:', e.message); }
     }, 8000);
-    app.use('/api', contactsAPI(pgdb));
+    app.use('/api', contactsAPI(pgdb, { requireSession, requireAdmin }));
     app.get('/contacts', (req, res) => {
       res.sendFile(path.join(__dirname, 'contacts.html'));
     });

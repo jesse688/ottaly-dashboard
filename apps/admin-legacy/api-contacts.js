@@ -4,8 +4,25 @@ const fs = require('fs');
 const ApolloCSVImporter = require('./csv-importer');
 const SIC_CODES = require('./sic-codes'); // [ [code, description], ... ]
 
-module.exports = (db) => {
+module.exports = (db, opts = {}) => {
   const router = express.Router();
+
+  // ── Auth ────────────────────────────────────────────────────────────────
+  // This router was mounted with NO auth: /api/contacts/search, the exports,
+  // the import and the delete routes all answered an anonymous request
+  // (measured 2026-11-14: a cookie-less GET returned contact rows). Every
+  // route here now needs an admin/manager session or the x-admin-key header,
+  // the same gate the push routes in server.js already use.
+  //
+  // Scoped to this router's own two prefixes rather than router.use(): the
+  // router is mounted at /api, so a bare use() would also gate every /api
+  // route registered after it.
+  const requireSession = opts.requireSession;
+  const requireAdmin   = opts.requireAdmin;
+  if (typeof requireSession !== 'function') {
+    throw new Error('api-contacts: requireSession middleware is required');
+  }
+  router.use(['/contacts', '/import'], requireSession);
   const importer = new ApolloCSVImporter(db);
   const { parse } = require('csv-parse/sync');
 
@@ -673,7 +690,7 @@ module.exports = (db) => {
   });
 
   // POST /api/contacts/delete-all
-  router.post('/contacts/delete-all', async (req, res) => {
+  router.post('/contacts/delete-all', requireAdmin || requireSession, async (req, res) => {
     try {
       const result = await db.deleteAllContacts();
       res.json({ message: 'All contacts deleted', deleted: result.deleted });
