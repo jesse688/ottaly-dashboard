@@ -221,3 +221,25 @@ test('the tier A index uses the same predicate text as the tier A filter', () =>
   // Tier A in TIER_SQL requires both halves of that predicate.
   assert.ok(PostgresDatabase.UNTOUCHED_SQL.includes('last_emailed_at IS NULL'));
 });
+
+test('text filters use the form the trigram indexes are built on', () => {
+  for (const [key, col] of [['firstName', 'first_name'], ['lastName', 'last_name'], ['email', 'email'], ['website', 'company_domain']]) {
+    const { clauses, params } = build({ [key]: 'SmiTH' });
+    assert.equal(clauses[0], `LOWER(${col}) LIKE $2`, key);
+    assert.equal(params[0], '%smith%', key);
+  }
+  const c = build({ company: 'ACME' });
+  assert.equal(c.clauses[0], '(LOWER(company_name) LIKE $2 OR LOWER(company_domain) LIKE $2)');
+  assert.equal(c.params[0], '%acme%');
+});
+
+test('search box: indexed UNION form for 3+ characters, single-scan form for shorter', () => {
+  const long = build({ search: 'Plumber' });
+  assert.ok(long.clauses[0].startsWith('contacts.id IN ('));
+  assert.equal((long.clauses[0].match(/UNION ALL/g) || []).length, 4);
+  assert.deepEqual(long.params, ['%plumber%']);
+  const short = build({ search: 'ab' });
+  assert.ok(short.clauses[0].includes('email ILIKE $2'));
+  assert.deepEqual(short.params, ['%ab%']);
+  assertParamsLineUp({ search: 'plumber', seniority: 'director', company: 'acme' });
+});

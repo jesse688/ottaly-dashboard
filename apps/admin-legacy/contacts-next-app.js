@@ -1382,7 +1382,8 @@
     buildDefaults();
     readUrl();
     $('#q').value = S.f.search || '';
-    renderClient(); renderRail(); renderChips(); renderTabs(); renderTable();
+    S.busy = true;
+    renderClient(); renderRail(); renderChips(); renderTabs(); renderTable(); renderFunnel();
     bindRail(); bindChips(); bindMain(); bindDrawer(); bindJobs(); bindKeys();
 
     $('#clientBtn').addEventListener('click', () => (openPop && openPop.parentElement === $('#clientWrap') ? closePop() : openClientPop()));

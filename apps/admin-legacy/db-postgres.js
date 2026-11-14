@@ -1913,6 +1913,14 @@ class PostgresDatabase {
     const clauses = [];
 
     const like = (col, val) => { clauses.push(`${col} ILIKE $${p++}`); params.push(`%${val}%`); };
+    // Case-insensitive "contains", written as LOWER(col) LIKE lower(pattern)
+    // instead of col ILIKE pattern. Same matches, but this is the form the
+    // trigram indexes are built on (GIN on LOWER(first_name), LOWER(last_name),
+    // LOWER(email), LOWER(company_name), LOWER(company_domain)). The bare ILIKE
+    // could use none of them, so every name / email / company lookup read the
+    // whole table: 5s for a company, 12-14s for the search box, measured on
+    // production 2026-11-14.
+    const lowerLike = (col, val) => { clauses.push(`LOWER(${col}) LIKE $${p++}`); params.push(`%${String(val).toLowerCase()}%`); };
     const eq   = (col, val) => { clauses.push(`${col} = $${p++}`); params.push(val); };
     // Comma-separated → IN (...). Single value falls through to eq for an index-friendly plan.
     const eqMulti = (col, val) => {
@@ -2045,8 +2053,8 @@ class PostgresDatabase {
 
     safe('status',     () => { if (filters.status)     eq('status', filters.status); });
     safe('seniority',  () => { if (filters.seniority)  eqMulti('seniority', filters.seniority); });
-    safe('firstName',  () => { if (filters.firstName)  like('first_name', filters.firstName); });
-    safe('lastName',   () => { if (filters.lastName)   like('last_name', filters.lastName); });
+    safe('firstName',  () => { if (filters.firstName)  lowerLike('first_name', filters.firstName); });
+    safe('lastName',   () => { if (filters.lastName)   lowerLike('last_name', filters.lastName); });
     // Use the denormalised columns (populated by the CSV importer for both
     // Apollo and PlusVibe rows) instead of raw_data->>'…' JSONB scans. This
     // is 10–100× faster on big batches of ORs and avoids Apollo-only
@@ -2139,7 +2147,7 @@ class PostgresDatabase {
       clauses.push(`ch_sic_codes ~* $${p}`);
       params.push(`(^|,)(${codes.join('|')})[0-9]*(,|$)`); p++;
     });
-    safe('website',             () => { if (filters.website)             like('company_domain', filters.website); });
+    safe('website',             () => { if (filters.website)             lowerLike('company_domain', filters.website); });
     safe('companyLinkedin',     () => { if (filters.companyLinkedin)     like('company_linkedin_url', filters.companyLinkedin); });
     // Location filters are multi-select — comma-separated values must OR
     // against the column, not be glued together as a single substring.
@@ -2202,9 +2210,9 @@ class PostgresDatabase {
     safe('companyRegionExclude',  () => { if (filters.companyRegionExclude)  colExactExclude('company_region', filters.companyRegionExclude); });
     safe('companyCountyExclude',  () => { if (filters.companyCountyExclude)  colExactExclude('company_county', filters.companyCountyExclude); });
     safe('companyTownExclude',    () => { if (filters.companyTownExclude)    colExactExclude('company_town',   filters.companyTownExclude); });
-    safe('email',         () => { if (filters.email)         like('email', filters.email); });
+    safe('email',         () => { if (filters.email)         lowerLike('email', filters.email); });
     safe('phone',         () => { if (filters.phone)         { clauses.push(`(corporate_phone ILIKE $${p} OR company_phone ILIKE $${p})`); params.push(`%${filters.phone}%`); p++; } });
-    safe('company',       () => { if (filters.company)       { clauses.push(`(company_name ILIKE $${p} OR company_domain ILIKE $${p})`); params.push(`%${filters.company}%`); p++; } });
+    safe('company',       () => { if (filters.company)       { clauses.push(`(LOWER(company_name) LIKE $${p} OR LOWER(company_domain) LIKE $${p})`); params.push(`%${String(filters.company).toLowerCase()}%`); p++; } });
     // Search covers who the contact IS *and* what the business DOES. Without the
     // description arm, a search for a trade ("stand builder", "solar installer")
     // could only ever match a company that happens to have the words in its
@@ -2212,7 +2220,36 @@ class PostgresDatabase {
     // builders sat in the data, described in their own words on their own sites.
     // scraped_contacts.description is indexed (GIN trigram), so the EXISTS costs
     // ~1.5s across 2.3M rows rather than the 14.5s a sequential scan took.
-    safe('search',        () => { if (filters.search)        { clauses.push(`(email ILIKE $${p} OR first_name ILIKE $${p} OR last_name ILIKE $${p} OR company_name ILIKE $${p} OR EXISTS (SELECT 1 FROM scraped_contacts sc WHERE sc.domain = contacts.company_domain AND sc.description ILIKE $${p}))`); params.push(`%${filters.search}%`); p++; } });
+    //
+    // Shape matters as much as the predicate. As one OR-list
+    // (email ILIKE .. OR first_name ILIKE .. OR .. OR EXISTS(description ..))
+    // Postgres cannot combine the indexes, because the EXISTS arm has none on
+    // the contacts side, so the search box read every row (12-14s). Written as
+    // "id IN (one indexed lookup per field, UNION ALL)" each arm uses its own
+    // trigram index and the whole thing took 345ms on the same data. The rows
+    // matched are the same.
+    //
+    // A term shorter than 3 characters has no trigrams, so the indexes cannot
+    // help it; five index-less arms would be five full scans. Those keep the
+    // single-scan OR form.
+    safe('search', () => {
+      if (!filters.search) return;
+      const term = String(filters.search);
+      if (term.trim().length < 3) {
+        clauses.push(`(email ILIKE $${p} OR first_name ILIKE $${p} OR last_name ILIKE $${p} OR company_name ILIKE $${p} OR EXISTS (SELECT 1 FROM scraped_contacts sc WHERE sc.domain = contacts.company_domain AND sc.description ILIKE $${p}))`);
+        params.push(`%${term}%`); p++;
+        return;
+      }
+      clauses.push(`contacts.id IN (
+        SELECT s1.id FROM contacts s1 WHERE LOWER(s1.email) LIKE $${p}
+        UNION ALL SELECT s2.id FROM contacts s2 WHERE LOWER(s2.first_name) LIKE $${p}
+        UNION ALL SELECT s3.id FROM contacts s3 WHERE LOWER(s3.last_name) LIKE $${p}
+        UNION ALL SELECT s4.id FROM contacts s4 WHERE LOWER(s4.company_name) LIKE $${p}
+        UNION ALL SELECT s5.id FROM contacts s5 WHERE s5.company_domain IN (
+          SELECT sc.domain FROM scraped_contacts sc WHERE sc.description ILIKE $${p})
+      )`);
+      params.push(`%${term.toLowerCase()}%`); p++;
+    });
     // Tag filter — match contacts whose tags[] array overlaps any given tag.
     // Comma-separated; uses the GIN index (tags && ARRAY[...]). Lets you filter
     // to a named scrape batch (the batch name is stored as a tag) or 'ch_scraper'.

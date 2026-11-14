@@ -46,8 +46,14 @@ const DROP_INDEXES = ['idx_contacts_keywords_trgm', 'idx_contacts_raw_data_gin']
 //   idx_contacts_tier_a          a small partial index over tier A candidates
 //       (verified safe, never emailed), newest import first. Serves the "Ready
 //       now" quick pick, which was a 6s walk of the general sort index.
+//   idx_contacts_company_domain_lower_trgm  lets "company name or website
+//       contains" use an index for the website half. The name half already had
+//       one; with only one side indexed Postgres falls back to reading every row.
 const { TIER_A_INDEX_PREDICATE } = require('../../db-postgres');
 const BUILD_INDEXES = [
+  ['idx_contacts_company_domain_lower_trgm',
+   `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_contacts_company_domain_lower_trgm
+      ON contacts USING GIN (LOWER(company_domain) gin_trgm_ops)`],
   ['idx_contacts_tier_a',
    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_contacts_tier_a
       ON contacts (workspace_id, imported_at DESC NULLS LAST, id)
