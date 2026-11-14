@@ -37,26 +37,45 @@ const V2_INDEXES = [
    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_contacts_emailed_ws_keys
       ON contacts USING GIN (emailed_workspaces jsonb_ops)`],
 ];
+//
+// Production runs more than one replica, and both boot this code. Without a
+// guard, replica B would see replica A's half-built (not yet valid) index,
+// "repair" it with a DROP that queues behind A's build, and then throw away the
+// index A had just finished. So the whole pass runs under one session-level
+// advisory lock: whoever gets it does the work, everyone else skips. A build
+// reported by pg_stat_progress_create_index is also left alone.
+const INDEX_LOCK_KEY = 772011514; // arbitrary constant, unique to this helper
 async function ensureIndexes(pgdb) {
   if (process.env.CONTACTS_NEXT_SKIP_INDEXES === '1') return;
   const pool = pgdb.bgPool || pgdb.pool;
-  for (const [name, sql] of V2_INDEXES) {
-    const client = await pool.connect();
-    try {
-      const r = await client.query(
-        `SELECT i.indisvalid FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid WHERE c.relname = $1`, [name]);
-      if (r.rows.length && r.rows[0].indisvalid) continue;
-      await client.query(`SET statement_timeout = 0`);
-      if (r.rows.length) await client.query(`DROP INDEX CONCURRENTLY IF EXISTS ${name}`);
-      const t0 = Date.now();
-      await client.query(sql);
-      console.log(`[contacts-next] ${name} ready in ${Date.now() - t0}ms`);
-    } catch (e) {
-      console.warn(`[contacts-next] ${name} not built:`, e.message);
-    } finally {
-      try { await client.query(`SET statement_timeout = 45000`); } catch { /* connection may be dead */ }
-      client.release();
+  const client = await pool.connect();
+  let locked = false;
+  try {
+    locked = (await client.query(`SELECT pg_try_advisory_lock($1) AS ok`, [INDEX_LOCK_KEY])).rows[0].ok;
+    if (!locked) { console.log('[contacts-next] index check: another instance is handling it'); return; }
+    await client.query(`SET statement_timeout = 0`);
+    for (const [name, sql] of V2_INDEXES) {
+      try {
+        const r = await client.query(
+          `SELECT c.oid, i.indisvalid FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid WHERE c.relname = $1`, [name]);
+        if (r.rows.length && r.rows[0].indisvalid) continue;
+        if (r.rows.length) {
+          const busy = await client.query(
+            `SELECT 1 FROM pg_stat_progress_create_index WHERE index_relid = $1 LIMIT 1`, [r.rows[0].oid]);
+          if (busy.rows.length) { console.log(`[contacts-next] ${name} is already being built`); continue; }
+          await client.query(`DROP INDEX CONCURRENTLY IF EXISTS ${name}`);
+        }
+        const t0 = Date.now();
+        await client.query(sql);
+        console.log(`[contacts-next] ${name} ready in ${Date.now() - t0}ms`);
+      } catch (e) {
+        console.warn(`[contacts-next] ${name} not built:`, e.message);
+      }
     }
+  } finally {
+    if (locked) { try { await client.query(`SELECT pg_advisory_unlock($1)`, [INDEX_LOCK_KEY]); } catch { /* session ending frees it */ } }
+    try { await client.query(`SET statement_timeout = 45000`); } catch { /* connection may be dead */ }
+    client.release();
   }
 }
 
@@ -65,8 +84,11 @@ module.exports = ({ pgdb, getSqlite }) => {
   const sqlite = () => { try { return getSqlite ? getSqlite() : null; } catch { return null; } };
 
   // Tenant scope of the contacts table. Not the same thing as the CLIENT
-  // (a PlusVibe workspace id) that filters and guards target.
-  const tenantOf = (req) => req.user?.workspace_id || req.headers['x-workspace-id'] || DEFAULT_TENANT;
+  // (a PlusVibe workspace id) that filters and guards target. Deliberately NOT
+  // read from the x-workspace-id header as the original routes do: any signed
+  // in user could then name any tenant, and each new name would start a
+  // whole-table scan for the pockets totals.
+  const tenantOf = (req) => req.user?.workspace_id || DEFAULT_TENANT;
   // saved_views upserts on (workspace_id, name). Keeping v2 views under their
   // own key means a v2 view can never overwrite an original-page view of the
   // same name, and the original page never lists a view it cannot load.
@@ -81,6 +103,11 @@ module.exports = ({ pgdb, getSqlite }) => {
     const client = String((req.method === 'GET' ? req.query.client : req.body?.client) || '').trim();
     const typed = parseFilters(src);
     const { filters, rules, client: clientInfo } = applyClientRules(typed, sqlite(), client || null);
+    // "Name: any" must be said out loud. The push guard reads a MISSING hasName
+    // as 'first_only', so leaving it off would let the list show nameless
+    // contacts that the ready-to-send count and the push then quietly drop.
+    // An explicit empty string means "any" to the guard and adds no clause here.
+    if (!('hasName' in filters)) filters.hasName = '';
     return { typed, filters, rules, clientInfo, client };
   }
 
@@ -125,6 +152,9 @@ module.exports = ({ pgdb, getSqlite }) => {
       // Warm the whole-table totals the pockets panel needs.
       Q.supplyTotals(pgdb, tenant);
       res.json({
+        // Shown as a banner when set. Used on a developer machine running a
+        // sample of the data, so small numbers are not mistaken for real ones.
+        notice: process.env.CONTACTS_NEXT_NOTICE || '',
         tenant, clients, sources, gateways, defaults,
         tableRows: rows, countCap: Q.COUNT_CAP, sizeBuckets: Q.SIZE_BUCKETS,
         sorts: Object.keys(Q.SORTS), facets: Object.keys(Q.FACETS), filterKeys: FILTER_KEYS,
@@ -146,7 +176,20 @@ module.exports = ({ pgdb, getSqlite }) => {
       // `resolved` is the exact filter object the query ran with. The page
       // passes it to sendability and to the push as target_filters.
       res.json({ ...out, rules, client: client ? clientInfo : null, resolved: filters });
-    } catch (err) { fail(res, 'search', err); }
+    } catch (err) {
+      if (err.tooSlow) return res.status(422).json({ error: err.message });
+      fail(res, 'search', err);
+    }
+  });
+
+  // The resolved filter for the page's current state, without running a
+  // search. The send dialog calls this at the moment of sending, so the filter
+  // it hands to the push can never be a stale or missing one.
+  router.get('/resolve', (req, res) => {
+    try {
+      const { filters, rules, clientInfo, client } = resolve(req);
+      res.json({ resolved: filters, rules, client: client ? clientInfo : null });
+    } catch (err) { fail(res, 'resolve', err); }
   });
 
   // ── Counts beside each filter value ──────────────────────────────────────
@@ -281,11 +324,14 @@ module.exports = ({ pgdb, getSqlite }) => {
         if (!res.write(chunk)) await new Promise(ok => res.once('drain', ok));
         if (rows.length < PAGE) break;
       }
+      // A streamed file has no status code left to change once rows have gone
+      // out, so say it in the file: a short export must never look complete.
+      if (written >= MAX_ROWS) res.write(`"STOPPED AT ${MAX_ROWS} ROWS. Narrow the filter to export the rest."\n`);
       res.end();
     } catch (err) {
       console.error('[contacts-next] export:', err.message);
       if (!res.headersSent) res.status(500).json({ error: err.message });
-      else res.end();
+      else { res.write('"EXPORT FAILED PART WAY. This file is incomplete."\n'); res.end(); }
     }
   });
 

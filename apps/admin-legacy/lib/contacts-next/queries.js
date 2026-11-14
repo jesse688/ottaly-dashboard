@@ -24,6 +24,14 @@ const SAMPLE_TARGET_ROWS = 200000;
 // How long a sorted read of a broad filter may run before the page falls back
 // to an unsorted one.
 const BROAD_SORT_TIMEOUT_MS = Number(process.env.CONTACTS_BROAD_SORT_MS) || 6000;
+// How long the capped count may run. A filter that is selective but cannot use
+// an index has to read the whole table to learn it has fewer than COUNT_CAP
+// matches; without a limit that held a web connection for up to 45s per
+// keystroke.
+const COUNT_TIMEOUT_MS = Number(process.env.CONTACTS_COUNT_MS) || 8000;
+// Deepest row the list will page to.
+const MAX_OFFSET = 100000;
+const isTimeout = (e) => /statement timeout|canceling statement/i.test(String(e && e.message));
 
 const TIER = PostgresDatabase.TIER_SQL;
 const VERIFIED_DATE = PostgresDatabase.VERIFIED_DATE_SQL;
@@ -138,9 +146,16 @@ async function cappedCount(db, tenant, filters) {
     const sql = `SELECT COUNT(*)::int AS n FROM (
         SELECT 1 FROM contacts WHERE workspace_id = $1${where} LIMIT ${COUNT_CAP + 1}
       ) t`;
-    const r = await db.query(sql, [tenant, ...params]);
-    const n = r.rows[0].n;
-    const out = { count: Math.min(n, COUNT_CAP), capped: n > COUNT_CAP };
+    let n;
+    try {
+      n = (await timedQuery(db, sql, [tenant, ...params], COUNT_TIMEOUT_MS)).rows[0].n;
+    } catch (e) {
+      if (!isTimeout(e)) throw e;
+      // Too slow to count. Report "unknown" rather than hold the connection:
+      // callers treat it like a broad filter and bound their own work.
+      return countCache.set(key, { count: COUNT_CAP, capped: true, unknown: true }, 30000);
+    }
+    const out = { count: Math.min(n, COUNT_CAP), capped: n > COUNT_CAP, unknown: false };
     return countCache.set(key, out, 30000);
   });
 }
@@ -148,12 +163,12 @@ async function cappedCount(db, tenant, filters) {
 // ── Search ──────────────────────────────────────────────────────────────────
 async function search(db, tenant, filters, opts = {}) {
   const limit = Math.max(1, Math.min(parseInt(opts.limit, 10) || 100, 500));
-  const offset = Math.max(0, Math.min(parseInt(opts.offset, 10) || 0, 100000));
+  const offset = Math.max(0, Math.min(parseInt(opts.offset, 10) || 0, MAX_OFFSET));
   const order = orderBy(opts.sort, opts.dir);
   const { where, params } = whereFor(db, filters);
   const t0 = Date.now();
 
-  const { count, capped } = await cappedCount(db, tenant, filters);
+  const { count, capped, unknown } = await cappedCount(db, tenant, filters);
   let rows = [];
   let plan = 'empty';
   let unsorted = false;
@@ -180,21 +195,29 @@ async function search(db, tenant, filters, opts = {}) {
       try {
         rows = (await timedQuery(db, sql, [tenant, ...params, limit, offset], BROAD_SORT_TIMEOUT_MS)).rows;
       } catch (e) {
-        if (!/statement timeout|canceling statement/i.test(e.message)) throw e;
+        if (!isTimeout(e)) throw e;
         // The ordered read did not finish in time. That happens when the
         // matches sit at the far end of the sort order (or before
         // idx_contacts_best_order has been built: measured 4.9s on production
-        // without it). Rather than a spinner or an error, return the page
-        // unsorted, which takes milliseconds, and say so.
+        // without it). Rather than a spinner or an error, return the page in
+        // id order, which stops as soon as the page is full, and say so. id
+        // order (not "no order") keeps pages from overlapping.
         plan = 'broad-unsorted';
         unsorted = true;
         const fast = `SELECT ${LIST_SELECT} FROM contacts
-          WHERE workspace_id = $1${where} LIMIT $${params.length + 2} OFFSET $${params.length + 3}`;
-        rows = (await db.query(fast, [tenant, ...params, limit, offset])).rows;
+          WHERE workspace_id = $1${where} ORDER BY id LIMIT $${params.length + 2} OFFSET $${params.length + 3}`;
+        try {
+          rows = (await timedQuery(db, fast, [tenant, ...params, limit, offset], BROAD_SORT_TIMEOUT_MS * 2)).rows;
+        } catch (e2) {
+          if (!isTimeout(e2)) throw e2;
+          const err = new Error('This filter is too slow to run on its own. Add another filter (a region, a size or a seniority) to narrow it first.');
+          err.tooSlow = true;
+          throw err;
+        }
       }
     }
   }
-  return { contacts: rows, total: count, capped, limit, offset, plan, unsorted, ms: Date.now() - t0 };
+  return { contacts: rows, total: count, capped, countUnknown: !!unknown, limit, offset, maxOffset: MAX_OFFSET, plan, unsorted, ms: Date.now() - t0 };
 }
 
 // ── Sampling ────────────────────────────────────────────────────────────────
@@ -231,6 +254,7 @@ async function sampleSource(db, tenant, filters) {
 const SIZE_BUCKETS = ['1-10', '11-50', '51-200', '201-500', '501-1000', '1001-5000', '5001+'];
 const SIZE_SQL = `CASE
     WHEN num_employees IS NULL THEN 'unknown'
+    WHEN num_employees < 1 THEN NULL
     WHEN num_employees <= 10 THEN '1-10'
     WHEN num_employees <= 50 THEN '11-50'
     WHEN num_employees <= 200 THEN '51-200'
@@ -253,7 +277,7 @@ const FACETS = {
   country:     { expr: `NULLIF(LOWER(company_country), '')`,  own: ['companyCountryIs'],   top: 15 },
   department:  { expr: `NULLIF(LOWER(department), '')`,       own: ['departmentIs'],       top: 25 },
   source:      { expr: `NULLIF(source, '')`,                  own: ['source'],             top: 20 },
-  emailStatus: { expr: `COALESCE(NULLIF(LOWER(email_status), ''), 'not_verified')`, own: ['emailStatus'], top: 10 },
+  emailStatus: { expr: `COALESCE(email_status, 'not_verified')`, own: ['emailStatus'], top: 10 },
   provider:    { expr: `COALESCE(mx_provider, 'unknown')`,    own: ['emailProviders'],     top: 6 },
   tier:        { expr: `(${TIER})`,                           own: ['tier'],               top: 4 },
 };
@@ -320,7 +344,7 @@ async function facets(db, tenant, filters, dims) {
 // have a verdict fresh enough to push without re-verifying, how many were never
 // emailed. Exact for a narrow filter, a scaled sample for a broad one.
 async function summary(db, tenant, filters, opts = {}) {
-  const freshDays = Math.max(1, parseInt(opts.freshVerdictDays, 10) || 3);
+  const freshDays = Math.max(1, Math.min(parseInt(opts.freshVerdictDays, 10) || 3, 365));
   const key = `sum|${tenant}|${freshDays}|${filterSignature(filters)}`;
   const hit = facetCache.get(key);
   if (hit) return hit;
@@ -349,7 +373,11 @@ async function summary(db, tenant, filters, opts = {}) {
       approx: src.sampled,
       matched: sc(row.matched), verified: sc(row.verified), verifiedFresh: sc(row.verified_fresh),
       unverified: sc(row.unverified), risky: sc(row.risky), invalid: sc(row.invalid),
-      neverEmailed: sc(row.never_emailed), companies: sc(row.companies),
+      neverEmailed: sc(row.never_emailed),
+      // A DISTINCT count from a sample cannot be scaled up (a company with
+      // several contacts would be counted once per sampled contact), so it is
+      // only reported when the numbers are exact.
+      companies: src.sampled ? null : Number(row.companies || 0),
       freshVerdictDays: freshDays,
     };
     return facetCache.set(key, out, 60000);
@@ -430,7 +458,10 @@ const POSITIVE_SQL = `(marked_as_lead IS TRUE OR category IN ('interested', 'que
 async function pockets(db, tenant, clientWs) {
   const key = `pockets|${tenant}|${clientWs}`;
   const hit = miscCache.get(key);
-  if (hit) return { ...hit, supplyReady: !!supplyTotals(db, tenant) || hit.supplyReady };
+  // Returned exactly as built. A result built before the whole-table totals
+  // were ready says supplyReady:false and is cached only briefly, so the page
+  // asks again and gets one with the "left to send" numbers filled in.
+  if (hit) return hit;
   return once(key, async () => {
     const t0 = Date.now();
     const cols = POCKET_DIM_KEYS.map((d, i) => `${POCKET_DIMS[d].expr} AS d${i}`).join(', ');
@@ -539,6 +570,6 @@ async function gatewayNames(db) {
 }
 
 module.exports = {
-  COUNT_CAP, SIZE_BUCKETS, FACETS, SORTS, POCKET_DIMS,
+  COUNT_CAP, MAX_OFFSET, SIZE_BUCKETS, FACETS, SORTS, POCKET_DIMS,
   search, cappedCount, facets, summary, pockets, supplyTotals, sourceCounts, gatewayNames, tableRows,
 };

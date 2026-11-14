@@ -41,6 +41,8 @@ body.cx::after { display: none; } /* no watermark behind a data grid */
 
 /* ── Shell ─────────────────────────────────────────────────────────────── */
 .cx-shell { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+.cx-shell:has(> .cx-notice) { grid-template-rows: auto auto 1fr; }
+.cx-notice { background: #fde68a; color: #5b3d00; font-weight: 700; text-align: center; padding: 5px 12px; font-size: 12px; }
 
 .cx-top {
   background: var(--navy-dark);

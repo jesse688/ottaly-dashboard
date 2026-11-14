@@ -2812,15 +2812,24 @@ class PostgresDatabase {
       OR jsonb_typeof(pushed_campaigns) <> 'array'
       OR jsonb_array_length(pushed_campaigns) = 0)`;
 
+  // Never sent by anyone, by every trace we keep: no push recorded, no send
+  // date, and no client key in emailed_workspaces. All three are checked
+  // because they are stamped by different paths (the push, the PlusVibe sync,
+  // the send webhook) and any one of them alone misses real sends.
+  static UNTOUCHED_SQL = `(${PostgresDatabase.NEVER_PUSHED_SQL}
+      AND last_emailed_at IS NULL
+      AND COALESCE(emailed_workspaces, '{}'::jsonb) = '{}'::jsonb)`;
+
   // Contact quality tier. Built ONLY from columns that are well filled in
   // production (measured 2026-11-14: mx 98%, name 91%, industry 84%,
   // imported_at 82%), because a tier that leans on a sparse column (seniority
   // 56%, region 33%) demotes good contacts for missing data, not for being bad.
   //
   //   X  dead: invalid, hard bounce or do-not-contact. Never sendable.
-  //   A  verified safe, never pushed, imported in the last 60 days, has a name.
-  //   B  safe or not-yet-verified, has a name, and either never pushed or
-  //      rested 60+ days.
+  //   A  verified safe, never sent, imported in the last 60 days, has a name.
+  //   B  safe or not-yet-verified, has a name, and either never sent or last
+  //      emailed 60+ days ago. (Pushed but with no send date yet is NOT B: it
+  //      is in a campaign right now.)
   //   C  everything else that is still sendable (risky, unknown, recently
   //      mailed, nameless, old import).
   //
@@ -2830,13 +2839,12 @@ class PostgresDatabase {
   static TIER_SQL = `CASE
       WHEN NOT ${PostgresDatabase.ALIVE_SQL} THEN 'X'
       WHEN LOWER(COALESCE(email_status,'')) IN ('safe','safe_catchall')
-           AND ${PostgresDatabase.NEVER_PUSHED_SQL}
+           AND ${PostgresDatabase.UNTOUCHED_SQL}
            AND imported_at >= now() - interval '60 days'
            AND COALESCE(TRIM(first_name),'') <> '' THEN 'A'
       WHEN (email_status IS NULL OR LOWER(email_status) IN ('safe','safe_catchall'))
            AND COALESCE(TRIM(first_name),'') <> ''
-           AND (${PostgresDatabase.NEVER_PUSHED_SQL}
-                OR last_emailed_at IS NULL
+           AND (${PostgresDatabase.UNTOUCHED_SQL}
                 OR last_emailed_at < now() - interval '60 days') THEN 'B'
       ELSE 'C' END`;
 

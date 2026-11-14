@@ -297,7 +297,8 @@
       const d = await api('/api/cx/search?' + p.toString(), { signal: searchAbort.signal });
       if (my !== seq) return;
       S.rows = d.contacts || []; S.total = d.total || 0; S.capped = !!d.capped;
-      S.rules = d.rules || []; S.resolved = d.resolved || {}; S.plan = d.plan; S.ms = d.ms; S.unsorted = !!d.unsorted;
+      S.rules = d.rules || []; S.plan = d.plan; S.ms = d.ms; S.unsorted = !!d.unsorted;
+      S.maxOffset = d.maxOffset || 100000; S.countUnknown = !!d.countUnknown;
     } catch (e) {
       if (e.name === 'AbortError' || my !== seq) return;
       S.rows = []; S.total = 0; S.capped = false; S.error = e.message;
@@ -343,11 +344,26 @@
     S.send = null; S.sendErr = null; renderFunnel();
     if (!S.client || !S.total) return;
     try {
-      const d = await api('/api/contacts/sendability', { method: 'POST', body: { workspace_id: S.client, workspace_name: clientName(), filters: S.resolved } });
+      const snap = await resolveNow();
+      if (my !== seq) return;
+      const d = await api('/api/contacts/sendability', { method: 'POST', body: { workspace_id: snap.client, workspace_name: snap.clientName, filters: snap.resolved } });
       if (my !== seq) return;
       S.send = d;
     } catch (e) { if (my === seq) S.sendErr = e.message; }
     renderFunnel();
+  }
+
+  // The filter the server would run for the page's state RIGHT NOW, with the
+  // client it belongs to. Anything that feeds the push asks for this at the
+  // moment it is needed instead of reusing what the last search returned: that
+  // older object can be missing (search still running), stale (a filter was
+  // just changed) or for a different client (client just switched).
+  async function resolveNow() {
+    const client = S.client;
+    const name = clientName();
+    const typed = Object.assign({}, S.f);
+    const d = await api('/api/cx/resolve?' + filterParams().toString());
+    return { client, clientName: name, typed, resolved: d.resolved || {}, rules: d.rules || [] };
   }
 
   async function loadPockets(force) {
@@ -663,9 +679,9 @@
     const el = $('#funnel');
     const sm = S.summary && !S.summary.failed ? S.summary : null;
     const approx = sm && sm.approx ? '~' : '';
-    const matched = S.capped ? (sm ? approx + num(sm.matched) : num(S.total) + '+') : num(S.total);
+    const matched = S.capped ? (sm ? approx + num(sm.matched) : (S.countUnknown ? 'Many' : num(S.total) + '+')) : num(S.total);
     const step = (k, v, s, cls) => '<div class="cx-step ' + (cls || '') + '"><div class="k">' + k + '</div><div class="v">' + v + '</div><div class="s">' + (s || '&nbsp;') + '</div></div>';
-    let html = step('Matching contacts', S.busy && !S.rows.length ? '…' : matched, sm ? approx + num(sm.companies) + ' companies' : '');
+    let html = step('Matching contacts', S.busy && !S.rows.length ? '…' : matched, sm && sm.companies != null ? num(sm.companies) + ' companies' : (sm && sm.approx ? 'estimated from a sample' : ''));
     html += step('Verified safe', sm ? approx + num(sm.verified) : '…', sm ? approx + num(sm.verifiedFresh) + ' checked in the last ' + sm.freshVerdictDays + ' days' : '');
     html += step('Not verified yet', sm ? approx + num(sm.unverified) : '…', 'checked during the send');
     if (!S.client) {
@@ -760,7 +776,7 @@
     const to = S.page * S.pageSize + S.rows.length;
     const sm = S.summary && !S.summary.failed ? S.summary : null;
     const of = S.capped ? (sm ? (sm.approx ? 'about ' : '') + num(sm.matched) : num(S.total) + '+') : num(S.total);
-    const last = !S.capped && to >= S.total;
+    const last = (!S.capped && to >= S.total) || (S.page + 1) * S.pageSize > (S.maxOffset || 100000);
     el.innerHTML = '<span>' + (S.total ? num(from) + '–' + num(to) + ' of ' + of : 'No results') + '</span>' +
       '<button class="cx-btn sm" data-act="prev"' + (S.page ? '' : ' disabled') + '>Previous</button>' +
       '<button class="cx-btn sm" data-act="next"' + (last || S.rows.length < S.pageSize ? ' disabled' : '') + '>Next</button>' +
@@ -1013,6 +1029,9 @@
   document.addEventListener('mousedown', (e) => { if (openPop && !openPop.parentElement.contains(e.target)) closePop(); });
 
   function setClient(id) {
+    // Ticked rows were chosen for the previous client. Carrying them over
+    // would let "Send these" mail one client's picks to another.
+    if ((id || '') !== S.client) S.sel.clear();
     S.client = id || '';
     renderClient(); closePop();
     S.pockets = null; S.pocketsFor = '';
@@ -1144,83 +1163,134 @@
     $('[data-x]', d).addEventListener('click', closeDialog);
   }
 
-  // Send to a campaign. Uses the existing push routes; the only v2 part is that
-  // the filter handed over is `S.resolved`, the exact object the list ran with
-  // (client rules included), so the push refills from the same contacts.
+  // Send to a campaign. Uses the existing, proven push routes. What v2 adds is
+  // that the filter handed over is resolved by the server when the dialog
+  // opens (resolveNow), client rules included, and that one snapshot of client
+  // + filter is used for the ready count, the selection and the refill. The
+  // push therefore draws from exactly the contacts the list shows.
   async function openSend(selectedOnly) {
     if (!S.client) return;
     const ticked = [...S.sel.keys()];
     const useSel = selectedOnly && ticked.length > 0;
-    const ready = S.send && S.send.checked ? S.send.sendableTotal : null;
     const lastN = store.get('lastSendN', 500);
     const d = dialog(
       '<header><h2>Send to a ' + esc(clientName()) + ' campaign</h2><p>' + (useSel ? 'Sends the ' + num(ticked.length) + ' contacts you ticked.' : 'Picks the best contacts from this filter, verifies them, and keeps going until the number you asked for is in PlusVibe.') + '</p></header>' +
       '<div class="body">' +
-      (useSel ? '' : '<div class="cx-box ' + (ready === 0 ? 'bad' : 'ok') + '"><b>' + (ready == null ? 'Checking who is ready…' : (S.send.estimated ? 'About ' : '') + num(ready) + ' ready to send') + '</b>' +
-        (ready != null ? '<div class="cx-dim">Best first: never emailed, then longest rested, then newest. One per company.</div>' : '') + '</div>') +
+      (useSel ? '' : '<div class="cx-box" id="sdReady"><b>Checking who is ready…</b></div>') +
       '<div class="cx-field"><label>Campaign</label><select class="cx-select" id="sdCamp"><option value="">Loading campaigns…</option></select><div class="hint" id="sdCampHint"></div></div>' +
-      '<div class="cx-field" id="sdNewWrap" hidden><label>New campaign name</label><input class="cx-input" id="sdNew" placeholder="e.g. Yorkshire builders 1-20"></div>' +
-      (useSel ? '' : '<div class="cx-field"><label>How many to send</label><input class="cx-input" id="sdN" type="number" min="1" max="20000" value="' + Math.max(1, Math.min(lastN, ready == null ? lastN : Math.max(ready, 1))) + '"></div>') +
+      '<div class="cx-field" id="sdNewWrap" hidden><label>New campaign name</label><input class="cx-input" id="sdNew" placeholder="e.g. Yorkshire builders 1-50"></div>' +
+      (useSel ? '' : '<div class="cx-field"><label>How many to send</label><input class="cx-input" id="sdN" type="number" min="1" max="20000" value="' + Math.max(1, lastN) + '"></div>') +
       '<details class="cx-adv"><summary>Options</summary><div class="inner">' +
       '<label class="cx-check"><input type="checkbox" id="sdOne" checked><span>One contact per company<small>Stops a company getting several emails from one send.</small></span></label>' +
       '<label class="cx-check"><input type="checkbox" id="sdCatch" checked><span>Include catch-all addresses that pass the second check<small>Catch-all domains accept any address, so they get an extra check before sending.</small></span></label>' +
       '<label class="cx-check"><input type="checkbox" id="sdSave" checked><span>Remember this filter for the campaign<small>So “What works” can load it again later.</small></span></label>' +
       '<label class="cx-check"><input type="checkbox" id="sdReplace"><span>Update contacts PlusVibe already holds<small>Leave off unless you are re-sending corrected data.</small></span></label>' +
       '</div></details></div>' +
-      '<footer><span class="err" id="sdErr"></span><button class="cx-btn" data-x>Cancel</button><button class="cx-btn primary" id="sdGo">Verify and send</button></footer>');
+      '<footer><span class="err" id="sdErr"></span><button class="cx-btn" data-x>Cancel</button><button class="cx-btn primary" id="sdGo" disabled>Verify and send</button></footer>');
     $('[data-x]', d).addEventListener('click', closeDialog);
-    const camp = $('#sdCamp', d); const err = $('#sdErr', d); const go = $('#sdGo', d);
-    camp.addEventListener('change', () => { $('#sdNewWrap', d).hidden = camp.value !== '__new'; });
+    const camp = $('#sdCamp', d); const err = $('#sdErr', d); const go = $('#sdGo', d); const ready = $('#sdReady', d);
+
+    // One snapshot for the life of the dialog.
+    let snap;
+    try { snap = await resolveNow(); }
+    catch (e) { err.textContent = 'Could not read the current filter: ' + e.message; return; }
+    if (!d.isConnected) return;
+
+    // A campaign created by an earlier attempt in this dialog. Reused on retry
+    // so a failed send never leaves a trail of empty campaigns in PlusVibe.
+    let created = null;
+    const chosen = () => {
+      const o = camp.selectedOptions[0];
+      if (!o || !o.value) return null;
+      if (o.value === '__new') { const name = $('#sdNew', d).value.trim(); return { isNew: true, id: created && created.name === name ? created.id : '', name }; }
+      return { isNew: false, id: o.value, name: o.dataset.name || '' };
+    };
+
+    let readySeq = 0;
+    const refreshReady = async () => {
+      if (!ready) return;
+      const my = ++readySeq;
+      const c = chosen();
+      ready.className = 'cx-box';
+      ready.innerHTML = '<b>Checking who is ready…</b>';
+      try {
+        const r = await api('/api/contacts/sendability', { method: 'POST', body: {
+          workspace_id: snap.client, workspace_name: snap.clientName, filters: snap.resolved,
+          campaign_id: c && c.id ? c.id : '', campaign_name: c && c.name ? c.name : '' } });
+        if (my !== readySeq || !d.isConnected) return;
+        const n = r.checked ? r.sendableTotal : null;
+        ready.className = 'cx-box ' + (n === 0 ? 'bad' : 'ok');
+        ready.innerHTML = '<b>' + (n == null ? 'Could not tell how many are ready' : (r.estimated ? 'About ' : '') + num(n) + ' ready to send' + (c && c.id ? ' to this campaign' : '')) + '</b>' +
+          '<div class="cx-dim">Best first: never emailed, then longest rested, then newest. ' + (c && c.id ? 'Contacts already in this campaign are left out.' : 'Choose a campaign to leave out contacts already in it.') + '</div>';
+      } catch (e) {
+        if (my !== readySeq || !d.isConnected) return;
+        ready.className = 'cx-box bad';
+        ready.innerHTML = '<b>Could not check who is ready</b><div class="cx-dim">' + esc(e.message) + '</div>';
+      }
+    };
+    refreshReady();
+
+    camp.addEventListener('change', () => { $('#sdNewWrap', d).hidden = camp.value !== '__new'; refreshReady(); });
     try {
-      const r = await api('/api/pv/campaigns?workspace_id=' + encodeURIComponent(S.client));
-      const list = (r.list || []).slice().sort((a, b) => String(a.name).localeCompare(String(b.name)));
-      camp.innerHTML = '<option value="">Choose a campaign…</option>' + list.map((c) => '<option value="' + esc(c.id) + '">' + esc(c.name) + (c.status ? ' (' + esc(String(c.status).toLowerCase()) + ')' : '') + '</option>').join('') + '<option value="__new">+ New campaign…</option>';
+      const r = await api('/api/pv/campaigns?workspace_id=' + encodeURIComponent(snap.client));
+      if (!d.isConnected) return;
+      const list = (r.list || []).slice().sort((x, y) => String(x.name).localeCompare(String(y.name)));
+      camp.innerHTML = '<option value="">Choose a campaign…</option>' +
+        list.map((c) => '<option value="' + esc(c.id) + '" data-name="' + esc(c.name) + '">' + esc(c.name) + (c.status ? ' (' + esc(String(c.status).toLowerCase()) + ')' : '') + '</option>').join('') +
+        '<option value="__new">+ New campaign…</option>';
+      go.disabled = false;
     } catch (e) {
       camp.innerHTML = '<option value="">Campaigns could not be loaded</option>';
       $('#sdCampHint', d).textContent = 'PlusVibe did not answer: ' + String(e.message).slice(0, 140);
-      go.disabled = true;
     }
+
     go.addEventListener('click', async () => {
       err.textContent = '';
-      let campId = camp.value; let campName = camp.selectedOptions[0] ? camp.selectedOptions[0].textContent.replace(/ \([a-z_ ]+\)$/, '') : '';
-      const target = useSel ? 0 : Math.max(1, Math.min(parseInt($('#sdN', d).value, 10) || 0, 20000));
-      if (!campId) { err.textContent = 'Choose a campaign.'; return; }
+      const c = chosen();
+      const target = useSel ? 0 : Math.max(0, Math.min(parseInt($('#sdN', d).value, 10) || 0, 20000));
+      if (!c) { err.textContent = 'Choose a campaign.'; return; }
+      if (c.isNew && !c.name) { err.textContent = 'Name the new campaign.'; return; }
       if (!useSel && !target) { err.textContent = 'Enter how many to send.'; return; }
       go.disabled = true; const label = go.textContent;
       try {
-        if (campId === '__new') {
-          campName = $('#sdNew', d).value.trim();
-          if (!campName) throw new Error('Name the new campaign.');
-          go.textContent = 'Creating the campaign…';
-          const cr = await api('/api/bison/create-campaign', { method: 'POST', body: { ws_id: S.client, name: campName, settings: { open_tracking: false, plain_text: true, can_unsubscribe: false } } });
-          campId = cr.campaign.id;
-        }
         const onePer = $('#sdOne', d).checked;
+        // 1. Find the contacts FIRST. Nothing is created in PlusVibe until we
+        //    know there is something to send.
         let ids = ticked;
         if (!useSel) {
           go.textContent = 'Finding the best contacts…';
           const sd = await api('/api/contacts/sendability', { method: 'POST', body: {
-            workspace_id: S.client, workspace_name: clientName(), filters: S.resolved, return_ids: true,
-            campaign_id: campId, campaign_name: campName, sample: target, one_per_company: onePer } });
+            workspace_id: snap.client, workspace_name: snap.clientName, filters: snap.resolved, return_ids: true,
+            campaign_id: c.id || '', campaign_name: c.name, sample: target, one_per_company: onePer } });
           ids = sd.ids || [];
           if (!ids.length) throw new Error('No contacts in this filter pass the send rules for this campaign.');
           store.set('lastSendN', target);
         }
+        // 2. Create the campaign if it is a new one (once per dialog).
+        let campId = c.id;
+        if (c.isNew && !campId) {
+          go.textContent = 'Creating the campaign…';
+          const cr = await api('/api/bison/create-campaign', { method: 'POST', body: { ws_id: snap.client, name: c.name, settings: { open_tracking: false, plain_text: true, can_unsubscribe: false } } });
+          campId = cr.campaign.id;
+          created = { id: campId, name: c.name };
+        }
+        // 3. Verify and send.
         go.textContent = 'Starting…';
-        const allowed = $('#sdCatch', d).checked ? ['safe', 'safe_catchall'] : ['safe'];
+        const useCatch = $('#sdCatch', d).checked;
         const body = {
-          workspace_id: S.client, campaign_id: campId, contact_ids: ids, workspace_name: clientName(), campaign_name: campName,
-          include_risky: false, emailProviders: (S.f.emailProviders || ''), use_n2b: $('#sdCatch', d).checked, allowed_statuses: allowed,
+          workspace_id: snap.client, campaign_id: campId, contact_ids: ids, workspace_name: snap.clientName, campaign_name: c.name,
+          include_risky: false, emailProviders: snap.typed.emailProviders || '', use_n2b: useCatch,
+          allowed_statuses: useCatch ? ['safe', 'safe_catchall'] : ['safe'],
           one_per_company: onePer, replace_existing: $('#sdReplace', d).checked,
         };
-        if (!useSel) { body.target = target; body.target_filters = S.resolved; }
+        if (!useSel) { body.target = target; body.target_filters = snap.resolved; }
         const r = await api('/api/contacts/verify-and-push', { method: 'POST', body });
         if ($('#sdSave', d).checked) {
-          api('/api/campaign-filters', { method: 'POST', body: { workspace_id: S.client, workspace_name: clientName(), campaign_id: campId, campaign_name: campName, filters: S.f } }).catch(() => {});
+          api('/api/campaign-filters', { method: 'POST', body: { workspace_id: snap.client, workspace_name: snap.clientName, campaign_id: campId, campaign_name: c.name, filters: snap.typed } }).catch(() => {});
         }
         closeDialog();
         if (useSel) { S.sel.clear(); renderTable(); renderTabs(); }
-        toast(r.jobId ? 'Send started for “' + campName + '”. Progress is bottom right.' : 'Send started.');
+        toast(r.jobId ? 'Send started for “' + c.name + '”. Progress is bottom right.' : 'Send started.');
         pollJobs(true);
       } catch (e) { err.textContent = e.message; go.disabled = false; go.textContent = label; }
     });
@@ -1290,6 +1360,12 @@
     } catch (e) {
       $('#tablewrap').innerHTML = '<div class="cx-state"><h3>The page could not start</h3><p>' + esc(e.message) + '</p><button class="cx-btn" onclick="location.reload()">Reload</button></div>';
       return;
+    }
+    if (S.boot.notice) {
+      const n = document.createElement('div');
+      n.className = 'cx-notice';
+      n.textContent = S.boot.notice;
+      $('.cx-shell').prepend(n);
     }
     buildDefaults();
     readUrl();
