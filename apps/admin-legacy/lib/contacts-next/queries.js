@@ -21,6 +21,9 @@ const { filterSignature } = require('./filters');
 const COUNT_CAP = Number(process.env.CONTACTS_COUNT_CAP) || 10000;
 // Rows a facet / summary sample aims to read on a broad filter.
 const SAMPLE_TARGET_ROWS = 200000;
+// How long a sorted read of a broad filter may run before the page falls back
+// to an unsorted one.
+const BROAD_SORT_TIMEOUT_MS = Number(process.env.CONTACTS_BROAD_SORT_MS) || 6000;
 
 const TIER = PostgresDatabase.TIER_SQL;
 const VERIFIED_DATE = PostgresDatabase.VERIFIED_DATE_SQL;
@@ -153,6 +156,7 @@ async function search(db, tenant, filters, opts = {}) {
   const { count, capped } = await cappedCount(db, tenant, filters);
   let rows = [];
   let plan = 'empty';
+  let unsorted = false;
   if (count > 0) {
     if (!capped) {
       // NARROW (<= COUNT_CAP matches). Find the matching rows by whatever
@@ -173,10 +177,24 @@ async function search(db, tenant, filters, opts = {}) {
       const sql = `SELECT ${LIST_SELECT} FROM contacts
         WHERE workspace_id = $1${where}
         ORDER BY ${order} LIMIT $${params.length + 2} OFFSET $${params.length + 3}`;
-      rows = (await db.query(sql, [tenant, ...params, limit, offset])).rows;
+      try {
+        rows = (await timedQuery(db, sql, [tenant, ...params, limit, offset], BROAD_SORT_TIMEOUT_MS)).rows;
+      } catch (e) {
+        if (!/statement timeout|canceling statement/i.test(e.message)) throw e;
+        // The ordered read did not finish in time. That happens when the
+        // matches sit at the far end of the sort order (or before
+        // idx_contacts_best_order has been built: measured 4.9s on production
+        // without it). Rather than a spinner or an error, return the page
+        // unsorted, which takes milliseconds, and say so.
+        plan = 'broad-unsorted';
+        unsorted = true;
+        const fast = `SELECT ${LIST_SELECT} FROM contacts
+          WHERE workspace_id = $1${where} LIMIT $${params.length + 2} OFFSET $${params.length + 3}`;
+        rows = (await db.query(fast, [tenant, ...params, limit, offset])).rows;
+      }
     }
   }
-  return { contacts: rows, total: count, capped, limit, offset, plan, ms: Date.now() - t0 };
+  return { contacts: rows, total: count, capped, limit, offset, plan, unsorted, ms: Date.now() - t0 };
 }
 
 // ── Sampling ────────────────────────────────────────────────────────────────

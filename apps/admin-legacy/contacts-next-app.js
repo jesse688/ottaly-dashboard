@@ -297,7 +297,7 @@
       const d = await api('/api/cx/search?' + p.toString(), { signal: searchAbort.signal });
       if (my !== seq) return;
       S.rows = d.contacts || []; S.total = d.total || 0; S.capped = !!d.capped;
-      S.rules = d.rules || []; S.resolved = d.resolved || {}; S.plan = d.plan; S.ms = d.ms;
+      S.rules = d.rules || []; S.resolved = d.resolved || {}; S.plan = d.plan; S.ms = d.ms; S.unsorted = !!d.unsorted;
     } catch (e) {
       if (e.name === 'AbortError' || my !== seq) return;
       S.rows = []; S.total = 0; S.capped = false; S.error = e.message;
@@ -766,6 +766,7 @@
       '<button class="cx-btn sm" data-act="next"' + (last || S.rows.length < S.pageSize ? ' disabled' : '') + '>Next</button>' +
       '<label>Rows <select data-act="pagesize">' + [50, 100, 250, 500].map((n) => '<option' + (n === S.pageSize ? ' selected' : '') + '>' + n + '</option>').join('') + '</select></label>' +
       '<span class="grow"></span><span><kbd>/</kbd> search &nbsp; <kbd>↑</kbd><kbd>↓</kbd> move &nbsp; <kbd>Enter</kbd> open &nbsp; <kbd>X</kbd> tick &nbsp; <kbd>Esc</kbd> close</span>' +
+      (S.unsorted ? '<span class="cx-low" title="Sorting this many contacts took too long, so this page is unsorted. Add a filter and the order comes back.">Not sorted: too many matches</span>' : '') +
       (S.ms ? '<span title="Server time for the list">' + S.ms + ' ms</span>' : '');
   }
 
