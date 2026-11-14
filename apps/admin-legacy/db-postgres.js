@@ -2120,10 +2120,14 @@ class PostgresDatabase {
     // enter a division/group prefix and pull everything beneath it.
     safe('sicCodes', () => {
       if (!filters.sicCodes) return;
-      const codes = filters.sicCodes.split(',').map(c => c.trim()).filter(Boolean);
+      // Strip to digits FIRST, then drop empties. A value with no digits (e.g.
+      // "care homes" typed into the box) used to survive as an empty string and
+      // produce `(^|,)()[0-9]*(,|$)`, which matches every row that has any SIC
+      // code at all: the filter silently widened instead of narrowing.
+      const codes = String(filters.sicCodes).split(',').map(c => c.replace(/[^0-9]/g, '')).filter(Boolean);
       if (!codes.length) return;
       clauses.push(`ch_sic_codes ~* $${p}`);
-      params.push(`(^|,)(${codes.map(c => c.replace(/[^0-9]/g,'')).join('|')})[0-9]*(,|$)`); p++;
+      params.push(`(^|,)(${codes.join('|')})[0-9]*(,|$)`); p++;
     });
     safe('website',             () => { if (filters.website)             like('company_domain', filters.website); });
     safe('companyLinkedin',     () => { if (filters.companyLinkedin)     like('company_linkedin_url', filters.companyLinkedin); });
@@ -2681,8 +2685,160 @@ class PostgresDatabase {
       p += 2;
     });
 
+    // ── Contacts v2 filters ───────────────────────────────────────────────
+    // Additive: every key below is new, so a caller that does not send it is
+    // unaffected. They exist so the v2 page can ask the questions CMs actually
+    // ask ("verified recently?", "rested long enough?", "which tier?") through
+    // the SAME builder the list, the counts, the export and the push refill
+    // all use. One builder is the only way those numbers cannot disagree.
+    const posInt = (v, max = 3650) => {
+      const n = parseInt(v, 10);
+      return Number.isFinite(n) && n > 0 && n <= max ? n : null;
+    };
+    const csv = (v) => String(v == null ? '' : v).split(',').map(x => x.trim()).filter(Boolean);
+    const VERIFIED_DATE = PostgresDatabase.VERIFIED_DATE_SQL;
+
+    // Exact, case-insensitive industry match. The older `industry` filter is a
+    // whole-word regex ("construction" also matches "construction & engineering"),
+    // which is right for typing but wrong for ticking a value in a list: the
+    // count beside the value must be the count you get.
+    safe('industryIs',       () => { if (filters.industryIs)       colExact('industry', filters.industryIs); });
+    safe('industryIsNot',    () => { if (filters.industryIsNot)    colExactExclude('industry', filters.industryIsNot); });
+    safe('departmentIs',     () => { if (filters.departmentIs)     colExact('department', filters.departmentIs); });
+    safe('companyCountryIs', () => { if (filters.companyCountryIs) colExact('company_country', filters.companyCountryIs); });
+
+    // "Hide dead contacts": rows no push will ever accept. Invalid address,
+    // hard bounce, or do-not-contact. On by default in v2 so nobody builds a
+    // list out of contacts that cannot be mailed.
+    safe('hideDead', () => {
+      if (filters.hideDead !== 'true' && filters.hideDead !== true) return;
+      clauses.push(PostgresDatabase.ALIVE_SQL);
+    });
+
+    // Quality tier (A/B/C, X = dead). See TIER_SQL for the definition.
+    safe('tier', () => {
+      const want = csv(filters.tier).map(t => t.toUpperCase()).filter(t => ['A', 'B', 'C', 'X'].includes(t));
+      if (!want.length) return;
+      clauses.push(`(${PostgresDatabase.TIER_SQL}) = ANY($${p}::text[])`);
+      params.push(want); p++;
+    });
+
+    // Verification age. email_verified_at is TEXT in production (five string
+    // formats, all starting YYYY-MM-DD), so it is read through VERIFIED_DATE_SQL
+    // rather than cast directly: one malformed value must not 500 the search.
+    safe('verifiedWithinDays', () => {
+      const n = posInt(filters.verifiedWithinDays);
+      if (!n) return;
+      clauses.push(`${VERIFIED_DATE} >= (CURRENT_DATE - $${p}::int)`);
+      params.push(n); p++;
+    });
+    // "Verdict is stale": has a verdict, but older than N days (or undated).
+    safe('verifiedOlderThanDays', () => {
+      const n = posInt(filters.verifiedOlderThanDays);
+      if (!n) return;
+      clauses.push(`(email_status IS NOT NULL AND (${VERIFIED_DATE} IS NULL OR ${VERIFIED_DATE} < (CURRENT_DATE - $${p}::int)))`);
+      params.push(n); p++;
+    });
+
+    // Send history, across every client.
+    safe('neverEmailed', () => {
+      if (filters.neverEmailed !== 'true' && filters.neverEmailed !== true) return;
+      clauses.push(`(last_emailed_at IS NULL AND COALESCE(emailed_workspaces, '{}'::jsonb) = '{}'::jsonb)`);
+    });
+    // "Rested": emailed before, but not in the last N days.
+    safe('restedDays', () => {
+      const n = posInt(filters.restedDays);
+      if (!n) return;
+      clauses.push(`(last_emailed_at IS NOT NULL AND last_emailed_at < now() - ($${p}::int * interval '1 day'))`);
+      params.push(n); p++;
+    });
+    // Not emailed by ANYONE in the last N days (never-emailed rows pass).
+    safe('notEmailedDays', () => {
+      const n = posInt(filters.notEmailedDays);
+      if (!n) return;
+      clauses.push(`(last_emailed_at IS NULL OR last_emailed_at < now() - ($${p}::int * interval '1 day'))`);
+      params.push(n); p++;
+    });
+    // Ever / never sent to one named client workspace.
+    safe('sentToClient', () => {
+      if (!filters.sentToClient) return;
+      clauses.push(`emailed_workspaces ? $${p}`); params.push(String(filters.sentToClient)); p++;
+    });
+    safe('notSentToClient', () => {
+      if (!filters.notSentToClient) return;
+      clauses.push(`NOT (COALESCE(emailed_workspaces, '{}'::jsonb) ? $${p})`); params.push(String(filters.notSentToClient)); p++;
+    });
+
+    // Any-N import window. `freshnessDays` only accepts 30/60 and `updatedAge`
+    // a fixed list; this takes any whole number of days.
+    safe('importedWithinDays', () => {
+      const n = posInt(filters.importedWithinDays);
+      if (!n) return;
+      clauses.push(`(imported_at IS NOT NULL AND imported_at >= now() - ($${p}::int * interval '1 day'))`);
+      params.push(n); p++;
+    });
+
+    safe('hasLinkedin', () => {
+      if (filters.hasLinkedin === 'yes') clauses.push(`COALESCE(linkedin_url, '') <> ''`);
+      else if (filters.hasLinkedin === 'no') clauses.push(`COALESCE(linkedin_url, '') = ''`);
+    });
+    safe('hasPhone', () => {
+      const any = `COALESCE(NULLIF(phone,''), NULLIF(corporate_phone,''), NULLIF(company_phone,'')) IS NOT NULL`;
+      if (filters.hasPhone === 'yes') clauses.push(any);
+      else if (filters.hasPhone === 'no') clauses.push(`NOT (${any})`);
+    });
+    // Became a lead (per contact, any client).
+    safe('everLead', () => {
+      if (filters.everLead === 'yes') clauses.push(`marked_as_lead_at IS NOT NULL`);
+      else if (filters.everLead === 'no') clauses.push(`marked_as_lead_at IS NULL`);
+    });
+
     return { clauses, params };
   }
+
+  // A row no push will accept: invalid address, hard bounce or do-not-contact.
+  static ALIVE_SQL = `(COALESCE(LOWER(email_status),'') <> 'invalid'
+      AND COALESCE(LOWER(bounce_type),'') <> 'hard'
+      AND COALESCE(do_not_contact, false) = false)`;
+
+  // email_verified_at as a DATE. The column is TEXT in production and holds
+  // several formats ("2026-11-02 10:11:12.345", ISO with T/Z, with an offset),
+  // but every one starts YYYY-MM-DD, so the first ten characters are the date.
+  // Anything else reads as NULL instead of raising.
+  static VERIFIED_DATE_SQL = `(CASE WHEN email_verified_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'
+      THEN to_date(left(email_verified_at, 10), 'YYYY-MM-DD') END)`;
+
+  static NEVER_PUSHED_SQL = `(pushed_campaigns IS NULL
+      OR jsonb_typeof(pushed_campaigns) <> 'array'
+      OR jsonb_array_length(pushed_campaigns) = 0)`;
+
+  // Contact quality tier. Built ONLY from columns that are well filled in
+  // production (measured 2026-11-14: mx 98%, name 91%, industry 84%,
+  // imported_at 82%), because a tier that leans on a sparse column (seniority
+  // 56%, region 33%) demotes good contacts for missing data, not for being bad.
+  //
+  //   X  dead: invalid, hard bounce or do-not-contact. Never sendable.
+  //   A  verified safe, never pushed, imported in the last 60 days, has a name.
+  //   B  safe or not-yet-verified, has a name, and either never pushed or
+  //      rested 60+ days.
+  //   C  everything else that is still sendable (risky, unknown, recently
+  //      mailed, nameless, old import).
+  //
+  // Verification AGE is deliberately not part of the tier: the push re-verifies
+  // any verdict older than 3 days anyway, so an old "safe" is a cost (one more
+  // verify) rather than a risk.
+  static TIER_SQL = `CASE
+      WHEN NOT ${PostgresDatabase.ALIVE_SQL} THEN 'X'
+      WHEN LOWER(COALESCE(email_status,'')) IN ('safe','safe_catchall')
+           AND ${PostgresDatabase.NEVER_PUSHED_SQL}
+           AND imported_at >= now() - interval '60 days'
+           AND COALESCE(TRIM(first_name),'') <> '' THEN 'A'
+      WHEN (email_status IS NULL OR LOWER(email_status) IN ('safe','safe_catchall'))
+           AND COALESCE(TRIM(first_name),'') <> ''
+           AND (${PostgresDatabase.NEVER_PUSHED_SQL}
+                OR last_emailed_at IS NULL
+                OR last_emailed_at < now() - interval '60 days') THEN 'B'
+      ELSE 'C' END`;
 
   async searchContacts(workspaceId, filters, limit = 100, offset = 0) {
     const { clauses, params } = this._buildFilterClauses(filters);
