@@ -367,9 +367,31 @@ body.cx::after { display: none; } /* no watermark behind a data grid */
 .cx-check small { display: block; color: var(--cx-ink-3); }
 
 /* ── Jobs tray + toast ─────────────────────────────────────────────────── */
-.cx-jobs { position: fixed; right: 16px; bottom: 46px; width: 340px; z-index: 70; display: grid; gap: 8px; justify-items: end; pointer-events: none; }
+.cx-jobs { position: fixed; right: 16px; bottom: 46px; width: 340px; max-width: calc(100vw - 32px); z-index: 70; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; justify-items: end; pointer-events: none; }
 .cx-jobs > * { pointer-events: auto; }
-.cx-jobs .cx-job { width: 100%; }
+.cx-jobs .cx-job { width: 100%; min-width: 0; }
+/* A long campaign name must shorten with "…", not push the card off the right
+   edge of the screen (a grid item will not shrink below its content otherwise). */
+.cx-job .t { min-width: 0; }
+.cx-job .t b { min-width: 0; flex: 1 1 auto; }
+.cx-job .m { flex-wrap: wrap; }
+.cx-jobpill.live { border-color: var(--cx-accent); color: var(--cx-accent-ink); }
+.cx-jobpill.bad { border-color: #f3c6c6; color: var(--cx-bad); }
+.cx-jobpill i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--cx-accent); margin-right: 7px; animation: cxpulse 1.2s ease-in-out infinite; }
+@keyframes cxpulse { 50% { opacity: .25; } }
+.cx-nowlist { display: grid; gap: 0; }
+.cx-now { padding: 12px 14px; border-top: 1px solid var(--cx-line-2); }
+.cx-now .top { display: flex; align-items: flex-start; gap: 12px; }
+.cx-now .ttl { min-width: 0; flex: 1; }
+.cx-now .ttl b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
+.cx-now .ttl span { color: var(--cx-ink-3); font-size: 12px; }
+.cx-now .acts { display: flex; gap: 6px; flex: none; }
+.cx-now .bar { height: 6px; background: var(--cx-line-2); border-radius: 3px; margin: 9px 0 7px; overflow: hidden; }
+.cx-now .bar i { display: block; height: 100%; background: var(--cx-accent); border-radius: 3px; transition: width .4s; }
+.cx-now.bad .bar i { background: var(--cx-bad); }
+.cx-now .line { font-weight: 600; }
+.cx-now.bad .line { color: var(--cx-bad); }
+.cx-now .chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 7px; }
 .cx-jobpill { background: #fff; border: 1px solid var(--cx-line); border-radius: 999px; padding: 5px 12px; font-size: 12px; font-weight: 600; color: var(--cx-ink-2); box-shadow: var(--shadow-sm); }
 .cx-jobpill:hover { border-color: var(--cx-accent); color: var(--cx-accent-ink); }
 .cx-job { background: #fff; border: 1px solid var(--cx-line); border-radius: 12px; box-shadow: var(--shadow-md); padding: 10px 12px; }

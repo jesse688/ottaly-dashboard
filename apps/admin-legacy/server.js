@@ -1159,6 +1159,30 @@ app.use(async (req, res, next) => {
 });
 const PUBLIC_BROWSER_JS = new Set(['/nav.js', '/splash.js', '/next-step.js', '/ch-fields-client.js', '/contacts-next-app.js']);
 const PUBLIC_STATIC_RE  = /^\/(?:[A-Za-z0-9_-]+\.(?:html|css|svg|png|ico)|assets\/[A-Za-z0-9_.-]+\.(?:svg|png|jpe?g|webp|gif|ico))$/;
+// The contacts page, with its script and stylesheet addressed by build version.
+// Cloudflare sends .js/.css with a 4 hour browser cache (measured 2026-11-14:
+// `cache-control: public, max-age=14400`), so after a deploy the page HTML was
+// new but the browser kept running the OLD script for hours: missing tabs,
+// fixed bugs still showing. A new ?v= on every build makes the browser fetch
+// the new files at once, and still cache them between deploys.
+const CONTACTS_NEXT_HTML = (() => {
+  try {
+    const v = encodeURIComponent(process.env.GIT_COMMIT || String(Date.now()));
+    return fs.readFileSync(path.join(__dirname, 'contacts-next.html'), 'utf8')
+      .replace('"/contacts-next.css"', `"/contacts-next.css?v=${v}"`)
+      .replace('"/contacts-next-app.js"', `"/contacts-next-app.js?v=${v}"`);
+  } catch (e) {
+    console.warn('[contacts-next] could not prepare the page:', e.message);
+    return null;
+  }
+})();
+function sendContactsNext(req, res) {
+  if (!CONTACTS_NEXT_HTML) return res.sendFile(path.join(__dirname, 'contacts-next.html'));
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.type('html').send(CONTACTS_NEXT_HTML);
+}
+app.get('/contacts-next.html', sendContactsNext);
+
 app.use((req, res, next) => {
   const p = req.path;
   if (p === '/' || PUBLIC_BROWSER_JS.has(p) || PUBLIC_STATIC_RE.test(p)) return serveStatic(req, res, next);
@@ -27503,9 +27527,7 @@ function scheduleAudienceScoring(pgdb) {
     });
     // /contacts opens the new page. The original stays at /contacts.html for
     // imports and admin tools.
-    app.get('/contacts', (req, res) => {
-      res.sendFile(path.join(__dirname, 'contacts-next.html'));
-    });
+    app.get('/contacts', sendContactsNext);
     // Sync technologies → email_* tags for all contacts. Fast single-pass
     // bulk UPDATE so Email Provider counts include tech-stack data.
     // Fire-and-forget — runs in background after server is up.
