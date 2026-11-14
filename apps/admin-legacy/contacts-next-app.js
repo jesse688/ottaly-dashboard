@@ -1311,28 +1311,46 @@
   // ── Send jobs tray ───────────────────────────────────────────────────────
   let jobsTimer = null;
   const JOB_WORD = { queued: 'Waiting', verifying: 'Verifying', n2b_verifying: 'Second check', pushing: 'Sending', pausing: 'Pausing', paused: 'Paused', failed: 'Failed', error: 'Failed', completed: 'Done' };
+  // Old paused sends are parked, not shown. A send someone paused weeks ago is
+  // reloaded on every server start and would otherwise sit over the bottom
+  // right of the table for ever. Anything running, failed, or paused in the
+  // last day shows as a card; the rest collapse into one small pill.
+  let showParked = false;
+  const jobAgeHours = (j) => {
+    const t = j.paused_at ? Date.parse(String(j.paused_at).replace(' ', 'T') + 'Z') : (j.created_at || 0);
+    return t ? (Date.now() - t) / 3600000 : 0;
+  };
+  function jobCard(j) {
+    const goal = j.target || j.total || 0;
+    const done = j.pushed || 0;
+    const w = goal ? Math.min(100, Math.round((done / goal) * 100)) : Math.round((j.progress || 0));
+    const live = ['queued', 'verifying', 'n2b_verifying', 'pushing'].includes(j.status);
+    const failed = j.status === 'failed' || j.status === 'error';
+    return '<div class="cx-job' + (failed ? ' failed' : '') + '"><div class="t"><b title="' + esc(j.campaign_name) + '">' + esc(j.workspace_name || '') + ' · ' + esc(j.campaign_name || '') + '</b><span>' + esc(JOB_WORD[j.status] || j.status) + (j.queuePosition ? ' (' + j.queuePosition + ')' : '') + '</span></div>' +
+      '<div class="p"><i style="width:' + w + '%"></i></div><div class="m"><span>' + num(done) + (goal ? ' of ' + num(goal) : '') + ' sent</span><span>' + num(j.verified || 0) + ' verified</span>' +
+      (j.status === 'paused' && j.paused_at ? '<span>since ' + esc(shortDate(j.paused_at)) + '</span>' : '') +
+      (failed && j.error ? '<span title="' + esc(j.error) + '">' + esc(String(j.error).slice(0, 40)) + '</span>' : '') +
+      (live ? '<button data-job="pause" data-id="' + esc(j.id) + '">Pause</button><button data-job="cancel" data-id="' + esc(j.id) + '">Stop</button>' : '') +
+      (j.status === 'paused' ? '<button data-job="resume" data-id="' + esc(j.id) + '">Resume</button><button data-job="cancel" data-id="' + esc(j.id) + '">Stop</button>' : '') + '</div></div>';
+  }
+  let lastJobs = [];
+  function renderJobs() {
+    const parked = lastJobs.filter((j) => j.status === 'paused' && jobAgeHours(j) > 24);
+    const shown = lastJobs.filter((j) => !parked.includes(j));
+    const cards = (showParked ? shown.concat(parked) : shown).slice(0, 6).map(jobCard).join('');
+    const pill = parked.length ? '<button class="cx-jobpill" data-job-toggle>' + (showParked ? 'Hide ' : '') + parked.length + ' paused send' + (parked.length === 1 ? '' : 's') + (showParked ? '' : ' ›') + '</button>' : '';
+    $('#jobs').innerHTML = cards + pill;
+  }
   async function pollJobs(soon) {
     clearTimeout(jobsTimer);
-    let jobs = [];
-    try { jobs = (await api('/api/contacts/push-jobs')).jobs || []; } catch { /* tray is optional */ }
-    const el = $('#jobs');
-    el.innerHTML = jobs.slice(0, 4).map((j) => {
-      const goal = j.target || j.total || 0;
-      const done = j.pushed || 0;
-      const w = goal ? Math.min(100, Math.round((done / goal) * 100)) : Math.round((j.progress || 0));
-      const live = ['queued', 'verifying', 'n2b_verifying', 'pushing'].includes(j.status);
-      const failed = j.status === 'failed' || j.status === 'error';
-      return '<div class="cx-job' + (failed ? ' failed' : '') + '"><div class="t"><b title="' + esc(j.campaign_name) + '">' + esc(j.workspace_name || '') + ' · ' + esc(j.campaign_name || '') + '</b><span>' + esc(JOB_WORD[j.status] || j.status) + (j.queuePosition ? ' (' + j.queuePosition + ')' : '') + '</span></div>' +
-        '<div class="p"><i style="width:' + w + '%"></i></div><div class="m"><span>' + num(done) + (goal ? ' of ' + num(goal) : '') + ' sent</span><span>' + num(j.verified || 0) + ' verified</span>' +
-        (failed && j.error ? '<span title="' + esc(j.error) + '">' + esc(String(j.error).slice(0, 40)) + '</span>' : '') +
-        (live ? '<button data-job="pause" data-id="' + esc(j.id) + '">Pause</button><button data-job="cancel" data-id="' + esc(j.id) + '">Stop</button>' : '') +
-        (j.status === 'paused' ? '<button data-job="resume" data-id="' + esc(j.id) + '">Resume</button><button data-job="cancel" data-id="' + esc(j.id) + '">Stop</button>' : '') + '</div></div>';
-    }).join('');
-    const active = jobs.some((j) => ['queued', 'verifying', 'n2b_verifying', 'pushing', 'pausing'].includes(j.status));
+    try { lastJobs = (await api('/api/contacts/push-jobs')).jobs || []; } catch { /* tray is optional */ }
+    renderJobs();
+    const active = lastJobs.some((j) => ['queued', 'verifying', 'n2b_verifying', 'pushing', 'pausing'].includes(j.status));
     jobsTimer = setTimeout(pollJobs, active || soon ? 4000 : 60000);
   }
   function bindJobs() {
     $('#jobs').addEventListener('click', async (e) => {
+      if (e.target.closest('[data-job-toggle]')) { showParked = !showParked; renderJobs(); return; }
       const b = e.target.closest('[data-job]');
       if (!b) return;
       if (b.dataset.job === 'cancel' && !confirm('Stop this send? Contacts already sent stay in the campaign.')) return;

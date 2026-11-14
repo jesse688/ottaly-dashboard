@@ -361,7 +361,11 @@ body.cx::after { display: none; } /* no watermark behind a data grid */
 .cx-check small { display: block; color: var(--cx-ink-3); }
 
 /* ── Jobs tray + toast ─────────────────────────────────────────────────── */
-.cx-jobs { position: fixed; right: 16px; bottom: 16px; width: 340px; z-index: 70; display: grid; gap: 8px; }
+.cx-jobs { position: fixed; right: 16px; bottom: 46px; width: 340px; z-index: 70; display: grid; gap: 8px; justify-items: end; pointer-events: none; }
+.cx-jobs > * { pointer-events: auto; }
+.cx-jobs .cx-job { width: 100%; }
+.cx-jobpill { background: #fff; border: 1px solid var(--cx-line); border-radius: 999px; padding: 5px 12px; font-size: 12px; font-weight: 600; color: var(--cx-ink-2); box-shadow: var(--shadow-sm); }
+.cx-jobpill:hover { border-color: var(--cx-accent); color: var(--cx-accent-ink); }
 .cx-job { background: #fff; border: 1px solid var(--cx-line); border-radius: 12px; box-shadow: var(--shadow-md); padding: 10px 12px; }
 .cx-job .t { display: flex; gap: 8px; align-items: baseline; }
 .cx-job .t b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
