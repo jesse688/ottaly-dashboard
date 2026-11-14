@@ -9,9 +9,10 @@
 //
 //   1. Only ~17% of GetLeads rows carry an email (66.5M of 402M). Always
 //      search with require_email, or most of what comes back is unsendable.
-//   2. Every email it does return is already VALID-verified — filtering
-//      email_status=VALID returns the identical count to require_email. So
-//      these rows do not need a Reacher pass before their first send.
+//   2. GetLeads marks every email it returns as VALID, but that is its own
+//      label, not ours. Measured 2026-11-14 on a sample of GetLeads contacts
+//      that went through Reacher: about 20% came back invalid, against about
+//      5% for Apollo. Verify these like any other source before a send.
 //
 // The push path requires a non-empty `industry` (see the enrichment gate in
 // server.js), so `industry` is filled from the LinkedIn company industry and
@@ -48,6 +49,16 @@ function parseEmployees(value) {
   if ((m = s.match(/^(\d+)\s*\+$/)))                return parseInt(m[1], 10);
   if ((m = s.match(/^(\d+)$/)))                     return parseInt(m[1], 10);
   return null;
+}
+
+// An exact head-count: a plain whole number from 1 up. Anything else (blank,
+// a range, zero, junk) is "not exact" and the caller falls back to the range.
+function exactEmployees(value) {
+  if (value == null) return null;
+  const s = String(value).replace(/,/g, '').trim();
+  if (!/^\d{1,7}$/.test(s)) return null;
+  const n = parseInt(s, 10);
+  return n >= 1 ? n : null;
 }
 
 // Strip a URL down to a bare domain so it matches how company_domain is
@@ -132,7 +143,12 @@ function mapRow(row) {
 
     industry,
     keywords,
-    numEmployees: parseEmployees(pick(row, 'Employee Count Range', 'Min Employee Count', 'EMPLOYEE_COUNT_RANGE', 'employee_count_range')),
+    // Prefer the exact LinkedIn head-count when the row has one (about two
+    // thirds do). The range gives only its LOWER BOUND ("11 to 50" -> 11), so
+    // a 40-person company was stored as 11 and any filter finer than the
+    // range itself (11-20 vs 21-50) put it in the wrong bucket.
+    numEmployees: exactEmployees(pick(row, 'linkedin_employee_count_exact', 'LinkedIn Employee Count', 'LINKEDIN_EMPLOYEE_COUNT_EXACT'))
+      ?? parseEmployees(pick(row, 'Employee Count Range', 'Min Employee Count', 'EMPLOYEE_COUNT_RANGE', 'employee_count_range')),
 
     source: 'getleads',
     // Keep the whole original row. Apollo rows do the same, and it is what
@@ -155,4 +171,4 @@ function mapRows(rows) {
   return { mapped, skippedNoEmail };
 }
 
-module.exports = { mapRow, mapRows, mapSeniority, parseEmployees, cleanDomain };
+module.exports = { mapRow, mapRows, mapSeniority, parseEmployees, exactEmployees, cleanDomain };

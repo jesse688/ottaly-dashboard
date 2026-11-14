@@ -10,74 +10,9 @@
 const express = require('express');
 const { parseFilters, applyClientRules, FILTER_KEYS } = require('./lib/contacts-next/filters');
 const Q = require('./lib/contacts-next/queries');
+const maintenance = require('./lib/contacts-next/maintenance');
 
 const DEFAULT_TENANT = 'ottaly-global';
-
-// Two indexes the v2 queries are shaped around. Built CONCURRENTLY so a build
-// on the live table never blocks imports or pushes (a plain CREATE INDEX holds
-// a write lock for the whole build).
-//
-//   idx_contacts_best_order   matches the default "best first" sort, so a broad
-//                             filter streams a page straight off the index
-//                             instead of sorting every match.
-//   idx_contacts_emailed_ws_keys  makes `emailed_workspaces ? <client>` an
-//                             index lookup. The existing GIN on that column is
-//                             jsonb_path_ops, which does not support `?` (0
-//                             scans in production), so "everything this client
-//                             was sent" was a full table scan.
-//
-// A CONCURRENTLY build that is interrupted leaves an INVALID index behind, and
-// IF NOT EXISTS would then skip it forever, so an invalid one is dropped first.
-// Without either index every query is still correct, only slower.
-const V2_INDEXES = [
-  ['idx_contacts_best_order',
-   `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_contacts_best_order
-      ON contacts (workspace_id, last_emailed_at ASC NULLS FIRST, imported_at DESC NULLS LAST, id)`],
-  ['idx_contacts_emailed_ws_keys',
-   `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_contacts_emailed_ws_keys
-      ON contacts USING GIN (emailed_workspaces jsonb_ops)`],
-];
-//
-// Production runs more than one replica, and both boot this code. Without a
-// guard, replica B would see replica A's half-built (not yet valid) index,
-// "repair" it with a DROP that queues behind A's build, and then throw away the
-// index A had just finished. So the whole pass runs under one session-level
-// advisory lock: whoever gets it does the work, everyone else skips. A build
-// reported by pg_stat_progress_create_index is also left alone.
-const INDEX_LOCK_KEY = 772011514; // arbitrary constant, unique to this helper
-async function ensureIndexes(pgdb) {
-  if (process.env.CONTACTS_NEXT_SKIP_INDEXES === '1') return;
-  const pool = pgdb.bgPool || pgdb.pool;
-  const client = await pool.connect();
-  let locked = false;
-  try {
-    locked = (await client.query(`SELECT pg_try_advisory_lock($1) AS ok`, [INDEX_LOCK_KEY])).rows[0].ok;
-    if (!locked) { console.log('[contacts-next] index check: another instance is handling it'); return; }
-    await client.query(`SET statement_timeout = 0`);
-    for (const [name, sql] of V2_INDEXES) {
-      try {
-        const r = await client.query(
-          `SELECT c.oid, i.indisvalid FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid WHERE c.relname = $1`, [name]);
-        if (r.rows.length && r.rows[0].indisvalid) continue;
-        if (r.rows.length) {
-          const busy = await client.query(
-            `SELECT 1 FROM pg_stat_progress_create_index WHERE index_relid = $1 LIMIT 1`, [r.rows[0].oid]);
-          if (busy.rows.length) { console.log(`[contacts-next] ${name} is already being built`); continue; }
-          await client.query(`DROP INDEX CONCURRENTLY IF EXISTS ${name}`);
-        }
-        const t0 = Date.now();
-        await client.query(sql);
-        console.log(`[contacts-next] ${name} ready in ${Date.now() - t0}ms`);
-      } catch (e) {
-        console.warn(`[contacts-next] ${name} not built:`, e.message);
-      }
-    }
-  } finally {
-    if (locked) { try { await client.query(`SELECT pg_advisory_unlock($1)`, [INDEX_LOCK_KEY]); } catch { /* session ending frees it */ } }
-    try { await client.query(`SET statement_timeout = 45000`); } catch { /* connection may be dead */ }
-    client.release();
-  }
-}
 
 module.exports = ({ pgdb, getSqlite }) => {
   const router = express.Router();
@@ -94,8 +29,9 @@ module.exports = ({ pgdb, getSqlite }) => {
   // same name, and the original page never lists a view it cannot load.
   const viewScope = (req) => `${tenantOf(req)}#v2`;
 
-  // Indexes v2 relies on, built in the background a little after boot.
-  setTimeout(() => { ensureIndexes(pgdb).catch(e => console.warn('[contacts-next] index check failed:', e.message)); }, 20000).unref?.();
+  // Index upkeep and the one-off head-count fix run in the background a few
+  // minutes after boot. See lib/contacts-next/maintenance.js.
+  maintenance.schedule(pgdb);
 
   // Parse + resolve. `client` is the selected client's PlusVibe workspace id.
   function resolve(req) {

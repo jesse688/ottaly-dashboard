@@ -95,7 +95,11 @@ const ADMIN_KEY              = process.env.ADMIN_KEY              || 'ottaly-adm
 // env (password rotation) automatically invalidates every existing session.
 // No need to also rotate JWT_SECRET — the password change is sufficient.
 const SESSION_SECRET         = JWT_SECRET + ':' + ADMIN_KEY;
-const PLUSVIBE_KEY           = process.env.PLUSVIBE_KEY           || '6425e882-f33fb46a-2837ff5a-eb535a60';
+// No fallback literal. A real PlusVibe key used to be written here as the
+// default, which put it in git. Production sets PLUSVIBE_KEY (or saves a key
+// from the admin page, see getPvKey); without either, PlusVibe calls fail with
+// a clear "not configured" instead of quietly using a key from source control.
+const PLUSVIBE_KEY           = process.env.PLUSVIBE_KEY           || '';
 // PlusVibe API key resolution: a key saved via the admin dashboard (stored in
 // app_settings, hydrated into _pvKeyOverride on boot) takes precedence over
 // the PLUSVIBE_KEY env var. getPvKey() is the single source of truth.
@@ -24426,7 +24430,7 @@ app.get('/api/contacts/push-jobs/:id', requireSession, (req, res) => {
 // DEBUG (no auth) — last ~15 push jobs with the full skip breakdown + error, so
 // "why didn't these push?" is a curl, not a guess. Returns the gate that dropped
 // each contact (job.skipped becomes the breakdown object once a job finishes).
-app.get('/api/debug/push-jobs', (req, res) => {
+app.get('/api/debug/push-jobs', requireSession, (req, res) => {
   res.set('Cache-Control', 'no-store');
   const jobs = [...pushJobs.values()]
     .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))

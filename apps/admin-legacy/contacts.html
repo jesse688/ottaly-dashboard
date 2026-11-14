@@ -5903,7 +5903,7 @@
         const r = await fetch(`/api/contacts/push-jobs/${jobId}`);
         const job = await r.json();
         if (!job.safe_ids?.length) { showMessage('No verified contacts in this job', 'error'); return; }
-        const cr = await fetch('/api/admin/database/contacts/by-ids', {
+        const cr = await fetch('/api/contacts/by-ids', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ids: job.safe_ids })
@@ -6239,7 +6239,7 @@
             return;
           }
           // Fetch verified safe contacts and build CSV
-          const cr = await fetch('/api/admin/database/contacts/by-ids', {
+          const cr = await fetch('/api/contacts/by-ids', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ids: job.safe_ids })

@@ -176,3 +176,39 @@ test('tier SQL names every tier and the alive rule', () => {
   for (const t of ["'A'", "'B'", "'C'", "'X'"]) assert.ok(PostgresDatabase.TIER_SQL.includes(t));
   assert.ok(PostgresDatabase.ALIVE_SQL.includes('do_not_contact'));
 });
+
+test('industry values are normalised the same way in JS and in the filter', () => {
+  assert.equal(PostgresDatabase.normIndustry('Staffing & Recruiting'), 'staffing and recruiting');
+  assert.equal(PostgresDatabase.normIndustry('  Staffing   and Recruiting '), 'staffing and recruiting');
+  assert.equal(PostgresDatabase.normIndustry('Food&Beverages'), 'food and beverages');
+  const { clauses, params } = build({ industryIs: 'Staffing & Recruiting,Construction' });
+  assert.deepEqual(params[0], ['staffing and recruiting', 'construction']);
+  assert.ok(clauses[0].includes('regexp_replace'), 'industryIs must compare the normalised column');
+});
+
+test('tier A alone adds an index-friendly status condition; other tier sets do not', () => {
+  const hint = "email_status IN ('safe','safe_catchall')";
+  assert.ok(build({ tier: 'A' }).clauses.includes(hint));
+  assert.ok(!build({ tier: 'A,B' }).clauses.includes(hint));
+  assert.ok(!build({ tier: 'C' }).clauses.includes(hint));
+});
+
+test('GetLeads mapper prefers the exact head-count over the range lower bound', () => {
+  const { mapRow, exactEmployees } = require('../getleads-mapper');
+  const base = { work_email: 'a@acme.co.uk', first_name: 'A', last_name: 'B', company_name: 'Acme' };
+  assert.equal(mapRow({ ...base, employee_count_range: '11 to 50', linkedin_employee_count_exact: '37' }).numEmployees, 37);
+  assert.equal(mapRow({ ...base, employee_count_range: '11 to 50' }).numEmployees, 11);
+  assert.equal(mapRow({ ...base, employee_count_range: '11 to 50', linkedin_employee_count_exact: '0' }).numEmployees, 11);
+  assert.equal(mapRow({ ...base, employee_count_range: '11 to 50', linkedin_employee_count_exact: 'n/a' }).numEmployees, 11);
+  assert.equal(exactEmployees('1,204'), 1204);
+  assert.equal(exactEmployees(''), null);
+  assert.equal(exactEmployees('11 to 50'), null);
+});
+
+test('upkeep drops only the two indexes proven unused, and never one it builds', () => {
+  const m = require('../lib/contacts-next/maintenance');
+  assert.deepEqual(m.DROP_INDEXES, ['idx_contacts_keywords_trgm', 'idx_contacts_raw_data_gin']);
+  const built = m.BUILD_INDEXES.map((x) => x[0]);
+  for (const d of m.DROP_INDEXES) assert.ok(!built.includes(d));
+  assert.ok(!m.DROP_INDEXES.includes('idx_contacts_technologies_trgm'), 'the Technologies filter uses this index');
+});
